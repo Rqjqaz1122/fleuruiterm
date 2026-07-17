@@ -57,6 +57,7 @@
 ## Task 1: Establish the reproducible Tauri/Vue baseline
 
 **Files:**
+
 - Create all repository/build files listed above.
 - Create `src-tauri/icons/*` using the official Tauri icon generator.
 
@@ -137,6 +138,7 @@ git commit -m "chore: scaffold FleurTerm desktop application"
 ## Task 2: Implement the session state domain with TDD
 
 **Files:**
+
 - Create: `src-tauri/src/session/model.rs`
 - Create: `src-tauri/src/session/error.rs`
 - Create: `src-tauri/src/session/state.rs`
@@ -210,6 +212,7 @@ git commit -m "feat: define local session domain"
 ## Task 3: Implement backend dispatch and session ownership with TDD
 
 **Files:**
+
 - Create: `src-tauri/src/session/backend.rs`
 - Create: `src-tauri/src/session/registry.rs`
 - Modify: `src-tauri/src/session/mod.rs`
@@ -263,6 +266,7 @@ git commit -m "feat: add session registry and backend boundary"
 ## Task 4: Connect portable-pty and the Tauri IPC channel
 
 **Files:**
+
 - Create: `src-tauri/src/session/local_pty.rs`
 - Create: `src-tauri/src/ipc/mod.rs`
 - Create: `src-tauri/src/ipc/session_commands.rs`
@@ -302,6 +306,7 @@ git commit -m "feat: run local PTY sessions through Tauri"
 ## Task 5: Implement the immutable tab and split-tree domain with TDD
 
 **Files:**
+
 - Create: `src/domain/session.ts`
 - Create: `src/domain/workspace.ts`
 - Create: `src/domain/workspace.spec.ts`
@@ -349,6 +354,7 @@ git commit -m "feat: model terminal tabs and split layouts"
 ## Task 6: Build the frontend session and terminal adapters with TDD
 
 **Files:**
+
 - Create: `src/services/sessionClient.ts`
 - Create: `src/services/sessionClient.spec.ts`
 - Create: `src/terminal/terminalAdapter.ts`
@@ -385,6 +391,7 @@ git commit -m "feat: connect terminal workspace to local sessions"
 ## Task 7: Build the usable desktop workspace with component tests
 
 **Files:**
+
 - Create: `src/components/*.vue`
 - Create: `src/components/*.spec.ts`
 - Modify: `src/App.vue`
@@ -424,6 +431,7 @@ git commit -m "feat: add FleurTerm terminal workspace UI"
 ## Task 8: Perform end-to-end verification and harden lifecycle behavior
 
 **Files:**
+
 - Modify only files implicated by verification failures.
 - Create: `README.md`
 

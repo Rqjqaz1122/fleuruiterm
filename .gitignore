@@ -1,0 +1,10 @@
+.DS_Store
+.idea/
+.vscode/
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+*.log
+src-tauri/target/
+src-tauri/gen/
