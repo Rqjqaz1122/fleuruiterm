@@ -56,7 +56,10 @@ describe('FleurTerm app shell', () => {
 
     await wrapper.get('[data-testid="titlebar-settings"]').trigger('click');
 
+    const appContent = wrapper.get('.app-content');
+    expect(appContent.get('[aria-label="Settings"]').exists()).toBe(true);
     const workspace = wrapper.get('[aria-label="Terminal workspace"]');
+    expect(appContent.element.contains(workspace.element)).toBe(true);
     expect(workspace.attributes('style') ?? '').not.toContain('display: none');
     expect(workspace.attributes('aria-hidden')).toBe('true');
     expect(workspace.attributes('inert')).toBeDefined();

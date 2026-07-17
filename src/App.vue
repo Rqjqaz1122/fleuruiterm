@@ -111,41 +111,43 @@ async function runAction(action: () => Promise<void>): Promise<void> {
       </button>
     </div>
 
-    <SettingsView v-if="currentView === 'settings'" @close="closeSettings" />
-    <section
-      class="workspace"
-      :class="{ 'settings-covered': currentView === 'settings' }"
-      aria-label="Terminal workspace"
-      :aria-hidden="currentView === 'settings'"
-      :inert="currentView === 'settings'"
-    >
-      <div
-        v-for="tab in workspace.tabs"
-        :id="`terminal-panel-${tab.id}`"
-        :key="tab.id"
-        class="workspace-tab-panel"
-        :class="{ active: tab.id === workspace.activeTabId }"
-        role="tabpanel"
-        :aria-hidden="tab.id !== workspace.activeTabId"
-        :aria-labelledby="`terminal-tab-${tab.id}`"
-        :inert="tab.id !== workspace.activeTabId"
+    <div class="app-content">
+      <SettingsView v-if="currentView === 'settings'" @close="closeSettings" />
+      <section
+        class="workspace"
+        :class="{ 'settings-covered': currentView === 'settings' }"
+        aria-label="Terminal workspace"
+        :aria-hidden="currentView === 'settings'"
+        :inert="currentView === 'settings'"
       >
-        <WorkspacePane
-          :node="tab.root"
-          :focused-pane-id="workspace.focusedPaneId"
-          @split="splitTerminal"
-          @close="closePane"
-          @focus="store.focusPane"
+        <div
+          v-for="tab in workspace.tabs"
+          :id="`terminal-panel-${tab.id}`"
+          :key="tab.id"
+          class="workspace-tab-panel"
+          :class="{ active: tab.id === workspace.activeTabId }"
+          role="tabpanel"
+          :aria-hidden="tab.id !== workspace.activeTabId"
+          :aria-labelledby="`terminal-tab-${tab.id}`"
+          :inert="tab.id !== workspace.activeTabId"
+        >
+          <WorkspacePane
+            :node="tab.root"
+            :focused-pane-id="workspace.focusedPaneId"
+            @split="splitTerminal"
+            @close="closePane"
+            @focus="store.focusPane"
+          />
+        </div>
+        <StartPage
+          v-if="workspace.tabs.length === 0"
+          :pending="actionPending"
+          aria-label="FleurTerm start page"
+          @create-terminal="openTerminal"
+          @open-settings="openSettings"
         />
-      </div>
-      <StartPage
-        v-if="workspace.tabs.length === 0"
-        :pending="actionPending"
-        aria-label="FleurTerm start page"
-        @create-terminal="openTerminal"
-        @open-settings="openSettings"
-      />
-    </section>
+      </section>
+    </div>
 
     <StatusBar :snapshot="activeSnapshot" />
   </main>
