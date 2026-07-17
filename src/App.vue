@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { ref } from 'vue';
+import { nextTick, ref } from 'vue';
 
 import AppTitleBar from '@/components/AppTitleBar.vue';
 import SettingsView from '@/components/SettingsView.vue';
@@ -13,9 +13,14 @@ import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 type AppView = 'workspace' | 'settings';
 
+interface AppTitleBarExposure {
+  focusSettingsAction(): void;
+}
+
 const store = useWorkspaceStore();
 const { workspace, activeSnapshot, errorMessage } = storeToRefs(store);
 const actionPending = ref(false);
+const appTitleBar = ref<AppTitleBarExposure | null>(null);
 const currentView = ref<AppView>('workspace');
 const retryAction = ref<(() => Promise<void>) | null>(null);
 
@@ -32,6 +37,7 @@ function openSettings(): void {
 
 function closeSettings(): void {
   currentView.value = 'workspace';
+  void nextTick(() => appTitleBar.value?.focusSettingsAction());
 }
 
 function activateTerminalTab(tabId: string): void {
@@ -77,7 +83,11 @@ async function runAction(action: () => Promise<void>): Promise<void> {
 
 <template>
   <main class="app-shell">
-    <AppTitleBar :settings-active="currentView === 'settings'" @open-settings="openSettings" />
+    <AppTitleBar
+      ref="appTitleBar"
+      :settings-active="currentView === 'settings'"
+      @open-settings="openSettings"
+    />
     <TerminalTabs
       v-if="workspace.tabs.length > 0"
       :tabs="workspace.tabs"
@@ -102,7 +112,13 @@ async function runAction(action: () => Promise<void>): Promise<void> {
     </div>
 
     <SettingsView v-if="currentView === 'settings'" @close="closeSettings" />
-    <section v-show="currentView === 'workspace'" class="workspace" aria-label="Terminal workspace">
+    <section
+      class="workspace"
+      :class="{ 'settings-covered': currentView === 'settings' }"
+      aria-label="Terminal workspace"
+      :aria-hidden="currentView === 'settings'"
+      :inert="currentView === 'settings'"
+    >
       <div
         v-for="tab in workspace.tabs"
         :id="`terminal-panel-${tab.id}`"

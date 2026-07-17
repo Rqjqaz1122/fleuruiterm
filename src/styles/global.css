@@ -238,6 +238,11 @@ select:focus-visible {
   background: var(--color-canvas);
 }
 
+.workspace.settings-covered {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .workspace-tab-panel {
   position: absolute;
   inset: 0;
@@ -305,7 +310,7 @@ select:focus-visible {
 
 .start-action {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
   align-items: center;
   min-height: 54px;
   padding: 7px 10px;
@@ -335,6 +340,14 @@ button.start-action:disabled {
 
 .start-action-static {
   cursor: default;
+}
+
+.start-action-static::after {
+  grid-column: 3;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-align: center;
+  content: '—';
 }
 
 .start-action-icon {

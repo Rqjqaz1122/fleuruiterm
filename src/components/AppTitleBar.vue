@@ -1,6 +1,16 @@
 <script setup lang="ts">
+import { ref } from 'vue';
+
 defineProps<{ settingsActive: boolean }>();
 defineEmits<{ openSettings: [] }>();
+
+const settingsButton = ref<HTMLButtonElement | null>(null);
+
+function focusSettingsAction(): void {
+  settingsButton.value?.focus();
+}
+
+defineExpose({ focusSettingsAction });
 </script>
 
 <template>
@@ -8,6 +18,7 @@ defineEmits<{ openSettings: [] }>();
     <span class="title-bar-control-space" aria-hidden="true" data-tauri-drag-region />
     <span class="title-bar-name" data-tauri-drag-region>FleurTerm</span>
     <button
+      ref="settingsButton"
       class="icon-button title-bar-settings"
       :class="{ active: settingsActive }"
       data-testid="titlebar-settings"

@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { mount } from '@vue/test-utils';
+import { nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addTab, createWorkspace } from '@/domain/workspace';
@@ -44,6 +45,32 @@ describe('FleurTerm app shell', () => {
 
     expect(wrapper.get('[aria-label="Terminal workspace"]').isVisible()).toBe(true);
     expect(store.workspace.activeTabId).toBe('tab-1');
+  });
+
+  it('keeps the terminal workspace laid out and inert while settings covers it', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    await wrapper.get('[data-testid="titlebar-settings"]').trigger('click');
+
+    const workspace = wrapper.get('[aria-label="Terminal workspace"]');
+    expect(workspace.attributes('style') ?? '').not.toContain('display: none');
+    expect(workspace.attributes('aria-hidden')).toBe('true');
+    expect(workspace.attributes('inert')).toBeDefined();
+  });
+
+  it('restores focus to the title-bar settings action after closing settings', async () => {
+    const wrapper = mount(App, { attachTo: document.body });
+
+    await wrapper.get('[data-testid="start-settings"]').trigger('click');
+    await wrapper.get('[data-testid="close-settings"]').trigger('click');
+    await nextTick();
+
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="titlebar-settings"]').element);
+    wrapper.unmount();
   });
 
   it('renders active tabs and delegates vertical split', async () => {
