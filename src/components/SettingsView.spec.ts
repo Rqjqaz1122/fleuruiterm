@@ -29,11 +29,18 @@ describe('SettingsView', () => {
     expect(wrapper.get('input[type="range"]').attributes()).toHaveProperty('disabled');
   });
 
-  it('emits close from the back action', async () => {
+  it('shows Tabby scroll defaults without a page-level back action', async () => {
     const wrapper = mount(SettingsView);
 
-    await wrapper.get('[data-testid="close-settings"]').trigger('click');
+    await wrapper.get('[data-section="terminal"]').trigger('click');
 
-    expect(wrapper.emitted('close')).toEqual([[]]);
+    const settingsPanel = wrapper.get('[data-testid="settings-panel"]');
+    expect(settingsPanel.text()).toContain('Scrollback');
+    expect(settingsPanel.get('[data-testid="scrollback-lines"]').attributes('value')).toBe('25000');
+    expect(settingsPanel.text()).toContain('Scroll on input');
+    expect(settingsPanel.get('[data-testid="scroll-on-input"]').attributes()).toHaveProperty(
+      'checked',
+    );
+    expect(wrapper.find('[data-testid="close-settings"]').exists()).toBe(false);
   });
 });

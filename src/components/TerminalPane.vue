@@ -5,6 +5,7 @@ import type { SplitDirection } from '@/domain/workspace';
 import { SessionClient } from '@/services/sessionClient';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { TerminalAdapter } from '@/terminal/terminalAdapter';
+import { TABBY_DEFAULT_SCROLLBACK_LINES } from '@/terminal/terminalConfig';
 
 const props = defineProps<{
   paneId: string;
@@ -47,7 +48,7 @@ onMounted(async () => {
         cursorBlink: true,
         fontFamily: 'JetBrains Mono, SFMono-Regular, Consolas, monospace',
         fontSize: 13,
-        scrollback: 10_000,
+        scrollback: TABBY_DEFAULT_SCROLLBACK_LINES,
         theme: {
           background: '#181a1a',
           foreground: '#d7d7d3',
@@ -62,6 +63,10 @@ onMounted(async () => {
       }),
     createFitAddon: () => new FitAddon(),
     createResizeObserver: (callback) => new ResizeObserver(callback),
+    frameScheduler: {
+      requestFrame: (callback) => window.requestAnimationFrame(callback),
+      cancelFrame: (frameId) => window.cancelAnimationFrame(frameId),
+    },
     onError: (error) => {
       terminalError.value = error.message;
     },

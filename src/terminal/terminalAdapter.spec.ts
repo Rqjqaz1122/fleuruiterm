@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   TerminalAdapter,
+  type AnimationFrameScheduler,
   type FitAddonPort,
   type ResizeObserverPort,
   type TerminalPort,
@@ -10,8 +11,20 @@ import {
 class FakeTerminal implements TerminalPort {
   cols = 80;
   rows = 24;
+  readonly buffer = {
+    active: {
+      baseY: 0,
+      viewportY: 0,
+    },
+  };
   dispose = vi.fn();
   open = vi.fn();
+  scrollToBottom = vi.fn(() => {
+    this.buffer.active.viewportY = this.buffer.active.baseY;
+  });
+  scrollToLine = vi.fn((line: number) => {
+    this.buffer.active.viewportY = line;
+  });
   private readonly writeCallbacks: Array<() => void> = [];
   write = vi.fn((_data: Uint8Array, callback?: () => void) => {
     if (callback !== undefined) {
@@ -37,18 +50,23 @@ class FakeTerminal implements TerminalPort {
 }
 
 describe('TerminalAdapter', () => {
-  it('forwards terminal input to its session', async () => {
+  it('scrolls to the bottom before forwarding terminal input', async () => {
     const terminal = new FakeTerminal();
     const sessionClient = createSessionClient();
     const adapter = createAdapter(terminal, sessionClient);
     adapter.open(document.createElement('div'));
+    terminal.scrollToBottom.mockClear();
 
     terminal.emitData('pwd\n');
     await Promise.resolve();
 
+    expect(terminal.scrollToBottom).toHaveBeenCalledOnce();
     expect(sessionClient.write).toHaveBeenCalledWith(
       'session-a',
       new TextEncoder().encode('pwd\n'),
+    );
+    expect(terminal.scrollToBottom.mock.invocationCallOrder[0]).toBeLessThan(
+      sessionClient.write.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
     );
   });
 
@@ -113,6 +131,80 @@ describe('TerminalAdapter', () => {
     expect(consumed).toBe(true);
   });
 
+  it('keeps the viewport position when output arrives while reading history', async () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+    adapter.open(document.createElement('div'));
+    terminal.buffer.active.baseY = 100;
+    terminal.buffer.active.viewportY = 40;
+    terminal.scrollToLine.mockClear();
+
+    const consumption = adapter.acceptChunk({
+      sessionId: 'session-a',
+      sequence: 1,
+      payload: [97],
+    });
+    terminal.buffer.active.baseY = 101;
+    terminal.buffer.active.viewportY = 41;
+    terminal.completeWrite();
+    await consumption;
+
+    expect(terminal.scrollToLine).toHaveBeenCalledWith(40);
+  });
+
+  it('stays pinned to the bottom after output', async () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+    adapter.open(document.createElement('div'));
+    terminal.buffer.active.baseY = 100;
+    terminal.buffer.active.viewportY = 100;
+    terminal.scrollToBottom.mockClear();
+
+    const consumption = adapter.acceptChunk({
+      sessionId: 'session-a',
+      sequence: 1,
+      payload: [97],
+    });
+    terminal.buffer.active.baseY = 101;
+    terminal.completeWrite();
+    await consumption;
+
+    expect(terminal.scrollToBottom).toHaveBeenCalledOnce();
+  });
+
+  it('fits again after two animation frames', () => {
+    const terminal = new FakeTerminal();
+    const fitAddon = createFitAddon();
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), createResizeObserver(), 1, {
+      fitAddon,
+      frames,
+    });
+
+    adapter.open(document.createElement('div'));
+    expect(fitAddon.fit).toHaveBeenCalledTimes(1);
+    frames.runNextFrame();
+    expect(fitAddon.fit).toHaveBeenCalledTimes(1);
+    frames.runNextFrame();
+    expect(fitAddon.fit).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels a pending post-render fit on dispose', () => {
+    const terminal = new FakeTerminal();
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), createResizeObserver(), 1, {
+      frames,
+    });
+
+    adapter.open(document.createElement('div'));
+    frames.runNextFrame();
+    expect(frames.pendingCount()).toBe(1);
+    adapter.dispose();
+
+    expect(frames.pendingCount()).toBe(0);
+    expect(frames.cancelFrame).toHaveBeenCalledOnce();
+  });
+
   it('sends positive dimensions after fitting its container', async () => {
     const terminal = new FakeTerminal();
     terminal.cols = 120;
@@ -128,16 +220,32 @@ describe('TerminalAdapter', () => {
     expect(sessionClient.resize).toHaveBeenCalledWith('session-a', 120, 40);
   });
 
+  it('restores the history viewport after fitting its container', () => {
+    const terminal = new FakeTerminal();
+    const observer = createResizeObserver();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer);
+    adapter.open(document.createElement('div'));
+    terminal.buffer.active.baseY = 100;
+    terminal.buffer.active.viewportY = 35;
+    terminal.scrollToLine.mockClear();
+
+    observer.trigger();
+
+    expect(terminal.scrollToLine).toHaveBeenCalledWith(35);
+  });
+
   it('disposes subscriptions and terminal exactly once', () => {
     const terminal = new FakeTerminal();
     const observer = createResizeObserver();
     const fitAddon = createFitAddon();
+    const frames = createFrameScheduler();
     const adapter = new TerminalAdapter({
       sessionId: 'session-a',
       sessionClient: createSessionClient(),
       createTerminal: () => terminal,
       createFitAddon: () => fitAddon,
       createResizeObserver: () => observer,
+      frameScheduler: frames,
       onError: vi.fn(),
     });
     adapter.open(document.createElement('div'));
@@ -166,7 +274,10 @@ function createFitAddon(): FitAddonPort {
   };
 }
 
-function createResizeObserver(): ResizeObserverPort & { trigger: () => void } {
+function createResizeObserver(): ResizeObserverPort & {
+  setCallback: (nextCallback: () => void) => void;
+  trigger: () => void;
+} {
   let callback: (() => void) | null = null;
   return {
     observe: vi.fn(),
@@ -180,23 +291,60 @@ function createResizeObserver(): ResizeObserverPort & { trigger: () => void } {
   };
 }
 
+function createFrameScheduler(): AnimationFrameScheduler & {
+  runNextFrame: () => void;
+  pendingCount: () => number;
+} {
+  let nextFrameId = 1;
+  const callbacks = new Map<number, () => void>();
+  return {
+    requestFrame: vi.fn((callback: () => void) => {
+      const frameId = nextFrameId;
+      nextFrameId += 1;
+      callbacks.set(frameId, callback);
+      return frameId;
+    }),
+    cancelFrame: vi.fn((frameId: number) => callbacks.delete(frameId)),
+    runNextFrame() {
+      const nextEntry = callbacks.entries().next().value as [number, () => void] | undefined;
+      if (nextEntry === undefined) {
+        return;
+      }
+      callbacks.delete(nextEntry[0]);
+      nextEntry[1]();
+    },
+    pendingCount() {
+      return callbacks.size;
+    },
+  };
+}
+
+interface AdapterFixtureOptions {
+  fitAddon?: FitAddonPort;
+  frames?: AnimationFrameScheduler;
+}
+
 function createAdapter(
   terminal: FakeTerminal,
   sessionClient: ReturnType<typeof createSessionClient>,
   onError = vi.fn(),
   observer = createResizeObserver(),
   initialSequence = 1,
+  fixtureOptions: AdapterFixtureOptions = {},
 ) {
+  const fitAddon = fixtureOptions.fitAddon ?? createFitAddon();
+  const frames = fixtureOptions.frames ?? createFrameScheduler();
   return new TerminalAdapter({
     sessionId: 'session-a',
     initialSequence,
     sessionClient,
     createTerminal: () => terminal,
-    createFitAddon,
+    createFitAddon: () => fitAddon,
     createResizeObserver: (callback) => {
       observer.setCallback(callback);
       return observer;
     },
+    frameScheduler: frames,
     onError,
   });
 }

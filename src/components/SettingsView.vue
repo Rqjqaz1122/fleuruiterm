@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 
+import { TABBY_DEFAULT_SCROLLBACK_LINES } from '@/terminal/terminalConfig';
+
 type SettingsSectionId = 'general' | 'appearance' | 'terminal' | 'profiles' | 'hotkeys' | 'ai';
 
 interface SettingsSection {
@@ -8,8 +10,6 @@ interface SettingsSection {
   label: string;
   symbol: string;
 }
-
-defineEmits<{ close: [] }>();
 
 const settingsSections: readonly SettingsSection[] = [
   { id: 'general', label: 'General', symbol: '◆' },
@@ -26,15 +26,6 @@ const selectedSectionId = ref<SettingsSectionId>('general');
 <template>
   <section class="settings-view" aria-label="Settings">
     <aside class="settings-sidebar">
-      <button
-        class="settings-back"
-        data-testid="close-settings"
-        type="button"
-        @click="$emit('close')"
-      >
-        <span aria-hidden="true">‹</span>
-        Settings
-      </button>
       <nav class="settings-navigation" aria-label="Settings sections">
         <button
           v-for="section in settingsSections"
@@ -139,6 +130,25 @@ const selectedSectionId = ref<SettingsSectionId>('general');
               <small>Animate the terminal cursor.</small>
             </span>
             <input type="checkbox" checked disabled />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Scrollback</strong>
+              <small>Number of lines kept in the buffer.</small>
+            </span>
+            <input
+              data-testid="scrollback-lines"
+              type="number"
+              :value="TABBY_DEFAULT_SCROLLBACK_LINES"
+              disabled
+            />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Scroll on input</strong>
+              <small>Scroll to the bottom when typing.</small>
+            </span>
+            <input data-testid="scroll-on-input" type="checkbox" checked disabled />
           </label>
         </div>
       </template>
