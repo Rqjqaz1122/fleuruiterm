@@ -248,6 +248,18 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[aria-label="关闭 设置"]').trigger('click');
     expect(wrapper.get('[data-testid="start-new-terminal"]').text()).toContain('新建终端');
   });
+
+  it('localizes stable workspace errors without exposing backend details', () => {
+    const store = useWorkspaceStore();
+    store.errorCode = 'OPEN_TERMINAL_FAILED';
+    store.errorMessage = 'internal shell launch detail';
+    setLocale('zh-CN');
+
+    const wrapper = mount(App);
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('无法打开终端');
+    expect(wrapper.get('[role="alert"]').text()).not.toContain('internal shell launch detail');
+  });
 });
 
 function ids(...values: string[]) {

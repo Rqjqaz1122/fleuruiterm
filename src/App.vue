@@ -19,11 +19,11 @@ import type {
   TabDropPlacement,
   TerminalTab,
 } from '@/domain/workspace';
-import { t, terminalTitle } from '@/i18n/locale';
-import { useWorkspaceStore } from '@/stores/workspaceStore';
+import { t, terminalTitle, type TranslationKey } from '@/i18n/locale';
+import { useWorkspaceStore, type WorkspaceErrorCode } from '@/stores/workspaceStore';
 
 const store = useWorkspaceStore();
-const { workspace, activeSnapshot, errorMessage } = storeToRefs(store);
+const { workspace, activeSnapshot, errorMessage, errorCode } = storeToRefs(store);
 const actionPending = ref(false);
 const retryAction = ref<(() => Promise<void>) | null>(null);
 const settingsTabOpen = ref(false);
@@ -61,6 +61,17 @@ const appTabs = computed<AppTab[]>(() => {
 });
 
 const settingsActive = computed(() => activeAppTabId.value === SETTINGS_TAB_ID);
+const errorMessageKeyByCode: Record<WorkspaceErrorCode, TranslationKey> = {
+  OPEN_TERMINAL_FAILED: 'error.openTerminal',
+  CLOSE_TERMINAL_FAILED: 'error.closeTerminal',
+  CLOSE_TAB_FAILED: 'error.closeTab',
+};
+const visibleErrorMessage = computed(() => {
+  if (errorMessage.value === null) {
+    return null;
+  }
+  return errorCode.value === null ? errorMessage.value : t(errorMessageKeyByCode[errorCode.value]);
+});
 
 function resolveTerminalSequence(tab: TerminalTab, fallbackSequence: number): number {
   const sequenceMatch = /(\d+)$/.exec(tab.title);
@@ -205,8 +216,8 @@ async function runAction(action: () => Promise<void>): Promise<void> {
     />
 
     <Transition name="notice">
-      <div v-if="errorMessage" class="app-error" role="alert">
-        <span>{{ errorMessage }}</span>
+      <div v-if="visibleErrorMessage" class="app-error" role="alert">
+        <span>{{ visibleErrorMessage }}</span>
         <button
           v-if="retryAction"
           class="error-retry"

@@ -430,7 +430,8 @@ select:focus-visible {
   text-decoration: none;
   transition:
     border-color var(--transition-fast),
-    background-color var(--transition-fast);
+    background-color var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 button.start-action {

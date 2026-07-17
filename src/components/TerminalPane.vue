@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import { draggedTab, finishTabDrag } from '@/composables/tabDrag';
 import { resolvePaneDropPosition } from '@/domain/tabDrag';
@@ -27,6 +27,9 @@ const emit = defineEmits<{
 const store = useWorkspaceStore();
 const terminalElement = ref<HTMLElement | null>(null);
 const terminalError = ref<string | null>(null);
+const visibleTerminalError = computed(() =>
+  terminalError.value === null ? null : t('error.terminalBridge'),
+);
 const tabDropPosition = ref<PaneDropPosition | null>(null);
 let adapter: TerminalAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
@@ -167,7 +170,9 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-    <p v-if="terminalError" class="pane-error" role="alert">{{ terminalError }}</p>
+    <p v-if="visibleTerminalError" class="pane-error" role="alert">
+      {{ visibleTerminalError }}
+    </p>
     <div ref="terminalElement" class="terminal-surface" />
   </section>
 </template>

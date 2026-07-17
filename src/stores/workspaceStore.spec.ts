@@ -187,7 +187,20 @@ describe('workspace store', () => {
     await expect(store.closePane('pane-1')).rejects.toThrow('Unable to close terminal');
 
     expect(store.errorMessage).toBe('Unable to close terminal');
+    expect(store.errorCode).toBe('CLOSE_TERMINAL_FAILED');
     expect(store.workspace.tabs[0]?.root).toMatchObject({ id: 'pane-1' });
+  });
+
+  it('publishes a stable error code when a terminal cannot be opened', async () => {
+    const client = createClient();
+    client.openLocal.mockRejectedValueOnce(new Error('internal shell launch detail'));
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+
+    await expect(store.openTab()).rejects.toThrow('internal shell launch detail');
+
+    expect(store.errorCode).toBe('OPEN_TERMINAL_FAILED');
+    expect(store.errorMessage).toBe('internal shell launch detail');
   });
 
   it('removes sessions that closed before a partial tab-close failure', async () => {

@@ -29,6 +29,9 @@ const DEFAULT_TERMINAL_COLUMNS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
 const MAX_OUTPUT_HISTORY_BYTES = 2 * 1024 * 1024;
 
+export type WorkspaceErrorCode =
+  'OPEN_TERMINAL_FAILED' | 'CLOSE_TERMINAL_FAILED' | 'CLOSE_TAB_FAILED';
+
 export interface WorkspaceSessionClient {
   openLocal(
     options: OpenLocalSessionOptions,
@@ -53,6 +56,7 @@ export function createWorkspaceStore(
     const workspace = ref<WorkspaceState>(emptyWorkspace());
     const snapshots = ref<Record<string, SessionSnapshot>>({});
     const errorMessage = ref<string | null>(null);
+    const errorCode = ref<WorkspaceErrorCode | null>(null);
     const chunkListeners = new Map<string, Set<ChunkListener>>();
     const outputHistory = new Map<string, TerminalChunk[]>();
     const outputHistoryBytes = new Map<string, number>();
@@ -126,11 +130,13 @@ export function createWorkspaceStore(
     async function closePane(paneId: string): Promise<void> {
       const sessionId = findPaneSessionId(workspace.value, paneId);
       errorMessage.value = null;
+      errorCode.value = null;
       try {
         await sessionClient.close(sessionId);
         workspace.value = closeWorkspacePane(workspace.value, paneId);
         removeSessionState(sessionId);
       } catch (error) {
+        errorCode.value = 'CLOSE_TERMINAL_FAILED';
         errorMessage.value = userVisibleError(error, 'Unable to close terminal');
         throw error;
       }
@@ -143,6 +149,7 @@ export function createWorkspaceStore(
       }
       const panes = collectPanes(tab.root);
       errorMessage.value = null;
+      errorCode.value = null;
       const closeResults = await Promise.allSettled(
         panes.map((pane) => sessionClient.close(pane.sessionId)),
       );
@@ -162,6 +169,7 @@ export function createWorkspaceStore(
         (result): result is PromiseRejectedResult => result.status === 'rejected',
       );
       if (firstFailure !== undefined) {
+        errorCode.value = 'CLOSE_TAB_FAILED';
         errorMessage.value = userVisibleError(firstFailure.reason, 'Unable to close terminal tab');
         throw firstFailure.reason;
       }
@@ -198,6 +206,7 @@ export function createWorkspaceStore(
 
     async function openSession(): Promise<SessionSnapshot> {
       errorMessage.value = null;
+      errorCode.value = null;
       try {
         const snapshot = await sessionClient.openLocal(
           { columns: DEFAULT_TERMINAL_COLUMNS, rows: DEFAULT_TERMINAL_ROWS },
@@ -211,6 +220,7 @@ export function createWorkspaceStore(
         snapshots.value = { ...snapshots.value, [snapshot.sessionId]: currentSnapshot };
         return currentSnapshot;
       } catch (error) {
+        errorCode.value = 'OPEN_TERMINAL_FAILED';
         errorMessage.value = userVisibleError(error, 'Unable to open local terminal');
         throw error;
       }
@@ -309,6 +319,7 @@ export function createWorkspaceStore(
       snapshots,
       activeSnapshot,
       errorMessage,
+      errorCode,
       openTab,
       splitFocused,
       splitPaneById,
