@@ -5,7 +5,7 @@ defineProps<{ snapshot: SessionSnapshot | null }>();
 </script>
 
 <template>
-  <footer class="status-bar">
+  <footer class="status-bar" aria-label="Terminal status">
     <span class="status-item">
       <span class="status-dot" :class="snapshot?.state ?? 'closed'" aria-hidden="true" />
       {{ snapshot?.state ?? 'No session' }}

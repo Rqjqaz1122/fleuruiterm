@@ -36,4 +36,13 @@ describe('TerminalTabs', () => {
 
     expect(wrapper.emitted('activate')).toEqual([['tab-2']]);
   });
+
+  it('keeps compact tab labels and actions accessible', () => {
+    const wrapper = mount(TerminalTabs, { props: { tabs, activeTabId: 'tab-1' } });
+
+    expect(wrapper.get('.tab-label').text()).toBe('Local Terminal 1');
+    expect(wrapper.get('[aria-label="New terminal"]').classes()).toContain('add-tab');
+    expect(wrapper.get('[aria-label="Close Local Terminal 1"]').classes()).toContain('tab-close');
+    expect(wrapper.get('.tab-item.active').exists()).toBe(true);
+  });
 });

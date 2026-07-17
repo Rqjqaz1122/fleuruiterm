@@ -65,7 +65,7 @@ function handleTabKey(event: KeyboardEvent, tabId: string): void {
           @keydown="handleTabKey($event, tab.id)"
         >
           <span class="status-dot" aria-hidden="true" />
-          {{ tab.title }}
+          <span class="tab-label">{{ tab.title }}</span>
         </button>
         <button
           class="icon-button tab-close"
