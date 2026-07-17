@@ -54,6 +54,13 @@ pub struct TerminalChunk {
     pub payload: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenLocalSessionRequest {
+    pub shell: Option<String>,
+    pub dimensions: TerminalDimensions,
+}
+
 impl TerminalDimensions {
     pub fn try_new(columns: u16, rows: u16) -> Result<Self, SessionError> {
         if columns == 0 || rows == 0 || columns > MAX_TERMINAL_COLUMNS || rows > MAX_TERMINAL_ROWS {
