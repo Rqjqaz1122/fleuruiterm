@@ -4,22 +4,44 @@ use async_trait::async_trait;
 
 use super::{
     error::SessionError,
-    model::{OpenLocalSessionRequest, SessionId, TerminalChunk, TerminalDimensions},
+    model::{
+        OpenLocalSessionRequest, SessionId, SessionStateChanged, TerminalChunk, TerminalDimensions,
+    },
 };
 
+#[async_trait]
 pub trait TerminalOutputSink: Send + Sync {
-    fn send(&self, chunk: TerminalChunk) -> Result<(), SessionError>;
+    async fn send(&self, chunk: TerminalChunk) -> Result<(), SessionError>;
+
+    async fn finish(&self) -> Result<(), SessionError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait SessionLifecycleSink: Send + Sync {
+    async fn send(&self, event: SessionStateChanged) -> Result<(), SessionError>;
 }
 
 pub struct BackendOpenContext {
     pub session_id: SessionId,
     pub output_sink: Arc<dyn TerminalOutputSink>,
+    pub lifecycle_sink: Arc<dyn SessionLifecycleSink>,
 }
 
 pub struct DiscardOutputSink;
+pub struct DiscardLifecycleSink;
 
+#[async_trait]
 impl TerminalOutputSink for DiscardOutputSink {
-    fn send(&self, _chunk: TerminalChunk) -> Result<(), SessionError> {
+    async fn send(&self, _chunk: TerminalChunk) -> Result<(), SessionError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SessionLifecycleSink for DiscardLifecycleSink {
+    async fn send(&self, _event: SessionStateChanged) -> Result<(), SessionError> {
         Ok(())
     }
 }

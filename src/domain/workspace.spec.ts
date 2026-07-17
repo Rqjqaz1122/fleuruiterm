@@ -7,6 +7,7 @@ import {
   closePane,
   closeTab,
   createWorkspace,
+  focusPane,
   splitPane,
   type IdGenerator,
 } from './workspace';
@@ -97,5 +98,16 @@ describe('workspace domain', () => {
       id: 'pane-1',
       sessionId: 'session-a',
     });
+  });
+
+  it('focuses the requested pane and its owning tab', () => {
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+
+    const updated = focusPane(workspace, 'pane-1');
+
+    expect(updated.activeTabId).toBe('tab-1');
+    expect(updated.focusedPaneId).toBe('pane-1');
+    expect(updated.focusedSessionId).toBe('session-a');
   });
 });

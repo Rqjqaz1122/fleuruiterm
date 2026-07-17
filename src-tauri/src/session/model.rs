@@ -56,6 +56,13 @@ pub struct TerminalChunk {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionStateChanged {
+    pub session_id: SessionId,
+    pub state: SessionState,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenLocalSessionRequest {
     pub shell: Option<String>,
     pub dimensions: TerminalDimensions,

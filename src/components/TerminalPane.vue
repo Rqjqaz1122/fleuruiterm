@@ -13,8 +13,9 @@ const props = defineProps<{
 }>();
 
 defineEmits<{
-  split: [direction: SplitDirection];
-  close: [];
+  split: [paneId: string, direction: SplitDirection];
+  close: [paneId: string];
+  focus: [paneId: string];
 }>();
 
 const store = useWorkspaceStore();
@@ -60,8 +61,8 @@ onMounted(async () => {
       terminalError.value = error.message;
     },
   });
-  unsubscribe = store.subscribeToSession(props.sessionId, (chunk) => adapter?.acceptChunk(chunk));
   adapter.open(element);
+  unsubscribe = store.subscribeToSession(props.sessionId, (chunk) => adapter?.acceptChunk(chunk));
 });
 
 onBeforeUnmount(() => {
@@ -72,7 +73,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="terminal-pane" :class="{ focused }" :aria-label="`Terminal ${paneId}`">
+  <section
+    class="terminal-pane"
+    :class="{ focused }"
+    :aria-label="`Terminal ${paneId}`"
+    @pointerdown="$emit('focus', paneId)"
+    @focusin="$emit('focus', paneId)"
+  >
     <div class="pane-toolbar">
       <span class="pane-title">Local · {{ sessionId.slice(0, 8) }}</span>
       <div class="pane-actions">
@@ -81,7 +88,7 @@ onBeforeUnmount(() => {
           data-testid="split-horizontal"
           type="button"
           aria-label="Split horizontally"
-          @click="$emit('split', 'horizontal')"
+          @click="$emit('split', paneId, 'horizontal')"
         >
           ▭
         </button>
@@ -90,11 +97,16 @@ onBeforeUnmount(() => {
           data-testid="split-vertical"
           type="button"
           aria-label="Split vertically"
-          @click="$emit('split', 'vertical')"
+          @click="$emit('split', paneId, 'vertical')"
         >
           ▯
         </button>
-        <button class="icon-button" type="button" aria-label="Close pane" @click="$emit('close')">
+        <button
+          class="icon-button"
+          type="button"
+          aria-label="Close pane"
+          @click="$emit('close', paneId)"
+        >
           ×
         </button>
       </div>

@@ -1,22 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { TerminalChunk } from '@/domain/session';
+import type { SessionStateChanged, TerminalChunk } from '@/domain/session';
 
 import { SessionClient, SessionClientError, type MessageChannel } from './sessionClient';
 
 describe('SessionClient', () => {
   it('configures the output channel before opening a session', async () => {
     const events: string[] = [];
-    let outputHandler: ((message: TerminalChunk) => void) | undefined;
-    const channel = {
-      set onmessage(handler: (message: TerminalChunk) => void) {
-        events.push('handler-configured');
-        outputHandler = handler;
-      },
-      get onmessage() {
-        return outputHandler ?? (() => undefined);
-      },
-    } satisfies MessageChannel<TerminalChunk>;
+    const outputChannel = createRecordingChannel<TerminalChunk>(events);
+    const stateChannel = createRecordingChannel<SessionStateChanged>(events);
+    const channels: MessageChannel<unknown>[] = [outputChannel, stateChannel];
     const invoke = vi.fn(async () => {
       events.push('invoke');
       return {
@@ -26,14 +19,20 @@ describe('SessionClient', () => {
         shell: '/bin/zsh',
       };
     });
-    const client = new SessionClient(invoke, () => channel);
+    const client = new SessionClient(invoke, () => {
+      const channel = channels.shift();
+      if (channel === undefined) {
+        throw new Error('test channel factory exhausted');
+      }
+      return channel;
+    });
 
     await client.openLocal({ columns: 80, rows: 24 }, vi.fn());
 
-    expect(events).toEqual(['handler-configured', 'invoke']);
+    expect(events).toEqual(['handler-configured', 'handler-configured', 'invoke']);
     expect(invoke).toHaveBeenCalledWith(
       'session_open_local',
-      expect.objectContaining({ onOutput: channel }),
+      expect.objectContaining({ onOutput: outputChannel, onState: stateChannel }),
     );
   });
 
@@ -47,6 +46,108 @@ describe('SessionClient', () => {
       sessionId: 'session-a',
       input: [108, 115, 10],
     });
+  });
+
+  it('acknowledges each delivered terminal output sequence', async () => {
+    const outputChannel = { onmessage: () => undefined };
+    const stateChannel = { onmessage: () => undefined };
+    const channels: MessageChannel<unknown>[] = [outputChannel, stateChannel];
+    const invoke = vi.fn(async (command: string) =>
+      command === 'session_open_local'
+        ? {
+            sessionId: 'session-a',
+            backendType: 'local',
+            state: 'ready',
+            shell: '/bin/zsh',
+          }
+        : undefined,
+    );
+    const client = new SessionClient(invoke, () => {
+      const channel = channels.shift();
+      if (channel === undefined) {
+        throw new Error('test channel factory exhausted');
+      }
+      return channel;
+    });
+    await client.openLocal({ columns: 80, rows: 24 }, vi.fn());
+
+    await outputChannel.onmessage({ sessionId: 'session-a', sequence: 7, payload: [97] });
+
+    expect(invoke).toHaveBeenCalledWith('session_ack_output', {
+      sessionId: 'session-a',
+      sequence: 7,
+    });
+  });
+
+  it('waits for terminal consumption before acknowledging output', async () => {
+    const outputChannel = { onmessage: () => undefined };
+    const stateChannel = { onmessage: () => undefined };
+    const channels: MessageChannel<unknown>[] = [outputChannel, stateChannel];
+    const invoke = vi.fn(async (command: string) =>
+      command === 'session_open_local'
+        ? {
+            sessionId: 'session-a',
+            backendType: 'local',
+            state: 'ready',
+            shell: '/bin/zsh',
+          }
+        : undefined,
+    );
+    let finishConsumption: (() => void) | undefined;
+    const onOutput = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishConsumption = resolve;
+        }),
+    );
+    const client = new SessionClient(invoke, () => {
+      const channel = channels.shift();
+      if (channel === undefined) {
+        throw new Error('test channel factory exhausted');
+      }
+      return channel;
+    });
+    await client.openLocal({ columns: 80, rows: 24 }, onOutput);
+
+    const delivery = outputChannel.onmessage({
+      sessionId: 'session-a',
+      sequence: 8,
+      payload: [98],
+    });
+    await Promise.resolve();
+
+    expect(invoke).not.toHaveBeenCalledWith('session_ack_output', expect.anything());
+    finishConsumption?.();
+    await delivery;
+    expect(invoke).toHaveBeenCalledWith('session_ack_output', {
+      sessionId: 'session-a',
+      sequence: 8,
+    });
+  });
+
+  it('forwards lifecycle changes through the state channel', async () => {
+    const outputChannel = { onmessage: () => undefined };
+    const stateChannel = { onmessage: () => undefined };
+    const channels: MessageChannel<unknown>[] = [outputChannel, stateChannel];
+    const invoke = vi.fn(async () => ({
+      sessionId: 'session-a',
+      backendType: 'local',
+      state: 'ready',
+      shell: '/bin/zsh',
+    }));
+    const client = new SessionClient(invoke, () => {
+      const channel = channels.shift();
+      if (channel === undefined) {
+        throw new Error('test channel factory exhausted');
+      }
+      return channel;
+    });
+    const onState = vi.fn();
+    await client.openLocal({ columns: 80, rows: 24 }, vi.fn(), onState);
+
+    stateChannel.onmessage({ sessionId: 'session-a', state: 'closed' });
+
+    expect(onState).toHaveBeenCalledWith({ sessionId: 'session-a', state: 'closed' });
   });
 
   it('rejects oversized input before invoke', async () => {
@@ -72,3 +173,16 @@ describe('SessionClient', () => {
     );
   });
 });
+
+function createRecordingChannel<T>(events: string[]): MessageChannel<T> {
+  let messageHandler: (message: T) => void = () => undefined;
+  return {
+    set onmessage(handler: (message: T) => void) {
+      events.push('handler-configured');
+      messageHandler = handler;
+    },
+    get onmessage() {
+      return messageHandler;
+    },
+  };
+}

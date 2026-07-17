@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createWorkspace } from '@/domain/workspace';
+import { addTab, createWorkspace } from '@/domain/workspace';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 import App from './App.vue';
@@ -33,14 +33,14 @@ describe('FleurTerm app shell', () => {
         shell: '/bin/zsh',
       },
     };
-    store.splitFocused = vi.fn(async () => undefined);
+    store.splitPaneById = vi.fn(async () => undefined);
     const wrapper = mount(App, {
       global: {
         stubs: {
           TerminalPane: {
             emits: ['split'],
             template:
-              '<button data-testid="split-vertical" @click="$emit(\'split\', \'vertical\')">Split</button>',
+              "<button data-testid=\"split-vertical\" @click=\"$emit('split', 'pane-1', 'vertical')\">Split</button>",
           },
         },
       },
@@ -49,7 +49,7 @@ describe('FleurTerm app shell', () => {
     expect(wrapper.get('[role="tab"]').text()).toContain('Local Terminal 1');
     await wrapper.get('[data-testid="split-vertical"]').trigger('click');
 
-    expect(store.splitFocused).toHaveBeenCalledWith('vertical');
+    expect(store.splitPaneById).toHaveBeenCalledWith('pane-1', 'vertical');
   });
 
   it('shows a visible error without removing the workspace action', () => {
@@ -60,6 +60,48 @@ describe('FleurTerm app shell', () => {
 
     expect(wrapper.get('[role="alert"]').text()).toContain('Unable to start shell');
     expect(wrapper.find('[data-testid="new-terminal"]').exists()).toBe(true);
+  });
+
+  it('does not advertise unavailable AI capabilities', () => {
+    const wrapper = mount(App);
+
+    expect(wrapper.text()).not.toContain('AI: analysis only');
+    expect(wrapper.text()).not.toContain('Local context');
+  });
+
+  it('offers to retry the terminal action after shell startup fails', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => {
+      store.errorMessage = 'Unable to start shell';
+      throw new Error('internal shell path');
+    });
+    const wrapper = mount(App);
+
+    await wrapper.get('[data-testid="new-terminal"]').trigger('click');
+    await wrapper.get('[data-testid="retry-action"]').trigger('click');
+
+    expect(store.openTab).toHaveBeenCalledTimes(2);
+    expect(wrapper.get('[role="alert"]').text()).toContain('Unable to start shell');
+  });
+
+  it('keeps inactive terminal tabs mounted for bounded background consumption', () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          TerminalPane: {
+            props: ['paneId'],
+            template: '<div class="terminal-stub" :data-pane-id="paneId" />',
+          },
+        },
+      },
+    });
+
+    expect(wrapper.findAll('.terminal-stub')).toHaveLength(2);
+    expect(wrapper.find('#terminal-panel-tab-1').attributes('aria-hidden')).toBe('true');
+    expect(wrapper.find('#terminal-panel-tab-2').attributes('aria-hidden')).toBe('false');
   });
 });
 

@@ -83,6 +83,23 @@ export function activateTab(workspace: WorkspaceState, tabId: string): Workspace
   };
 }
 
+export function focusPane(workspace: WorkspaceState, paneId: string): WorkspaceState {
+  const owningTab = workspace.tabs.find((tab) => containsPane(tab.root, paneId));
+  if (owningTab === undefined) {
+    throw new WorkspaceError(`unknown pane: ${paneId}`);
+  }
+  const pane = findPaneInNode(owningTab.root, paneId);
+  if (pane === null) {
+    throw new WorkspaceError(`unknown pane: ${paneId}`);
+  }
+  return {
+    ...workspace,
+    activeTabId: owningTab.id,
+    focusedPaneId: pane.id,
+    focusedSessionId: pane.sessionId,
+  };
+}
+
 export function splitPane(
   workspace: WorkspaceState,
   paneId: string | null,

@@ -38,6 +38,35 @@ describe('workspace store', () => {
     expect(store.workspace.focusedSessionId).toBe('session-2');
   });
 
+  it('splits the pane identified by the initiating toolbar', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(
+      client,
+      ids('tab-1', 'pane-1', 'split-1', 'pane-2', 'split-2', 'pane-3'),
+    );
+    const store = useStore();
+    await store.openTab();
+    await store.splitPaneById('pane-1', 'vertical');
+
+    await store.splitPaneById('pane-1', 'horizontal');
+
+    expect(store.workspace.tabs[0]?.root).toMatchObject({
+      kind: 'split',
+      direction: 'vertical',
+      children: [
+        {
+          kind: 'split',
+          direction: 'horizontal',
+          children: [
+            { kind: 'pane', id: 'pane-1', sessionId: 'session-1' },
+            { kind: 'pane', id: 'pane-3', sessionId: 'session-3' },
+          ],
+        },
+        { kind: 'pane', id: 'pane-2', sessionId: 'session-2' },
+      ],
+    });
+  });
+
   it('closes the backend session before removing its pane', async () => {
     const client = createClient();
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
@@ -92,11 +121,101 @@ describe('workspace store', () => {
 
     expect(remountedListener).toHaveBeenCalledWith(chunk);
   });
+
+  it('applies a lifecycle event that arrives before the open snapshot', async () => {
+    const client = {
+      openLocal: vi.fn(async (_options, _onOutput, onState) => {
+        onState?.({ sessionId: 'session-1', state: 'closed' });
+        return {
+          sessionId: 'session-1',
+          backendType: 'local' as const,
+          state: 'ready' as const,
+          shell: '/bin/zsh',
+        };
+      }),
+      close: vi.fn(async () => undefined),
+    } satisfies WorkspaceSessionClient;
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+
+    await store.openTab();
+
+    expect(store.snapshots['session-1']?.state).toBe('closed');
+  });
+
+  it('waits for a mounted terminal to consume buffered output', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab();
+    let finishTerminalWrite: (() => void) | undefined;
+    let consumed = false;
+
+    const consumption = client.emit({
+      sessionId: 'session-1',
+      sequence: 1,
+      payload: [97],
+    });
+    void consumption.then(() => {
+      consumed = true;
+    });
+    await Promise.resolve();
+    expect(consumed).toBe(false);
+
+    store.subscribeToSession(
+      'session-1',
+      () =>
+        new Promise<void>((resolve) => {
+          finishTerminalWrite = resolve;
+        }),
+    );
+    await Promise.resolve();
+    expect(consumed).toBe(false);
+
+    finishTerminalWrite?.();
+    await consumption;
+    expect(consumed).toBe(true);
+  });
+
+  it('publishes close failures without removing the pane', async () => {
+    const client = createClient();
+    client.close.mockRejectedValueOnce(new Error('Unable to close terminal'));
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab();
+
+    await expect(store.closePane('pane-1')).rejects.toThrow('Unable to close terminal');
+
+    expect(store.errorMessage).toBe('Unable to close terminal');
+    expect(store.workspace.tabs[0]?.root).toMatchObject({ id: 'pane-1' });
+  });
+
+  it('removes sessions that closed before a partial tab-close failure', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1', 'split-1', 'pane-2'));
+    const store = useStore();
+    await store.openTab();
+    await store.splitPaneById('pane-1', 'vertical');
+    client.close
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Unable to close second terminal'));
+
+    await expect(store.closeTab('tab-1')).rejects.toThrow('Unable to close second terminal');
+
+    expect(store.workspace.tabs[0]?.root).toEqual({
+      kind: 'pane',
+      id: 'pane-2',
+      sessionId: 'session-2',
+    });
+    expect(store.snapshots['session-1']).toBeUndefined();
+    expect(store.snapshots['session-2']).toBeDefined();
+    expect(store.errorMessage).toBe('Unable to close second terminal');
+  });
 });
 
 function createClient() {
   let sessionNumber = 0;
-  const outputHandlers = new Map<string, (chunk: TerminalChunk) => void>();
+  const outputHandlers = new Map<string, (chunk: TerminalChunk) => void | Promise<void>>();
   const client = {
     openLocal: vi.fn(async (_options, onOutput) => {
       sessionNumber += 1;
@@ -110,10 +229,10 @@ function createClient() {
       };
     }),
     close: vi.fn(async () => undefined),
-    emit(chunk: TerminalChunk) {
-      outputHandlers.get(chunk.sessionId)?.(chunk);
+    emit(chunk: TerminalChunk): Promise<void> {
+      return Promise.resolve(outputHandlers.get(chunk.sessionId)?.(chunk));
     },
-  } satisfies WorkspaceSessionClient & { emit: (chunk: TerminalChunk) => void };
+  } satisfies WorkspaceSessionClient & { emit: (chunk: TerminalChunk) => Promise<void> };
   return client;
 }
 

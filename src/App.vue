@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { computed, ref } from 'vue';
+import { ref } from 'vue';
 
 import AppHeader from '@/components/AppHeader.vue';
 import EmptyWorkspace from '@/components/EmptyWorkspace.vue';
@@ -13,17 +13,14 @@ import type { SplitDirection } from '@/domain/workspace';
 const store = useWorkspaceStore();
 const { workspace, activeSnapshot, errorMessage } = storeToRefs(store);
 const actionPending = ref(false);
-
-const activeTab = computed(
-  () => workspace.value.tabs.find((tab) => tab.id === workspace.value.activeTabId) ?? null,
-);
+const retryAction = ref<(() => Promise<void>) | null>(null);
 
 async function openTerminal(): Promise<void> {
   await runAction(() => store.openTab());
 }
 
-async function splitTerminal(direction: SplitDirection): Promise<void> {
-  await runAction(() => store.splitFocused(direction));
+async function splitTerminal(paneId: string, direction: SplitDirection): Promise<void> {
+  await runAction(() => store.splitPaneById(paneId, direction));
 }
 
 async function closePane(paneId: string): Promise<void> {
@@ -34,6 +31,13 @@ async function closeTab(tabId: string): Promise<void> {
   await runAction(() => store.closeTab(tabId));
 }
 
+async function retryLastAction(): Promise<void> {
+  const action = retryAction.value;
+  if (action !== null) {
+    await runAction(action);
+  }
+}
+
 async function runAction(action: () => Promise<void>): Promise<void> {
   if (actionPending.value) {
     return;
@@ -41,8 +45,10 @@ async function runAction(action: () => Promise<void>): Promise<void> {
   actionPending.value = true;
   try {
     await action();
+    retryAction.value = null;
   } catch {
     // Store actions publish a sanitized, user-visible error message.
+    retryAction.value = action;
   } finally {
     actionPending.value = false;
   }
@@ -61,17 +67,45 @@ async function runAction(action: () => Promise<void>): Promise<void> {
       @new-terminal="openTerminal"
     />
 
-    <p v-if="errorMessage" class="app-error" role="alert">{{ errorMessage }}</p>
+    <div v-if="errorMessage" class="app-error" role="alert">
+      <span>{{ errorMessage }}</span>
+      <button
+        v-if="retryAction"
+        class="error-retry"
+        data-testid="retry-action"
+        type="button"
+        :disabled="actionPending"
+        @click="retryLastAction"
+      >
+        Retry
+      </button>
+    </div>
 
     <section class="workspace" aria-label="Terminal workspace">
-      <WorkspacePane
-        v-if="activeTab"
-        :node="activeTab.root"
-        :focused-pane-id="workspace.focusedPaneId"
-        @split="splitTerminal"
-        @close="closePane"
+      <div
+        v-for="tab in workspace.tabs"
+        :id="`terminal-panel-${tab.id}`"
+        :key="tab.id"
+        class="workspace-tab-panel"
+        :class="{ active: tab.id === workspace.activeTabId }"
+        role="tabpanel"
+        :aria-hidden="tab.id !== workspace.activeTabId"
+        :aria-labelledby="`terminal-tab-${tab.id}`"
+        :inert="tab.id !== workspace.activeTabId"
+      >
+        <WorkspacePane
+          :node="tab.root"
+          :focused-pane-id="workspace.focusedPaneId"
+          @split="splitTerminal"
+          @close="closePane"
+          @focus="store.focusPane"
+        />
+      </div>
+      <EmptyWorkspace
+        v-if="workspace.tabs.length === 0"
+        :pending="actionPending"
+        @create="openTerminal"
       />
-      <EmptyWorkspace v-else :pending="actionPending" @create="openTerminal" />
     </section>
 
     <StatusBar :snapshot="activeSnapshot" />

@@ -12,7 +12,7 @@ export interface TerminalPort extends DisposablePort {
   readonly cols: number;
   readonly rows: number;
   open(element: HTMLElement): void;
-  write(data: Uint8Array): void;
+  write(data: Uint8Array, callback?: () => void): void;
   loadAddon(addon: FitAddonPort): void;
   onData(handler: (input: string) => void): DisposablePort;
 }
@@ -52,6 +52,7 @@ export class TerminalAdapter {
   private readonly fitAddon: FitAddonPort;
   private readonly resizeObserver: ResizeObserverPort;
   private inputSubscription: DisposablePort | null = null;
+  private readonly pendingOutputCompletions = new Set<() => void>();
   private expectedSequence: number;
   private disposed = false;
 
@@ -74,22 +75,33 @@ export class TerminalAdapter {
     this.fitAndNotify();
   }
 
-  acceptChunk(chunk: TerminalChunk): void {
+  acceptChunk(chunk: TerminalChunk): Promise<void> {
     if (chunk.sessionId !== this.options.sessionId) {
-      return;
+      return Promise.resolve();
     }
     if (chunk.sequence !== this.expectedSequence) {
-      this.options.onError(
-        new TerminalAdapterError(
-          'OUTPUT_SEQUENCE_GAP',
-          `Expected terminal output sequence ${this.expectedSequence}, received ${chunk.sequence}`,
-        ),
+      const sequenceError = new TerminalAdapterError(
+        'OUTPUT_SEQUENCE_GAP',
+        `Expected terminal output sequence ${this.expectedSequence}, received ${chunk.sequence}`,
       );
-      return;
+      this.options.onError(sequenceError);
+      return Promise.reject(sequenceError);
     }
 
     this.expectedSequence += 1;
-    this.terminal.write(new Uint8Array(chunk.payload));
+    return new Promise<void>((resolve, reject) => {
+      const complete = () => {
+        this.pendingOutputCompletions.delete(complete);
+        resolve();
+      };
+      this.pendingOutputCompletions.add(complete);
+      try {
+        this.terminal.write(new Uint8Array(chunk.payload), complete);
+      } catch (error) {
+        this.pendingOutputCompletions.delete(complete);
+        reject(error instanceof Error ? error : new Error('Terminal output write failed'));
+      }
+    });
   }
 
   dispose(): void {
@@ -100,6 +112,8 @@ export class TerminalAdapter {
     this.inputSubscription?.dispose();
     this.inputSubscription = null;
     this.resizeObserver.disconnect();
+    this.pendingOutputCompletions.forEach((complete) => complete());
+    this.pendingOutputCompletions.clear();
     this.fitAddon.dispose();
     this.terminal.dispose();
   }

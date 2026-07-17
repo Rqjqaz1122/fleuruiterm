@@ -20,6 +20,7 @@ impl SessionState {
             | (Self::Starting, Self::Ready)
             | (Self::Starting, Self::Failed)
             | (Self::Ready, Self::Closing)
+            | (Self::Ready, Self::Closed)
             | (Self::Ready, Self::Failed)
             | (Self::Closing, Self::Closed) => Ok(requested),
             (current, requested) => {

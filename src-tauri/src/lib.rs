@@ -2,7 +2,8 @@ pub mod ipc;
 pub mod session;
 
 use ipc::session_commands::{
-    AppState, session_close, session_interrupt, session_open_local, session_resize, session_write,
+    AppState, session_ack_output, session_close, session_interrupt, session_open_local,
+    session_resize, session_write,
 };
 use tauri::Manager;
 
@@ -12,6 +13,7 @@ pub fn run() {
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             session_open_local,
+            session_ack_output,
             session_write,
             session_resize,
             session_interrupt,

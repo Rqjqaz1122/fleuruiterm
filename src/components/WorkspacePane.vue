@@ -10,8 +10,9 @@ defineProps<{
 }>();
 
 defineEmits<{
-  split: [direction: SplitDirection];
+  split: [paneId: string, direction: SplitDirection];
   close: [paneId: string];
+  focus: [paneId: string];
 }>();
 </script>
 
@@ -22,8 +23,9 @@ defineEmits<{
       :key="child.id"
       :node="child"
       :focused-pane-id="focusedPaneId"
-      @split="$emit('split', $event)"
+      @split="(paneId, direction) => $emit('split', paneId, direction)"
       @close="$emit('close', $event)"
+      @focus="$emit('focus', $event)"
     />
   </div>
   <TerminalPane
@@ -31,7 +33,8 @@ defineEmits<{
     :pane-id="node.id"
     :session-id="node.sessionId"
     :focused="node.id === focusedPaneId"
-    @split="$emit('split', $event)"
-    @close="$emit('close', node.id)"
+    @split="(paneId, direction) => $emit('split', paneId, direction)"
+    @close="$emit('close', $event)"
+    @focus="$emit('focus', $event)"
   />
 </template>

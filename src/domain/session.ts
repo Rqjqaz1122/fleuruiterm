@@ -12,3 +12,8 @@ export interface TerminalChunk {
   sequence: number;
   payload: number[];
 }
+
+export interface SessionStateChanged {
+  sessionId: string;
+  state: SessionState;
+}

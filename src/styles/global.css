@@ -189,9 +189,26 @@ button:focus-visible {
 }
 
 .workspace {
+  position: relative;
   min-width: 0;
   min-height: 0;
   padding: 8px;
+}
+
+.workspace-tab-panel {
+  position: absolute;
+  inset: 8px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.workspace-tab-panel.active {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.workspace-tab-panel > * {
+  height: 100%;
 }
 
 .empty-workspace {
@@ -298,8 +315,26 @@ button:focus-visible {
 }
 
 .app-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 7px 14px;
   border-bottom: 1px solid #69313d;
+}
+
+.error-retry {
+  padding: 2px 9px;
+  border: 1px solid #b86b78;
+  border-radius: var(--radius-small);
+  color: #fff0f2;
+  background: #71313d;
+  cursor: pointer;
+}
+
+.error-retry:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .status-bar {

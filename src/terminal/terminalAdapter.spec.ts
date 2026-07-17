@@ -12,7 +12,12 @@ class FakeTerminal implements TerminalPort {
   rows = 24;
   dispose = vi.fn();
   open = vi.fn();
-  write = vi.fn();
+  private readonly writeCallbacks: Array<() => void> = [];
+  write = vi.fn((_data: Uint8Array, callback?: () => void) => {
+    if (callback !== undefined) {
+      this.writeCallbacks.push(callback);
+    }
+  });
   loadAddon = vi.fn();
   private dataHandler: ((input: string) => void) | null = null;
   readonly dataDisposable = { dispose: vi.fn() };
@@ -24,6 +29,10 @@ class FakeTerminal implements TerminalPort {
 
   emitData(input: string) {
     this.dataHandler?.(input);
+  }
+
+  completeWrite() {
+    this.writeCallbacks.shift()?.();
   }
 }
 
@@ -43,17 +52,26 @@ describe('TerminalAdapter', () => {
     );
   });
 
-  it('writes ordered terminal chunks and reports a sequence gap', () => {
+  it('writes ordered terminal chunks and rejects a sequence gap', async () => {
     const terminal = new FakeTerminal();
     const onError = vi.fn();
     const adapter = createAdapter(terminal, createSessionClient(), onError);
     adapter.open(document.createElement('div'));
 
-    adapter.acceptChunk({ sessionId: 'session-a', sequence: 1, payload: [97] });
-    adapter.acceptChunk({ sessionId: 'session-a', sequence: 3, payload: [98] });
+    const firstWrite = adapter.acceptChunk({
+      sessionId: 'session-a',
+      sequence: 1,
+      payload: [97],
+    });
+    terminal.completeWrite();
+    await firstWrite;
+
+    await expect(
+      adapter.acceptChunk({ sessionId: 'session-a', sequence: 3, payload: [98] }),
+    ).rejects.toMatchObject({ code: 'OUTPUT_SEQUENCE_GAP' });
 
     expect(terminal.write).toHaveBeenCalledTimes(1);
-    expect(terminal.write).toHaveBeenCalledWith(new Uint8Array([97]));
+    expect(terminal.write).toHaveBeenCalledWith(new Uint8Array([97]), expect.any(Function));
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'OUTPUT_SEQUENCE_GAP' }));
   });
 
@@ -70,7 +88,29 @@ describe('TerminalAdapter', () => {
 
     adapter.acceptChunk({ sessionId: 'session-a', sequence: 971, payload: [97] });
 
-    expect(terminal.write).toHaveBeenCalledWith(new Uint8Array([97]));
+    expect(terminal.write).toHaveBeenCalledWith(new Uint8Array([97]), expect.any(Function));
+  });
+
+  it('reports output consumed only after the terminal write callback', async () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+    adapter.open(document.createElement('div'));
+    let consumed = false;
+
+    const consumption = adapter.acceptChunk({
+      sessionId: 'session-a',
+      sequence: 1,
+      payload: [97],
+    });
+    void consumption.then(() => {
+      consumed = true;
+    });
+    await Promise.resolve();
+
+    expect(consumed).toBe(false);
+    terminal.completeWrite();
+    await consumption;
+    expect(consumed).toBe(true);
   });
 
   it('sends positive dimensions after fitting its container', async () => {

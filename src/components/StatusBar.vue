@@ -12,7 +12,5 @@ defineProps<{ snapshot: SessionSnapshot | null }>();
     </span>
     <span>{{ snapshot?.shell ?? 'Local shell' }}</span>
     <span class="status-spacer" />
-    <span>AI: analysis only</span>
-    <span>Local context</span>
   </footer>
 </template>
