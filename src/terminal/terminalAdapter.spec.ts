@@ -176,10 +176,17 @@ describe('TerminalAdapter', () => {
     const terminal = new FakeTerminal();
     const fitAddon = createFitAddon();
     const frames = createFrameScheduler();
-    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), createResizeObserver(), 1, {
-      fitAddon,
-      frames,
-    });
+    const adapter = createAdapter(
+      terminal,
+      createSessionClient(),
+      vi.fn(),
+      createResizeObserver(),
+      1,
+      {
+        fitAddon,
+        frames,
+      },
+    );
 
     adapter.open(document.createElement('div'));
     expect(fitAddon.fit).toHaveBeenCalledTimes(1);
@@ -192,9 +199,16 @@ describe('TerminalAdapter', () => {
   it('cancels a pending post-render fit on dispose', () => {
     const terminal = new FakeTerminal();
     const frames = createFrameScheduler();
-    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), createResizeObserver(), 1, {
-      frames,
-    });
+    const adapter = createAdapter(
+      terminal,
+      createSessionClient(),
+      vi.fn(),
+      createResizeObserver(),
+      1,
+      {
+        frames,
+      },
+    );
 
     adapter.open(document.createElement('div'));
     frames.runNextFrame();

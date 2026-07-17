@@ -29,9 +29,9 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
 
     expect(wrapper.findAll('[data-tab-id="app-settings"]')).toHaveLength(1);
-    expect(wrapper.get('[data-tab-id="app-settings"] [role="tab"]').attributes('aria-selected')).toBe(
-      'true',
-    );
+    expect(
+      wrapper.get('[data-tab-id="app-settings"] [role="tab"]').attributes('aria-selected'),
+    ).toBe('true');
     expect(wrapper.get('#settings-panel').exists()).toBe(true);
   });
 

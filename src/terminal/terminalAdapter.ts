@@ -118,15 +118,15 @@ export class TerminalAdapter {
         this.pendingOutputCompletions.delete(complete);
         resolve();
       };
-    this.pendingOutputCompletions.add(complete);
-    try {
-      const scrollState = this.captureScrollState();
-      this.terminal.write(new Uint8Array(chunk.payload), () => {
-        if (!this.disposed) {
-          this.restoreScrollState(scrollState);
-        }
-        complete();
-      });
+      this.pendingOutputCompletions.add(complete);
+      try {
+        const scrollState = this.captureScrollState();
+        this.terminal.write(new Uint8Array(chunk.payload), () => {
+          if (!this.disposed) {
+            this.restoreScrollState(scrollState);
+          }
+          complete();
+        });
       } catch (error) {
         this.pendingOutputCompletions.delete(complete);
         reject(error instanceof Error ? error : new Error('Terminal output write failed'));
