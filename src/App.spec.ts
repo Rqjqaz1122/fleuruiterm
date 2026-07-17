@@ -17,9 +17,33 @@ describe('FleurTerm app shell', () => {
     store.openTab = vi.fn(async () => undefined);
     const wrapper = mount(App);
 
-    await wrapper.get('[data-testid="new-terminal"]').trigger('click');
+    await wrapper.get('[data-testid="start-new-terminal"]').trigger('click');
 
     expect(store.openTab).toHaveBeenCalledOnce();
+  });
+
+  it('opens and closes the settings view from the start page', async () => {
+    const wrapper = mount(App);
+
+    await wrapper.get('[data-testid="start-settings"]').trigger('click');
+    expect(wrapper.get('[aria-label="Settings"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="close-settings"]').trigger('click');
+    expect(wrapper.get('[aria-label="FleurTerm start page"]').exists()).toBe(true);
+  });
+
+  it('returns to the terminal workspace when a tab is activated from settings', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+    await wrapper.get('[data-testid="titlebar-settings"]').trigger('click');
+
+    await wrapper.get('[role="tab"]').trigger('click');
+
+    expect(wrapper.get('[aria-label="Terminal workspace"]').isVisible()).toBe(true);
+    expect(store.workspace.activeTabId).toBe('tab-1');
   });
 
   it('renders active tabs and delegates vertical split', async () => {
@@ -59,7 +83,7 @@ describe('FleurTerm app shell', () => {
     const wrapper = mount(App);
 
     expect(wrapper.get('[role="alert"]').text()).toContain('Unable to start shell');
-    expect(wrapper.find('[data-testid="new-terminal"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="start-new-terminal"]').exists()).toBe(true);
   });
 
   it('does not advertise unavailable AI capabilities', () => {
@@ -77,7 +101,7 @@ describe('FleurTerm app shell', () => {
     });
     const wrapper = mount(App);
 
-    await wrapper.get('[data-testid="new-terminal"]').trigger('click');
+    await wrapper.get('[data-testid="start-new-terminal"]').trigger('click');
     await wrapper.get('[data-testid="retry-action"]').trigger('click');
 
     expect(store.openTab).toHaveBeenCalledTimes(2);

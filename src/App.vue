@@ -2,21 +2,41 @@
 import { storeToRefs } from 'pinia';
 import { ref } from 'vue';
 
-import AppHeader from '@/components/AppHeader.vue';
-import EmptyWorkspace from '@/components/EmptyWorkspace.vue';
+import AppTitleBar from '@/components/AppTitleBar.vue';
+import SettingsView from '@/components/SettingsView.vue';
+import StartPage from '@/components/StartPage.vue';
 import StatusBar from '@/components/StatusBar.vue';
 import TerminalTabs from '@/components/TerminalTabs.vue';
 import WorkspacePane from '@/components/WorkspacePane.vue';
-import { useWorkspaceStore } from '@/stores/workspaceStore';
 import type { SplitDirection } from '@/domain/workspace';
+import { useWorkspaceStore } from '@/stores/workspaceStore';
+
+type AppView = 'workspace' | 'settings';
 
 const store = useWorkspaceStore();
 const { workspace, activeSnapshot, errorMessage } = storeToRefs(store);
 const actionPending = ref(false);
+const currentView = ref<AppView>('workspace');
 const retryAction = ref<(() => Promise<void>) | null>(null);
 
 async function openTerminal(): Promise<void> {
-  await runAction(() => store.openTab());
+  await runAction(async () => {
+    await store.openTab();
+    currentView.value = 'workspace';
+  });
+}
+
+function openSettings(): void {
+  currentView.value = 'settings';
+}
+
+function closeSettings(): void {
+  currentView.value = 'workspace';
+}
+
+function activateTerminalTab(tabId: string): void {
+  store.activateTab(tabId);
+  currentView.value = 'workspace';
 }
 
 async function splitTerminal(paneId: string, direction: SplitDirection): Promise<void> {
@@ -57,12 +77,12 @@ async function runAction(action: () => Promise<void>): Promise<void> {
 
 <template>
   <main class="app-shell">
-    <AppHeader :pending="actionPending" @new-terminal="openTerminal" />
+    <AppTitleBar :settings-active="currentView === 'settings'" @open-settings="openSettings" />
     <TerminalTabs
       v-if="workspace.tabs.length > 0"
       :tabs="workspace.tabs"
       :active-tab-id="workspace.activeTabId"
-      @activate="store.activateTab"
+      @activate="activateTerminalTab"
       @close="closeTab"
       @new-terminal="openTerminal"
     />
@@ -81,7 +101,8 @@ async function runAction(action: () => Promise<void>): Promise<void> {
       </button>
     </div>
 
-    <section class="workspace" aria-label="Terminal workspace">
+    <SettingsView v-if="currentView === 'settings'" @close="closeSettings" />
+    <section v-show="currentView === 'workspace'" class="workspace" aria-label="Terminal workspace">
       <div
         v-for="tab in workspace.tabs"
         :id="`terminal-panel-${tab.id}`"
@@ -101,10 +122,12 @@ async function runAction(action: () => Promise<void>): Promise<void> {
           @focus="store.focusPane"
         />
       </div>
-      <EmptyWorkspace
+      <StartPage
         v-if="workspace.tabs.length === 0"
         :pending="actionPending"
-        @create="openTerminal"
+        aria-label="FleurTerm start page"
+        @create-terminal="openTerminal"
+        @open-settings="openSettings"
       />
     </section>
 
