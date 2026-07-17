@@ -117,6 +117,26 @@ impl SessionRegistry {
         }
     }
 
+    pub async fn close_all(&self) -> Result<(), SessionError> {
+        let registered_sessions = {
+            let mut sessions = self.sessions.write().await;
+            sessions
+                .drain()
+                .map(|(_, session)| session)
+                .collect::<Vec<_>>()
+        };
+        let mut first_error = None;
+        for session in registered_sessions {
+            if let Err(error) = session.backend_session.close().await {
+                first_error.get_or_insert(error);
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     async fn registered_session(
         &self,
         session_id: &SessionId,
@@ -268,5 +288,19 @@ mod tests {
         let state = backend.state.lock().unwrap();
         assert_eq!(state.writes, vec![b"first\n".to_vec()]);
         assert_eq!(state.sizes, vec![resized]);
+    }
+
+    #[tokio::test]
+    async fn close_all_releases_every_registered_session() {
+        let backend = RecordingBackend::default();
+        let registry = SessionRegistry::new(Arc::new(backend.clone()));
+        let first = registry.open_local(open_request()).await.unwrap();
+        let second = registry.open_local(open_request()).await.unwrap();
+
+        registry.close_all().await.unwrap();
+
+        assert!(registry.snapshot(&first.session_id).await.is_err());
+        assert!(registry.snapshot(&second.session_id).await.is_err());
+        assert_eq!(backend.state.lock().unwrap().closed_sessions, 2);
     }
 }

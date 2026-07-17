@@ -18,7 +18,7 @@ import { SessionClient, type OpenLocalSessionOptions } from '@/services/sessionC
 
 const DEFAULT_TERMINAL_COLUMNS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
-const MAX_BUFFERED_CHUNKS_PER_SESSION = 128;
+const MAX_OUTPUT_HISTORY_BYTES = 2 * 1024 * 1024;
 
 export interface WorkspaceSessionClient {
   openLocal(
@@ -39,7 +39,9 @@ export function createWorkspaceStore(
     const snapshots = ref<Record<string, SessionSnapshot>>({});
     const errorMessage = ref<string | null>(null);
     const chunkListeners = new Map<string, Set<ChunkListener>>();
-    const bufferedChunks = new Map<string, TerminalChunk[]>();
+    const outputHistory = new Map<string, TerminalChunk[]>();
+    const outputHistoryBytes = new Map<string, number>();
+    const lastOutputSequence = new Map<string, number>();
 
     const activeSnapshot = computed(() => {
       const sessionId = workspace.value.focusedSessionId;
@@ -91,9 +93,8 @@ export function createWorkspaceStore(
       const listeners = chunkListeners.get(sessionId) ?? new Set<ChunkListener>();
       listeners.add(listener);
       chunkListeners.set(sessionId, listeners);
-      const pending = bufferedChunks.get(sessionId) ?? [];
-      pending.forEach(listener);
-      bufferedChunks.delete(sessionId);
+      const history = outputHistory.get(sessionId) ?? [];
+      history.forEach((chunk) => listener(chunk));
 
       return () => {
         const current = chunkListeners.get(sessionId);
@@ -102,6 +103,14 @@ export function createWorkspaceStore(
           chunkListeners.delete(sessionId);
         }
       };
+    }
+
+    function nextOutputSequence(sessionId: string): number {
+      const earliestHistory = outputHistory.get(sessionId)?.[0];
+      if (earliestHistory !== undefined) {
+        return earliestHistory.sequence;
+      }
+      return (lastOutputSequence.get(sessionId) ?? 0) + 1;
     }
 
     async function openSession(): Promise<SessionSnapshot> {
@@ -121,17 +130,24 @@ export function createWorkspaceStore(
     }
 
     function publishChunk(chunk: TerminalChunk): void {
+      lastOutputSequence.set(chunk.sessionId, chunk.sequence);
+      appendOutputHistory(chunk);
       const listeners = chunkListeners.get(chunk.sessionId);
       if (listeners !== undefined && listeners.size > 0) {
         listeners.forEach((listener) => listener(chunk));
-        return;
       }
-      const pending = bufferedChunks.get(chunk.sessionId) ?? [];
-      pending.push(chunk);
-      if (pending.length > MAX_BUFFERED_CHUNKS_PER_SESSION) {
-        pending.shift();
+    }
+
+    function appendOutputHistory(chunk: TerminalChunk): void {
+      const history = outputHistory.get(chunk.sessionId) ?? [];
+      let historyBytes = (outputHistoryBytes.get(chunk.sessionId) ?? 0) + chunk.payload.length;
+      history.push(chunk);
+      while (historyBytes > MAX_OUTPUT_HISTORY_BYTES && history.length > 1) {
+        const removed = history.shift();
+        historyBytes -= removed?.payload.length ?? 0;
       }
-      bufferedChunks.set(chunk.sessionId, pending);
+      outputHistory.set(chunk.sessionId, history);
+      outputHistoryBytes.set(chunk.sessionId, historyBytes);
     }
 
     function removeSessionState(sessionId: string): void {
@@ -139,7 +155,9 @@ export function createWorkspaceStore(
       delete nextSnapshots[sessionId];
       snapshots.value = nextSnapshots;
       chunkListeners.delete(sessionId);
-      bufferedChunks.delete(sessionId);
+      outputHistory.delete(sessionId);
+      outputHistoryBytes.delete(sessionId);
+      lastOutputSequence.delete(sessionId);
     }
 
     return {
@@ -153,6 +171,7 @@ export function createWorkspaceStore(
       closePane,
       closeTab,
       subscribeToSession,
+      nextOutputSequence,
     };
   });
 }

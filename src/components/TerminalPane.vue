@@ -39,6 +39,7 @@ onMounted(async () => {
   const sessionClient = new SessionClient();
   adapter = new TerminalAdapter({
     sessionId: props.sessionId,
+    initialSequence: store.nextOutputSequence(props.sessionId),
     sessionClient,
     createTerminal: () =>
       new Terminal({

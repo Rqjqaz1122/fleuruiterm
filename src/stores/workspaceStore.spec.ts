@@ -63,6 +63,35 @@ describe('workspace store', () => {
 
     expect(listener).toHaveBeenCalledWith(chunk);
   });
+
+  it('preserves the earliest buffered sequence for terminal remount', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab();
+
+    client.emit({ sessionId: 'session-1', sequence: 971, payload: [97] });
+    client.emit({ sessionId: 'session-1', sequence: 972, payload: [98] });
+
+    expect(store.nextOutputSequence('session-1')).toBe(971);
+  });
+
+  it('replays bounded session history after a terminal remount', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab();
+    const firstListener = vi.fn();
+    const unsubscribe = store.subscribeToSession('session-1', firstListener);
+    const chunk: TerminalChunk = { sessionId: 'session-1', sequence: 1, payload: [97] };
+    client.emit(chunk);
+    unsubscribe();
+    const remountedListener = vi.fn();
+
+    store.subscribeToSession('session-1', remountedListener);
+
+    expect(remountedListener).toHaveBeenCalledWith(chunk);
+  });
 });
 
 function createClient() {

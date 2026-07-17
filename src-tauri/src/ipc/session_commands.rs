@@ -23,6 +23,13 @@ impl AppState {
             registry: Arc::new(SessionRegistry::new(Arc::new(LocalPtyBackend::new()))),
         }
     }
+
+    pub async fn close_all(&self) -> Result<(), PublicSessionError> {
+        self.registry
+            .close_all()
+            .await
+            .map_err(PublicSessionError::from)
+    }
 }
 
 impl Default for AppState {

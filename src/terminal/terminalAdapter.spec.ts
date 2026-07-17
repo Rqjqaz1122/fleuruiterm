@@ -57,6 +57,22 @@ describe('TerminalAdapter', () => {
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'OUTPUT_SEQUENCE_GAP' }));
   });
 
+  it('continues from a session sequence captured before remount', () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(
+      terminal,
+      createSessionClient(),
+      vi.fn(),
+      createResizeObserver(),
+      971,
+    );
+    adapter.open(document.createElement('div'));
+
+    adapter.acceptChunk({ sessionId: 'session-a', sequence: 971, payload: [97] });
+
+    expect(terminal.write).toHaveBeenCalledWith(new Uint8Array([97]));
+  });
+
   it('sends positive dimensions after fitting its container', async () => {
     const terminal = new FakeTerminal();
     terminal.cols = 120;
@@ -129,9 +145,11 @@ function createAdapter(
   sessionClient: ReturnType<typeof createSessionClient>,
   onError = vi.fn(),
   observer = createResizeObserver(),
+  initialSequence = 1,
 ) {
   return new TerminalAdapter({
     sessionId: 'session-a',
+    initialSequence,
     sessionClient,
     createTerminal: () => terminal,
     createFitAddon,

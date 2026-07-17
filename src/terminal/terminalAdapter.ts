@@ -29,6 +29,7 @@ export interface TerminalSessionClient {
 
 export interface TerminalAdapterOptions {
   sessionId: string;
+  initialSequence?: number;
   sessionClient: TerminalSessionClient;
   createTerminal: () => TerminalPort;
   createFitAddon: () => FitAddonPort;
@@ -51,10 +52,11 @@ export class TerminalAdapter {
   private readonly fitAddon: FitAddonPort;
   private readonly resizeObserver: ResizeObserverPort;
   private inputSubscription: DisposablePort | null = null;
-  private expectedSequence = 1;
+  private expectedSequence: number;
   private disposed = false;
 
   constructor(private readonly options: TerminalAdapterOptions) {
+    this.expectedSequence = options.initialSequence ?? 1;
     this.terminal = options.createTerminal();
     this.fitAddon = options.createFitAddon();
     this.resizeObserver = options.createResizeObserver(() => this.fitAndNotify());
