@@ -1,6 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { mount } from '@vue/test-utils';
-import { nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addTab, createWorkspace } from '@/domain/workspace';
@@ -23,38 +22,42 @@ describe('FleurTerm app shell', () => {
     expect(store.openTab).toHaveBeenCalledOnce();
   });
 
-  it('opens and closes the settings view from the start page', async () => {
+  it('opens settings as a singleton application tab', async () => {
     const wrapper = mount(App);
 
     await wrapper.get('[data-testid="start-settings"]').trigger('click');
-    expect(wrapper.get('[aria-label="Settings"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
 
-    await wrapper.get('[data-testid="close-settings"]').trigger('click');
-    expect(wrapper.get('[aria-label="FleurTerm start page"]').exists()).toBe(true);
+    expect(wrapper.findAll('[data-tab-id="app-settings"]')).toHaveLength(1);
+    expect(wrapper.get('[data-tab-id="app-settings"] [role="tab"]').attributes('aria-selected')).toBe(
+      'true',
+    );
+    expect(wrapper.get('#settings-panel').exists()).toBe(true);
   });
 
-  it('returns to the terminal workspace when a tab is activated from settings', async () => {
+  it('switches between settings and an existing terminal tab', async () => {
     const store = useWorkspaceStore();
     store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
     const wrapper = mount(App, {
       global: { stubs: { TerminalPane: true } },
     });
-    await wrapper.get('[data-testid="titlebar-settings"]').trigger('click');
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
 
-    await wrapper.get('[role="tab"]').trigger('click');
+    await wrapper.get('[data-tab-id="tab-1"] [role="tab"]').trigger('click');
 
-    expect(wrapper.get('[aria-label="Terminal workspace"]').isVisible()).toBe(true);
     expect(store.workspace.activeTabId).toBe('tab-1');
+    expect(wrapper.get('#terminal-panel-tab-1').attributes('aria-hidden')).toBe('false');
+    expect(wrapper.get('#settings-panel').attributes('aria-hidden')).toBe('true');
   });
 
-  it('keeps the terminal workspace laid out and inert while settings covers it', async () => {
+  it('keeps the terminal workspace laid out and inert while settings is active', async () => {
     const store = useWorkspaceStore();
     store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
     const wrapper = mount(App, {
       global: { stubs: { TerminalPane: true } },
     });
 
-    await wrapper.get('[data-testid="titlebar-settings"]').trigger('click');
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
 
     const appContent = wrapper.get('.app-content');
     expect(appContent.get('[aria-label="Settings"]').exists()).toBe(true);
@@ -65,15 +68,36 @@ describe('FleurTerm app shell', () => {
     expect(workspace.attributes('inert')).toBeDefined();
   });
 
-  it('restores focus to the title-bar settings action after closing settings', async () => {
-    const wrapper = mount(App, { attachTo: document.body });
+  it('closes settings and returns to the most recently active terminal', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[aria-label="Close Settings"]').trigger('click');
+
+    expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(false);
+    expect(wrapper.get('#terminal-panel-tab-1').attributes('aria-hidden')).toBe('false');
+  });
+
+  it('closes settings to the start page when no terminal exists', async () => {
+    const wrapper = mount(App);
 
     await wrapper.get('[data-testid="start-settings"]').trigger('click');
-    await wrapper.get('[data-testid="close-settings"]').trigger('click');
-    await nextTick();
+    await wrapper.get('[aria-label="Close Settings"]').trigger('click');
 
-    expect(document.activeElement).toBe(wrapper.get('[data-testid="titlebar-settings"]').element);
-    wrapper.unmount();
+    expect(wrapper.get('[aria-label="FleurTerm start page"]').exists()).toBe(true);
+  });
+
+  it('removes the FleurTerm title header and keeps the tab row at the top', () => {
+    const wrapper = mount(App);
+
+    expect(wrapper.find('.app-title-bar').exists()).toBe(false);
+    expect(wrapper.get('.app-shell').element.firstElementChild?.classList).toContain(
+      'terminal-tabs',
+    );
   });
 
   it('renders active tabs and delegates vertical split', async () => {

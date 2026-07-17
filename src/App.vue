@@ -1,48 +1,82 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { nextTick, ref } from 'vue';
+import { computed, ref } from 'vue';
 
-import AppTitleBar from '@/components/AppTitleBar.vue';
 import SettingsView from '@/components/SettingsView.vue';
 import StartPage from '@/components/StartPage.vue';
 import StatusBar from '@/components/StatusBar.vue';
 import TerminalTabs from '@/components/TerminalTabs.vue';
 import WorkspacePane from '@/components/WorkspacePane.vue';
+import {
+  createSettingsAppTab,
+  SETTINGS_TAB_ID,
+  toTerminalAppTab,
+  type AppTab,
+} from '@/domain/appTab';
 import type { SplitDirection } from '@/domain/workspace';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
-
-type AppView = 'workspace' | 'settings';
-
-interface AppTitleBarExposure {
-  focusSettingsAction(): void;
-}
 
 const store = useWorkspaceStore();
 const { workspace, activeSnapshot, errorMessage } = storeToRefs(store);
 const actionPending = ref(false);
-const appTitleBar = ref<AppTitleBarExposure | null>(null);
-const currentView = ref<AppView>('workspace');
 const retryAction = ref<(() => Promise<void>) | null>(null);
+const settingsTabOpen = ref(false);
+const activeAppTabId = ref<string | null>(workspace.value.activeTabId);
+const lastActiveTerminalTabId = ref<string | null>(workspace.value.activeTabId);
+
+const appTabs = computed<AppTab[]>(() => {
+  const terminalTabs = workspace.value.tabs.map(toTerminalAppTab);
+  return settingsTabOpen.value ? [...terminalTabs, createSettingsAppTab()] : terminalTabs;
+});
+
+const settingsActive = computed(() => activeAppTabId.value === SETTINGS_TAB_ID);
 
 async function openTerminal(): Promise<void> {
   await runAction(async () => {
     await store.openTab();
-    currentView.value = 'workspace';
+    activeAppTabId.value = store.workspace.activeTabId;
+    lastActiveTerminalTabId.value = store.workspace.activeTabId;
   });
 }
 
 function openSettings(): void {
-  currentView.value = 'settings';
+  settingsTabOpen.value = true;
+  activeAppTabId.value = SETTINGS_TAB_ID;
 }
 
-function closeSettings(): void {
-  currentView.value = 'workspace';
-  void nextTick(() => appTitleBar.value?.focusSettingsAction());
-}
-
-function activateTerminalTab(tabId: string): void {
+function activateAppTab(tabId: string): void {
+  if (tabId === SETTINGS_TAB_ID) {
+    openSettings();
+    return;
+  }
   store.activateTab(tabId);
-  currentView.value = 'workspace';
+  activeAppTabId.value = tabId;
+  lastActiveTerminalTabId.value = tabId;
+}
+
+async function closeAppTab(tabId: string): Promise<void> {
+  if (tabId === SETTINGS_TAB_ID) {
+    closeSettingsTab();
+    return;
+  }
+  await runAction(() => store.closeTab(tabId));
+  const closedTabStillExists = workspace.value.tabs.some((tab) => tab.id === tabId);
+  if (activeAppTabId.value === tabId && !closedTabStillExists) {
+    activeAppTabId.value = store.workspace.activeTabId;
+    lastActiveTerminalTabId.value = store.workspace.activeTabId;
+  }
+}
+
+function closeSettingsTab(): void {
+  settingsTabOpen.value = false;
+  const fallbackTabId = lastActiveTerminalTabId.value;
+  const fallbackExists = workspace.value.tabs.some((tab) => tab.id === fallbackTabId);
+  const nextTabId = fallbackExists ? fallbackTabId : workspace.value.activeTabId;
+  activeAppTabId.value = nextTabId;
+  if (nextTabId !== null) {
+    store.activateTab(nextTabId);
+    lastActiveTerminalTabId.value = nextTabId;
+  }
 }
 
 async function splitTerminal(paneId: string, direction: SplitDirection): Promise<void> {
@@ -51,10 +85,6 @@ async function splitTerminal(paneId: string, direction: SplitDirection): Promise
 
 async function closePane(paneId: string): Promise<void> {
   await runAction(() => store.closePane(paneId));
-}
-
-async function closeTab(tabId: string): Promise<void> {
-  await runAction(() => store.closeTab(tabId));
 }
 
 async function retryLastAction(): Promise<void> {
@@ -83,18 +113,13 @@ async function runAction(action: () => Promise<void>): Promise<void> {
 
 <template>
   <main class="app-shell">
-    <AppTitleBar
-      ref="appTitleBar"
-      :settings-active="currentView === 'settings'"
-      @open-settings="openSettings"
-    />
     <TerminalTabs
-      v-if="workspace.tabs.length > 0"
-      :tabs="workspace.tabs"
-      :active-tab-id="workspace.activeTabId"
-      @activate="activateTerminalTab"
-      @close="closeTab"
+      :tabs="appTabs"
+      :active-tab-id="activeAppTabId"
+      @activate="activateAppTab"
+      @close="closeAppTab"
       @new-terminal="openTerminal"
+      @open-settings="openSettings"
     />
 
     <div v-if="errorMessage" class="app-error" role="alert">
@@ -112,24 +137,34 @@ async function runAction(action: () => Promise<void>): Promise<void> {
     </div>
 
     <div class="app-content">
-      <SettingsView v-if="currentView === 'settings'" @close="closeSettings" />
+      <section
+        v-if="settingsTabOpen"
+        id="settings-panel"
+        class="settings-tab-panel"
+        role="tabpanel"
+        :aria-hidden="!settingsActive"
+        aria-labelledby="app-tab-app-settings"
+        :inert="!settingsActive"
+      >
+        <SettingsView />
+      </section>
       <section
         class="workspace"
-        :class="{ 'settings-covered': currentView === 'settings' }"
+        :class="{ 'settings-covered': settingsActive }"
         aria-label="Terminal workspace"
-        :aria-hidden="currentView === 'settings'"
-        :inert="currentView === 'settings'"
+        :aria-hidden="settingsActive"
+        :inert="settingsActive"
       >
         <div
           v-for="tab in workspace.tabs"
           :id="`terminal-panel-${tab.id}`"
           :key="tab.id"
           class="workspace-tab-panel"
-          :class="{ active: tab.id === workspace.activeTabId }"
+          :class="{ active: tab.id === activeAppTabId && !settingsActive }"
           role="tabpanel"
-          :aria-hidden="tab.id !== workspace.activeTabId"
-          :aria-labelledby="`terminal-tab-${tab.id}`"
-          :inert="tab.id !== workspace.activeTabId"
+          :aria-hidden="tab.id !== activeAppTabId || settingsActive"
+          :aria-labelledby="`app-tab-${tab.id}`"
+          :inert="tab.id !== activeAppTabId || settingsActive"
         >
           <WorkspacePane
             :node="tab.root"
