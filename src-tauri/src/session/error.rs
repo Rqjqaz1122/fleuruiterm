@@ -16,4 +16,13 @@ pub enum SessionError {
     SessionNotFound { session_id: SessionId },
     #[error("terminal input exceeds {maximum} bytes: actual={actual}")]
     InputTooLarge { actual: usize, maximum: usize },
+    #[error("shell is unavailable: {shell}")]
+    ShellUnavailable { shell: String },
+    #[error("terminal output channel is closed")]
+    OutputChannelClosed,
+    #[error("PTY operation failed during {operation}: {message}")]
+    BackendFailure {
+        operation: &'static str,
+        message: String,
+    },
 }

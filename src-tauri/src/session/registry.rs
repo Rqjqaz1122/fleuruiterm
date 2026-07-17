@@ -3,7 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
 use super::{
-    backend::{BackendSession, SessionBackend},
+    backend::{
+        BackendOpenContext, BackendSession, DiscardOutputSink, SessionBackend, TerminalOutputSink,
+    },
     error::SessionError,
     model::{BackendType, OpenLocalSessionRequest, SessionId, SessionSnapshot, TerminalDimensions},
     state::SessionState,
@@ -34,8 +36,21 @@ impl SessionRegistry {
         &self,
         request: OpenLocalSessionRequest,
     ) -> Result<SessionSnapshot, SessionError> {
-        let opened = self.backend.open(request).await?;
+        self.open_local_with_output(request, Arc::new(DiscardOutputSink))
+            .await
+    }
+
+    pub async fn open_local_with_output(
+        &self,
+        request: OpenLocalSessionRequest,
+        output_sink: Arc<dyn TerminalOutputSink>,
+    ) -> Result<SessionSnapshot, SessionError> {
         let session_id = SessionId::new();
+        let context = BackendOpenContext {
+            session_id: session_id.clone(),
+            output_sink,
+        };
+        let opened = self.backend.open(request, context).await?;
         let snapshot = SessionSnapshot {
             session_id: session_id.clone(),
             backend_type: BackendType::Local,
@@ -125,7 +140,7 @@ mod tests {
 
     use super::SessionRegistry;
     use crate::session::{
-        backend::{BackendSession, OpenedBackendSession, SessionBackend},
+        backend::{BackendOpenContext, BackendSession, OpenedBackendSession, SessionBackend},
         error::SessionError,
         model::{OpenLocalSessionRequest, SessionId, TerminalDimensions},
     };
@@ -151,6 +166,7 @@ mod tests {
         async fn open(
             &self,
             request: OpenLocalSessionRequest,
+            _context: BackendOpenContext,
         ) -> Result<OpenedBackendSession, SessionError> {
             Ok(OpenedBackendSession {
                 shell: request
