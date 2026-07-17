@@ -1,5 +1,10 @@
 <script setup lang="ts">
+import { ref } from 'vue';
+
+import { beginTabDrag, draggedTab, finishTabDrag } from '@/composables/tabDrag';
 import { SETTINGS_TAB_ID, type AppTab } from '@/domain/appTab';
+import type { TabDropPlacement } from '@/domain/workspace';
+import { t } from '@/i18n/locale';
 
 const props = defineProps<{
   tabs: AppTab[];
@@ -11,7 +16,12 @@ const emit = defineEmits<{
   close: [tabId: string];
   newTerminal: [];
   openSettings: [];
+  reorder: [sourceTabId: string, targetTabId: string, placement: TabDropPlacement];
+  dragHover: [tabId: string];
 }>();
+
+const dropTargetTabId = ref<string | null>(null);
+const dropPlacement = ref<TabDropPlacement | null>(null);
 
 function handleTabKey(event: KeyboardEvent, tabId: string): void {
   const currentIndex = props.tabs.findIndex((tab) => tab.id === tabId);
@@ -43,18 +53,93 @@ function handleTabKey(event: KeyboardEvent, tabId: string): void {
   emit('activate', targetTab.id);
   document.getElementById(`app-tab-${targetTab.id}`)?.focus();
 }
+
+function onTabDragStart(event: DragEvent, tab: AppTab): void {
+  beginTabDrag(tab);
+  if (event.dataTransfer !== null) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', tab.id);
+  }
+}
+
+function onTabDragOver(event: DragEvent, targetTabId: string): void {
+  if (draggedTab.value === null || draggedTab.value.id === targetTabId) {
+    return;
+  }
+  event.preventDefault();
+  const targetElement = event.currentTarget as HTMLElement;
+  const rectangle = targetElement.getBoundingClientRect();
+  dropTargetTabId.value = targetTabId;
+  dropPlacement.value = event.clientX <= rectangle.left + rectangle.width / 2 ? 'before' : 'after';
+  if (event.dataTransfer !== null) {
+    event.dataTransfer.dropEffect = 'move';
+  }
+}
+
+function onTabDrop(event: DragEvent, targetTabId: string): void {
+  const sourceTab = draggedTab.value;
+  const placement = dropPlacement.value;
+  if (sourceTab === null || sourceTab.id === targetTabId || placement === null) {
+    clearTabDropIndicators();
+    return;
+  }
+  event.preventDefault();
+  emit('reorder', sourceTab.id, targetTabId, placement);
+  clearTabDropIndicators();
+}
+
+function onTabDragEnter(targetTab: AppTab): void {
+  const sourceTab = draggedTab.value;
+  if (
+    sourceTab?.kind === 'terminal' &&
+    targetTab.kind === 'terminal' &&
+    sourceTab.id !== targetTab.id
+  ) {
+    emit('dragHover', targetTab.id);
+  }
+}
+
+function onTabDragLeave(event: DragEvent): void {
+  const tabItem = event.currentTarget as HTMLElement;
+  const nextTarget = event.relatedTarget;
+  if (!(nextTarget instanceof Node) || !tabItem.contains(nextTarget)) {
+    clearTabDropIndicators();
+  }
+}
+
+function onTabDragEnd(): void {
+  clearTabDropIndicators();
+  finishTabDrag();
+}
+
+function clearTabDropIndicators(): void {
+  dropTargetTabId.value = null;
+  dropPlacement.value = null;
+}
 </script>
 
 <template>
-  <nav class="terminal-tabs" aria-label="Open tabs" data-tauri-drag-region>
+  <nav class="terminal-tabs" :aria-label="t('tabs.openTabs')" data-tauri-drag-region>
     <span class="window-control-space" aria-hidden="true" data-tauri-drag-region />
-    <div class="tab-list" role="tablist">
+    <TransitionGroup name="tab-shift" tag="div" class="tab-list" role="tablist">
       <div
         v-for="tab in tabs"
         :key="tab.id"
         class="tab-item"
-        :class="{ active: tab.id === activeTabId }"
+        :class="{
+          active: tab.id === activeTabId,
+          dragging: draggedTab?.id === tab.id,
+          'drop-before': dropTargetTabId === tab.id && dropPlacement === 'before',
+          'drop-after': dropTargetTabId === tab.id && dropPlacement === 'after',
+        }"
         :data-tab-id="tab.id"
+        draggable="true"
+        @dragstart="onTabDragStart($event, tab)"
+        @dragover="onTabDragOver($event, tab.id)"
+        @dragenter="onTabDragEnter(tab)"
+        @dragleave="onTabDragLeave"
+        @drop="onTabDrop($event, tab.id)"
+        @dragend="onTabDragEnd"
       >
         <button
           :id="`app-tab-${tab.id}`"
@@ -74,17 +159,17 @@ function handleTabKey(event: KeyboardEvent, tabId: string): void {
         <button
           class="icon-button tab-close"
           type="button"
-          :aria-label="`Close ${tab.title}`"
+          :aria-label="`${t('tabs.close')} ${tab.title}`"
           @click.stop="$emit('close', tab.id)"
         >
           ×
         </button>
       </div>
-    </div>
+    </TransitionGroup>
     <button
       class="icon-button add-tab"
       type="button"
-      aria-label="New terminal"
+      :aria-label="t('tabs.newTerminal')"
       @click="$emit('newTerminal')"
     >
       ＋
@@ -95,7 +180,7 @@ function handleTabKey(event: KeyboardEvent, tabId: string): void {
       :class="{ active: activeTabId === SETTINGS_TAB_ID }"
       data-testid="tabbar-settings"
       type="button"
-      aria-label="Open settings"
+      :aria-label="t('tabs.openSettings')"
       :aria-pressed="activeTabId === SETTINGS_TAB_ID"
       @click="$emit('openSettings')"
     >

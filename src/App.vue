@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 import SettingsView from '@/components/SettingsView.vue';
 import StartPage from '@/components/StartPage.vue';
@@ -13,7 +13,13 @@ import {
   toTerminalAppTab,
   type AppTab,
 } from '@/domain/appTab';
-import type { SplitDirection } from '@/domain/workspace';
+import type {
+  PaneDropPosition,
+  SplitDirection,
+  TabDropPlacement,
+  TerminalTab,
+} from '@/domain/workspace';
+import { t, terminalTitle } from '@/i18n/locale';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 const store = useWorkspaceStore();
@@ -23,13 +29,47 @@ const retryAction = ref<(() => Promise<void>) | null>(null);
 const settingsTabOpen = ref(false);
 const activeAppTabId = ref<string | null>(workspace.value.activeTabId);
 const lastActiveTerminalTabId = ref<string | null>(workspace.value.activeTabId);
+const appTabOrder = ref<string[]>([]);
+
+watch(
+  () => [
+    ...workspace.value.tabs.map((tab) => tab.id),
+    ...(settingsTabOpen.value ? [SETTINGS_TAB_ID] : []),
+  ],
+  (availableTabIds) => {
+    const availableTabIdSet = new Set(availableTabIds);
+    appTabOrder.value = [
+      ...appTabOrder.value.filter((tabId) => availableTabIdSet.has(tabId)),
+      ...availableTabIds.filter((tabId) => !appTabOrder.value.includes(tabId)),
+    ];
+  },
+  { immediate: true, flush: 'sync' },
+);
 
 const appTabs = computed<AppTab[]>(() => {
-  const terminalTabs = workspace.value.tabs.map(toTerminalAppTab);
-  return settingsTabOpen.value ? [...terminalTabs, createSettingsAppTab()] : terminalTabs;
+  const terminalTabs = workspace.value.tabs.map((tab, index) =>
+    toTerminalAppTab(tab, terminalTitle(resolveTerminalSequence(tab, index + 1))),
+  );
+  const availableTabs = settingsTabOpen.value
+    ? [...terminalTabs, createSettingsAppTab(t('tabs.settings'))]
+    : terminalTabs;
+  const tabById = new Map(availableTabs.map((tab) => [tab.id, tab]));
+  return appTabOrder.value.flatMap((tabId) => {
+    const tab = tabById.get(tabId);
+    return tab === undefined ? [] : [tab];
+  });
 });
 
 const settingsActive = computed(() => activeAppTabId.value === SETTINGS_TAB_ID);
+
+function resolveTerminalSequence(tab: TerminalTab, fallbackSequence: number): number {
+  const sequenceMatch = /(\d+)$/.exec(tab.title);
+  if (sequenceMatch === null) {
+    return fallbackSequence;
+  }
+  const sequence = Number.parseInt(sequenceMatch[1] ?? '', 10);
+  return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : fallbackSequence;
+}
 
 async function openTerminal(): Promise<void> {
   await runAction(async () => {
@@ -79,6 +119,46 @@ function closeSettingsTab(): void {
   }
 }
 
+function reorderApplicationTabs(
+  sourceTabId: string,
+  targetTabId: string,
+  placement: TabDropPlacement,
+): void {
+  if (sourceTabId === targetTabId) {
+    return;
+  }
+  const sourceIndex = appTabOrder.value.indexOf(sourceTabId);
+  const targetIndex = appTabOrder.value.indexOf(targetTabId);
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return;
+  }
+  const nextOrder = appTabOrder.value.filter((tabId) => tabId !== sourceTabId);
+  const adjustedTargetIndex = nextOrder.indexOf(targetTabId);
+  const insertionIndex = placement === 'before' ? adjustedTargetIndex : adjustedTargetIndex + 1;
+  nextOrder.splice(insertionIndex, 0, sourceTabId);
+  appTabOrder.value = nextOrder;
+
+  const sourceIsTerminal = workspace.value.tabs.some((tab) => tab.id === sourceTabId);
+  const targetIsTerminal = workspace.value.tabs.some((tab) => tab.id === targetTabId);
+  if (sourceIsTerminal && targetIsTerminal) {
+    store.reorderTabById(sourceTabId, targetTabId, placement);
+  }
+}
+
+function mergeDraggedTab(
+  sourceTabId: string,
+  targetPaneId: string,
+  position: PaneDropPosition,
+): void {
+  const sourceTabExists = workspace.value.tabs.some((tab) => tab.id === sourceTabId);
+  if (!sourceTabExists) {
+    return;
+  }
+  store.mergeTabIntoPane(sourceTabId, targetPaneId, position);
+  activeAppTabId.value = store.workspace.activeTabId;
+  lastActiveTerminalTabId.value = store.workspace.activeTabId;
+}
+
 async function splitTerminal(paneId: string, direction: SplitDirection): Promise<void> {
   await runAction(() => store.splitPaneById(paneId, direction));
 }
@@ -120,21 +200,25 @@ async function runAction(action: () => Promise<void>): Promise<void> {
       @close="closeAppTab"
       @new-terminal="openTerminal"
       @open-settings="openSettings"
+      @reorder="reorderApplicationTabs"
+      @drag-hover="activateAppTab"
     />
 
-    <div v-if="errorMessage" class="app-error" role="alert">
-      <span>{{ errorMessage }}</span>
-      <button
-        v-if="retryAction"
-        class="error-retry"
-        data-testid="retry-action"
-        type="button"
-        :disabled="actionPending"
-        @click="retryLastAction"
-      >
-        Retry
-      </button>
-    </div>
+    <Transition name="notice">
+      <div v-if="errorMessage" class="app-error" role="alert">
+        <span>{{ errorMessage }}</span>
+        <button
+          v-if="retryAction"
+          class="error-retry"
+          data-testid="retry-action"
+          type="button"
+          :disabled="actionPending"
+          @click="retryLastAction"
+        >
+          {{ t('app.retry') }}
+        </button>
+      </div>
+    </Transition>
 
     <div class="app-content">
       <section
@@ -167,11 +251,13 @@ async function runAction(action: () => Promise<void>): Promise<void> {
           :inert="tab.id !== activeAppTabId || settingsActive"
         >
           <WorkspacePane
+            :tab-id="tab.id"
             :node="tab.root"
             :focused-pane-id="workspace.focusedPaneId"
             @split="splitTerminal"
             @close="closePane"
             @focus="store.focusPane"
+            @drop-tab="mergeDraggedTab"
           />
         </div>
         <StartPage

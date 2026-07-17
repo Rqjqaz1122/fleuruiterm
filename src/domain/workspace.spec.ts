@@ -8,6 +8,8 @@ import {
   closeTab,
   createWorkspace,
   focusPane,
+  mergeTabIntoPane,
+  reorderTab,
   splitPane,
   type IdGenerator,
 } from './workspace';
@@ -109,5 +111,48 @@ describe('workspace domain', () => {
     expect(updated.activeTabId).toBe('tab-1');
     expect(updated.focusedPaneId).toBe('pane-1');
     expect(updated.focusedSessionId).toBe('session-a');
+  });
+
+  it('reorders terminal tabs without changing the active session', () => {
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const second = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    const workspace = addTab(second, 'session-c', ids('tab-3', 'pane-3'));
+
+    const updated = reorderTab(workspace, 'tab-3', 'tab-1', 'before');
+
+    expect(updated.tabs.map((tab) => tab.id)).toEqual(['tab-3', 'tab-1', 'tab-2']);
+    expect(updated.activeTabId).toBe('tab-3');
+    expect(updated.focusedSessionId).toBe('session-c');
+  });
+
+  it('moves a terminal tab into the left side of a target pane', () => {
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+
+    const updated = mergeTabIntoPane(workspace, 'tab-1', 'pane-2', 'left', ids('split-1'));
+
+    expect(updated.tabs).toHaveLength(1);
+    expect(updated.tabs[0]).toMatchObject({
+      id: 'tab-2',
+      root: {
+        kind: 'split',
+        id: 'split-1',
+        direction: 'vertical',
+        children: [
+          { kind: 'pane', id: 'pane-1', sessionId: 'session-a' },
+          { kind: 'pane', id: 'pane-2', sessionId: 'session-b' },
+        ],
+      },
+    });
+    expect(updated.activeTabId).toBe('tab-2');
+    expect(updated.focusedPaneId).toBe('pane-1');
+  });
+
+  it('rejects moving a tab into one of its own panes', () => {
+    const workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+
+    expect(() => mergeTabIntoPane(workspace, 'tab-1', 'pane-1', 'bottom', ids('split-1'))).toThrow(
+      WorkspaceError,
+    );
   });
 });

@@ -1,15 +1,19 @@
 import { createPinia, setActivePinia } from 'pinia';
-import { mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { enableAutoUnmount, mount } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addTab, createWorkspace } from '@/domain/workspace';
+import { setLocale } from '@/i18n/locale';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 import App from './App.vue';
 
+enableAutoUnmount(afterEach);
+
 describe('FleurTerm app shell', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    setLocale('en-US');
   });
 
   it('opens a local terminal from the empty workspace', async () => {
@@ -124,7 +128,7 @@ describe('FleurTerm app shell', () => {
       },
     });
 
-    expect(wrapper.get('[role="tab"]').text()).toContain('Local Terminal 1');
+    expect(wrapper.get('[role="tab"]').text()).toContain('Terminal 1');
     await wrapper.get('[data-testid="split-vertical"]').trigger('click');
 
     expect(store.splitPaneById).toHaveBeenCalledWith('pane-1', 'vertical');
@@ -180,6 +184,69 @@ describe('FleurTerm app shell', () => {
     expect(wrapper.findAll('.terminal-stub')).toHaveLength(2);
     expect(wrapper.find('#terminal-panel-tab-1').attributes('aria-hidden')).toBe('true');
     expect(wrapper.find('#terminal-panel-tab-2').attributes('aria-hidden')).toBe('false');
+  });
+
+  it('reorders application tabs from a drag event', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('reorder', 'tab-2', 'tab-1', 'before');
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAll('.tab-item').map((tab) => tab.attributes('data-tab-id'))).toEqual([
+      'tab-2',
+      'tab-1',
+    ]);
+    expect(wrapper.findAll('.tab-label').map((label) => label.text())).toEqual([
+      'Terminal 2',
+      'Terminal 1',
+    ]);
+    expect(store.workspace.tabs.map((tab) => tab.id)).toEqual(['tab-2', 'tab-1']);
+  });
+
+  it('merges a dragged terminal tab into a target pane', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          TerminalPane: true,
+          WorkspacePane: {
+            name: 'WorkspacePane',
+            emits: ['dropTab'],
+            template:
+              "<button data-testid=\"drop-tab\" @click=\"$emit('dropTab', 'tab-1', 'pane-2', 'left')\">Drop</button>",
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="drop-tab"]').trigger('click');
+
+    expect(store.workspace.tabs).toHaveLength(1);
+    expect(store.workspace.tabs[0]?.root).toMatchObject({
+      kind: 'split',
+      direction: 'vertical',
+    });
+  });
+
+  it('updates the full application shell when the language changes', async () => {
+    const wrapper = mount(App);
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+
+    await wrapper.get('[data-testid="language-select"]').setValue('zh-CN');
+
+    expect(wrapper.get('[data-tab-id="app-settings"] .tab-label').text()).toBe('设置');
+    expect(wrapper.get('[data-testid="tabbar-settings"]').attributes('aria-label')).toBe(
+      '打开设置',
+    );
+    await wrapper.get('[aria-label="关闭 设置"]').trigger('click');
+    expect(wrapper.get('[data-testid="start-new-terminal"]').text()).toContain('新建终端');
   });
 });
 

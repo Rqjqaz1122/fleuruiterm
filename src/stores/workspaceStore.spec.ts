@@ -211,6 +211,42 @@ describe('workspace store', () => {
     expect(store.snapshots['session-2']).toBeDefined();
     expect(store.errorMessage).toBe('Unable to close second terminal');
   });
+
+  it('reorders existing tabs without opening or closing sessions', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1', 'tab-2', 'pane-2'));
+    const store = useStore();
+    await store.openTab();
+    await store.openTab();
+
+    store.reorderTabById('tab-2', 'tab-1', 'before');
+
+    expect(store.workspace.tabs.map((tab) => tab.id)).toEqual(['tab-2', 'tab-1']);
+    expect(client.openLocal).toHaveBeenCalledTimes(2);
+    expect(client.close).not.toHaveBeenCalled();
+  });
+
+  it('merges a source tab into a target pane without closing either session', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(
+      client,
+      ids('tab-1', 'pane-1', 'tab-2', 'pane-2', 'split-1'),
+    );
+    const store = useStore();
+    await store.openTab();
+    await store.openTab();
+
+    store.mergeTabIntoPane('tab-1', 'pane-2', 'right');
+
+    expect(store.workspace.tabs).toHaveLength(1);
+    expect(store.workspace.tabs[0]?.root).toMatchObject({
+      kind: 'split',
+      direction: 'vertical',
+    });
+    expect(client.close).not.toHaveBeenCalled();
+    expect(store.snapshots['session-1']).toBeDefined();
+    expect(store.snapshots['session-2']).toBeDefined();
+  });
 });
 
 function createClient() {

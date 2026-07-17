@@ -43,4 +43,14 @@ describe('SettingsView', () => {
     );
     expect(wrapper.find('[data-testid="close-settings"]').exists()).toBe(false);
   });
+
+  it('switches the application language between English and Chinese', async () => {
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-testid="language-select"]').setValue('zh-CN');
+
+    expect(wrapper.get('[aria-label="设置分类"]').text()).toContain('常规');
+    expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('语言');
+    expect(localStorage.getItem('fleurterm.locale')).toBe('zh-CN');
+  });
 });

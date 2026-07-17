@@ -13,26 +13,26 @@ export interface TerminalAppTab {
 export interface SettingsAppTab {
   id: typeof SETTINGS_TAB_ID;
   kind: 'settings';
-  title: 'Settings';
+  title: string;
   panelId: typeof SETTINGS_PANEL_ID;
 }
 
 export type AppTab = TerminalAppTab | SettingsAppTab;
 
-export function toTerminalAppTab(tab: TerminalTab): TerminalAppTab {
+export function toTerminalAppTab(tab: TerminalTab, title: string = tab.title): TerminalAppTab {
   return {
     id: tab.id,
     kind: 'terminal',
-    title: tab.title,
+    title,
     panelId: `terminal-panel-${tab.id}`,
   };
 }
 
-export function createSettingsAppTab(): SettingsAppTab {
+export function createSettingsAppTab(title = 'Settings'): SettingsAppTab {
   return {
     id: SETTINGS_TAB_ID,
     kind: 'settings',
-    title: 'Settings',
+    title,
     panelId: SETTINGS_PANEL_ID,
   };
 }

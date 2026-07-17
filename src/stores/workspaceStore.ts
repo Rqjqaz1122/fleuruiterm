@@ -13,9 +13,13 @@ import {
   closePane as closeWorkspacePane,
   createWorkspace,
   focusPane as focusWorkspacePane,
+  mergeTabIntoPane as mergeWorkspaceTabIntoPane,
+  reorderTab as reorderWorkspaceTab,
   splitPane,
   type IdGenerator,
+  type PaneDropPosition,
   type SplitDirection,
+  type TabDropPlacement,
   type TerminalNode,
   type WorkspaceState,
 } from '@/domain/workspace';
@@ -95,6 +99,28 @@ export function createWorkspaceStore(
 
     function activateTab(tabId: string): void {
       workspace.value = activateWorkspaceTab(workspace.value, tabId);
+    }
+
+    function reorderTabById(
+      sourceTabId: string,
+      targetTabId: string,
+      placement: TabDropPlacement,
+    ): void {
+      workspace.value = reorderWorkspaceTab(workspace.value, sourceTabId, targetTabId, placement);
+    }
+
+    function mergeTabIntoPane(
+      sourceTabId: string,
+      targetPaneId: string,
+      position: PaneDropPosition,
+    ): void {
+      workspace.value = mergeWorkspaceTabIntoPane(
+        workspace.value,
+        sourceTabId,
+        targetPaneId,
+        position,
+        generateId,
+      );
     }
 
     async function closePane(paneId: string): Promise<void> {
@@ -288,6 +314,8 @@ export function createWorkspaceStore(
       splitPaneById,
       focusPane,
       activateTab,
+      reorderTabById,
+      mergeTabIntoPane,
       closePane,
       closeTab,
       subscribeToSession,

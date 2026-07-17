@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import TerminalTabs from './TerminalTabs.vue';
 
@@ -67,5 +67,44 @@ describe('TerminalTabs', () => {
 
     expect(wrapper.emitted('close')).toEqual([['app-settings']]);
     expect(wrapper.emitted('openSettings')).toEqual([[]]);
+  });
+
+  it('reorders draggable tabs at the indicated side of the drop target', async () => {
+    const wrapper = mount(TerminalTabs, { props: { tabs, activeTabId: 'tab-1' } });
+    const dataTransfer = {
+      effectAllowed: 'none',
+      dropEffect: 'none',
+      setData: vi.fn(),
+    };
+    const tabItems = wrapper.findAll('.tab-item');
+
+    await tabItems[0]?.trigger('dragstart', { dataTransfer });
+    await tabItems[1]?.trigger('dragover', { clientX: 0, dataTransfer });
+    await tabItems[1]?.trigger('drop', { clientX: 0, dataTransfer });
+
+    expect(tabItems[0]?.attributes('draggable')).toBe('true');
+    expect(wrapper.emitted('reorder')).toEqual([['tab-1', 'app-settings', 'before']]);
+  });
+
+  it('activates a terminal tab when another terminal tab is dragged over it', async () => {
+    const terminalTabs = [
+      tabs[0],
+      {
+        id: 'tab-2',
+        kind: 'terminal' as const,
+        title: 'Local Terminal 2',
+        panelId: 'terminal-panel-tab-2',
+      },
+    ];
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs: terminalTabs, activeTabId: 'tab-1' },
+    });
+    const dataTransfer = { effectAllowed: 'none', setData: vi.fn() };
+    const tabItems = wrapper.findAll('.tab-item');
+
+    await tabItems[0]?.trigger('dragstart', { dataTransfer });
+    await tabItems[1]?.trigger('dragenter');
+
+    expect(wrapper.emitted('dragHover')).toEqual([['tab-2']]);
   });
 });

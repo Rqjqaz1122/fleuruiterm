@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/locale';
+
 defineProps<{ pending: boolean }>();
 
 defineEmits<{
@@ -12,9 +14,9 @@ defineEmits<{
     <div class="start-page-content">
       <div class="start-brand-mark" aria-hidden="true">›_</div>
       <h1 id="start-page-title">FleurTerm</h1>
-      <p class="start-brand-caption">Terminal workspace by FleurUI</p>
+      <p class="start-brand-caption">{{ t('start.caption') }}</p>
 
-      <div class="start-action-list" aria-label="Get started">
+      <div class="start-action-list" :aria-label="t('start.getStarted')">
         <div
           class="start-action start-action-static"
           data-testid="profiles-entry"
@@ -22,8 +24,8 @@ defineEmits<{
         >
           <span class="start-action-icon" aria-hidden="true">⌘</span>
           <span>
-            <strong>Profiles &amp; connections</strong>
-            <small>Configure shells and remote hosts</small>
+            <strong>{{ t('start.profiles') }}</strong>
+            <small>{{ t('start.profilesDescription') }}</small>
           </span>
         </div>
         <button
@@ -35,8 +37,8 @@ defineEmits<{
         >
           <span class="start-action-icon" aria-hidden="true">›_</span>
           <span>
-            <strong>{{ pending ? 'Opening…' : 'New terminal' }}</strong>
-            <small>Open the default local shell</small>
+            <strong>{{ pending ? t('start.opening') : t('start.newTerminal') }}</strong>
+            <small>{{ t('start.newTerminalDescription') }}</small>
           </span>
         </button>
         <div
@@ -46,8 +48,8 @@ defineEmits<{
         >
           <span class="start-action-icon" aria-hidden="true">◷</span>
           <span>
-            <strong>Recent connections</strong>
-            <small>Reopen a previous session</small>
+            <strong>{{ t('start.recent') }}</strong>
+            <small>{{ t('start.recentDescription') }}</small>
           </span>
         </div>
         <button
@@ -58,8 +60,8 @@ defineEmits<{
         >
           <span class="start-action-icon" aria-hidden="true">⚙</span>
           <span>
-            <strong>Settings</strong>
-            <small>Appearance, terminal and shortcuts</small>
+            <strong>{{ t('start.settings') }}</strong>
+            <small>{{ t('start.settingsDescription') }}</small>
           </span>
         </button>
       </div>

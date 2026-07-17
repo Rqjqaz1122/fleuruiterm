@@ -84,6 +84,10 @@ select:focus-visible {
   min-width: 150px;
   max-width: 220px;
   border-right: 1px solid var(--color-border);
+  transition:
+    opacity var(--transition-medium),
+    transform var(--transition-medium),
+    background-color var(--transition-fast);
 }
 
 .tab-item.active {
@@ -96,6 +100,48 @@ select:focus-visible {
   height: 2px;
   background: var(--color-accent);
   content: '';
+}
+
+.tab-item.dragging {
+  opacity: 0.45;
+  transform: scale(0.98);
+}
+
+.tab-item.drop-before::after,
+.tab-item.drop-after::after {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-accent);
+  box-shadow: 0 0 8px rgb(143 216 232 / 45%);
+  content: '';
+}
+
+.tab-item.drop-before::after {
+  left: 0;
+}
+
+.tab-item.drop-after::after {
+  right: 0;
+}
+
+.tab-shift-move,
+.tab-shift-enter-active,
+.tab-shift-leave-active {
+  transition: all var(--transition-medium);
+}
+
+.tab-shift-enter-from,
+.tab-shift-leave-to {
+  opacity: 0;
+  transform: translateY(-5px) scale(0.98);
+}
+
+.tab-shift-leave-active {
+  position: absolute;
 }
 
 .tab-button {
@@ -141,7 +187,8 @@ select:focus-visible {
   cursor: pointer;
   transition:
     color var(--transition-fast),
-    background-color var(--transition-fast);
+    background-color var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .icon-button svg {
@@ -153,6 +200,11 @@ select:focus-visible {
 .icon-button:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
+  transform: translateY(-1px);
+}
+
+.icon-button:active {
+  transform: scale(0.94);
 }
 
 .add-tab {
@@ -211,6 +263,19 @@ select:focus-visible {
   font-size: 12px;
 }
 
+.notice-enter-active,
+.notice-leave-active {
+  transition:
+    opacity var(--transition-medium),
+    transform var(--transition-medium);
+}
+
+.notice-enter-from,
+.notice-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
 .error-retry {
   padding: 2px 9px;
   border: 1px solid rgb(255 255 255 / 18%);
@@ -238,12 +303,21 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   visibility: hidden;
+  opacity: 0;
   pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity var(--transition-medium),
+    transform var(--transition-medium),
+    visibility 0s linear 180ms;
 }
 
 .settings-tab-panel[aria-hidden='false'] {
   visibility: visible;
+  opacity: 1;
   pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
 }
 
 .workspace {
@@ -252,23 +326,41 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   background: var(--color-canvas);
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity var(--transition-medium),
+    transform var(--transition-medium),
+    visibility 0s linear 0s;
 }
 
 .workspace.settings-covered {
   visibility: hidden;
+  opacity: 0;
   pointer-events: none;
+  transform: translateY(3px);
+  transition-delay: 0s, 0s, 180ms;
 }
 
 .workspace-tab-panel {
   position: absolute;
   inset: 0;
   visibility: hidden;
+  opacity: 0;
   pointer-events: none;
+  transform: scale(0.997);
+  transition:
+    opacity var(--transition-medium),
+    transform var(--transition-medium),
+    visibility 0s linear 180ms;
 }
 
 .workspace-tab-panel.active {
   visibility: visible;
+  opacity: 1;
   pointer-events: auto;
+  transform: scale(1);
+  transition-delay: 0s;
 }
 
 .workspace-tab-panel > * {
@@ -348,6 +440,11 @@ button.start-action {
 button.start-action:hover {
   border-color: var(--color-border);
   background: var(--color-surface-raised);
+  transform: translateY(-1px);
+}
+
+button.start-action:active {
+  transform: scale(0.99);
 }
 
 button.start-action:disabled {
@@ -429,6 +526,10 @@ button.start-action:disabled {
   min-height: 34px;
   padding: 0 10px;
   font-size: 12px;
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .settings-navigation-item:hover,
@@ -439,6 +540,7 @@ button.start-action:disabled {
 
 .settings-navigation-item.active {
   box-shadow: inset 2px 0 var(--color-accent);
+  transform: translateX(2px);
 }
 
 .settings-navigation-icon {
@@ -454,6 +556,23 @@ button.start-action:disabled {
   padding: 30px clamp(28px, 5vw, 72px) 48px;
   overflow-y: auto;
   background: var(--color-canvas);
+}
+
+.settings-section-enter-active,
+.settings-section-leave-active {
+  transition:
+    opacity var(--transition-medium),
+    transform var(--transition-medium);
+}
+
+.settings-section-enter-from {
+  opacity: 0;
+  transform: translateX(8px);
+}
+
+.settings-section-leave-to {
+  opacity: 0;
+  transform: translateX(-5px);
 }
 
 .settings-heading,
@@ -581,6 +700,7 @@ button.start-action:disabled {
 }
 
 .terminal-pane {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -588,6 +708,43 @@ button.start-action:disabled {
   overflow: hidden;
   border: 1px solid transparent;
   background: var(--color-terminal);
+}
+
+.tab-drop-overlay {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-small);
+  background: rgb(104 191 211 / 18%);
+  box-shadow: inset 0 0 18px rgb(104 191 211 / 12%);
+  pointer-events: none;
+  animation: tab-drop-pulse 900ms ease-in-out infinite alternate;
+}
+
+.tab-drop-left .tab-drop-overlay {
+  inset: 4px 50% 4px 4px;
+}
+
+.tab-drop-right .tab-drop-overlay {
+  inset: 4px 4px 4px 50%;
+}
+
+.tab-drop-top .tab-drop-overlay {
+  inset: 4px 4px 50%;
+}
+
+.tab-drop-bottom .tab-drop-overlay {
+  inset: 50% 4px 4px;
+}
+
+@keyframes tab-drop-pulse {
+  from {
+    background: rgb(104 191 211 / 12%);
+  }
+
+  to {
+    background: rgb(104 191 211 / 24%);
+  }
 }
 
 .terminal-pane.focused {
@@ -694,6 +851,8 @@ button.start-action:disabled {
   *::before,
   *::after {
     scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }

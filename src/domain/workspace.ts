@@ -1,4 +1,6 @@
 export type SplitDirection = 'horizontal' | 'vertical';
+export type TabDropPlacement = 'before' | 'after';
+export type PaneDropPosition = 'top' | 'right' | 'bottom' | 'left';
 export type IdGenerator = () => string;
 
 export interface TerminalPaneNode {
@@ -182,6 +184,68 @@ export function closeTab(workspace: WorkspaceState, tabId: string): WorkspaceSta
     activeTabId: nextTab.id,
     focusedPaneId: pane.id,
     focusedSessionId: pane.sessionId,
+  };
+}
+
+export function reorderTab(
+  workspace: WorkspaceState,
+  sourceTabId: string,
+  targetTabId: string,
+  placement: TabDropPlacement,
+): WorkspaceState {
+  const sourceTab = findTab(workspace, sourceTabId);
+  findTab(workspace, targetTabId);
+  if (sourceTabId === targetTabId) {
+    return workspace;
+  }
+  const remainingTabs = workspace.tabs.filter((tab) => tab.id !== sourceTabId);
+  const targetIndex = remainingTabs.findIndex((tab) => tab.id === targetTabId);
+  const insertionIndex = placement === 'before' ? targetIndex : targetIndex + 1;
+  const tabs = [...remainingTabs];
+  tabs.splice(insertionIndex, 0, sourceTab);
+  return { ...workspace, tabs };
+}
+
+export function mergeTabIntoPane(
+  workspace: WorkspaceState,
+  sourceTabId: string,
+  targetPaneId: string,
+  position: PaneDropPosition,
+  generateId: IdGenerator = defaultIdGenerator,
+): WorkspaceState {
+  const sourceTab = findTab(workspace, sourceTabId);
+  const targetTab = workspace.tabs.find((tab) => containsPane(tab.root, targetPaneId));
+  if (targetTab === undefined) {
+    throw new WorkspaceError(`unknown pane: ${targetPaneId}`);
+  }
+  if (sourceTab.id === targetTab.id) {
+    throw new WorkspaceError('cannot merge a tab into one of its own panes');
+  }
+
+  const targetPane = findPaneInNode(targetTab.root, targetPaneId);
+  if (targetPane === null) {
+    throw new WorkspaceError(`unknown pane: ${targetPaneId}`);
+  }
+  const sourceFirst = position === 'left' || position === 'top';
+  const replacement: TerminalSplitNode = {
+    kind: 'split',
+    id: generateId(),
+    direction: position === 'left' || position === 'right' ? 'vertical' : 'horizontal',
+    children: sourceFirst ? [sourceTab.root, targetPane] : [targetPane, sourceTab.root],
+  };
+  const tabs = workspace.tabs
+    .filter((tab) => tab.id !== sourceTab.id)
+    .map((tab) =>
+      tab.id === targetTab.id
+        ? { ...tab, root: replacePane(tab.root, targetPaneId, replacement) }
+        : tab,
+    );
+  const focusedPane = firstPane(sourceTab.root);
+  return {
+    tabs,
+    activeTabId: targetTab.id,
+    focusedPaneId: focusedPane.id,
+    focusedSessionId: focusedPane.sessionId,
   };
 }
 

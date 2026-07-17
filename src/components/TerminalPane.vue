@@ -1,30 +1,72 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
-import type { SplitDirection } from '@/domain/workspace';
+import { draggedTab, finishTabDrag } from '@/composables/tabDrag';
+import { resolvePaneDropPosition } from '@/domain/tabDrag';
+import type { PaneDropPosition, SplitDirection } from '@/domain/workspace';
+import { t } from '@/i18n/locale';
 import { SessionClient } from '@/services/sessionClient';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { TerminalAdapter } from '@/terminal/terminalAdapter';
 import { TABBY_DEFAULT_SCROLLBACK_LINES } from '@/terminal/terminalConfig';
 
 const props = defineProps<{
+  tabId: string;
   paneId: string;
   sessionId: string;
   focused: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   split: [paneId: string, direction: SplitDirection];
   close: [paneId: string];
   focus: [paneId: string];
+  dropTab: [sourceTabId: string, targetPaneId: string, position: PaneDropPosition];
 }>();
 
 const store = useWorkspaceStore();
 const terminalElement = ref<HTMLElement | null>(null);
 const terminalError = ref<string | null>(null);
+const tabDropPosition = ref<PaneDropPosition | null>(null);
 let adapter: TerminalAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
 let disposed = false;
+
+function onTerminalDragOver(event: DragEvent): void {
+  if (draggedTab.value?.kind !== 'terminal' || draggedTab.value.id === props.tabId) {
+    return;
+  }
+  event.preventDefault();
+  const terminalPane = event.currentTarget as HTMLElement;
+  tabDropPosition.value = resolvePaneDropPosition(
+    terminalPane.getBoundingClientRect(),
+    event.clientX,
+    event.clientY,
+  );
+  if (event.dataTransfer !== null) {
+    event.dataTransfer.dropEffect = 'move';
+  }
+}
+
+function onTerminalDragLeave(event: DragEvent): void {
+  const terminalPane = event.currentTarget as HTMLElement;
+  const nextTarget = event.relatedTarget;
+  if (!(nextTarget instanceof Node) || !terminalPane.contains(nextTarget)) {
+    tabDropPosition.value = null;
+  }
+}
+
+function onTerminalDrop(event: DragEvent): void {
+  const sourceTab = draggedTab.value;
+  const position = tabDropPosition.value;
+  if (sourceTab?.kind !== 'terminal' || sourceTab.id === props.tabId || position === null) {
+    return;
+  }
+  event.preventDefault();
+  emit('dropTab', sourceTab.id, props.paneId, position);
+  tabDropPosition.value = null;
+  finishTabDrag();
+}
 
 onMounted(async () => {
   const element = terminalElement.value;
@@ -85,19 +127,23 @@ onBeforeUnmount(() => {
 <template>
   <section
     class="terminal-pane"
-    :class="{ focused }"
-    :aria-label="`Terminal ${paneId}`"
+    :class="[{ focused }, tabDropPosition ? `tab-drop-${tabDropPosition}` : null]"
+    :aria-label="`${t('pane.terminal')} ${paneId}`"
     @pointerdown="$emit('focus', paneId)"
     @focusin="$emit('focus', paneId)"
+    @dragover="onTerminalDragOver"
+    @dragleave="onTerminalDragLeave"
+    @drop="onTerminalDrop"
   >
+    <div v-if="tabDropPosition" class="tab-drop-overlay" aria-hidden="true" />
     <div class="pane-toolbar">
-      <span class="pane-title">Local · {{ sessionId.slice(0, 8) }}</span>
+      <span class="pane-title">{{ t('pane.local') }} · {{ sessionId.slice(0, 8) }}</span>
       <div class="pane-actions">
         <button
           class="icon-button"
           data-testid="split-horizontal"
           type="button"
-          aria-label="Split horizontally"
+          :aria-label="t('pane.splitHorizontal')"
           @click="$emit('split', paneId, 'horizontal')"
         >
           ▭
@@ -106,7 +152,7 @@ onBeforeUnmount(() => {
           class="icon-button"
           data-testid="split-vertical"
           type="button"
-          aria-label="Split vertically"
+          :aria-label="t('pane.splitVertical')"
           @click="$emit('split', paneId, 'vertical')"
         >
           ▯
@@ -114,7 +160,7 @@ onBeforeUnmount(() => {
         <button
           class="icon-button"
           type="button"
-          aria-label="Close pane"
+          :aria-label="t('pane.close')"
           @click="$emit('close', paneId)"
         >
           ×
