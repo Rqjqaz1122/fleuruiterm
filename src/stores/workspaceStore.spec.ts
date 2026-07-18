@@ -23,6 +23,65 @@ describe('workspace store', () => {
     expect(client.openLocal).toHaveBeenCalledTimes(2);
   });
 
+  it('passes shell options to the terminal session client', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+
+    await store.openTab({
+      shell: 'bash',
+      args: ['-lc', 'pwd'],
+      cwd: '/tmp/project',
+      title: 'Project shell',
+    });
+
+    expect(client.openLocal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shell: 'bash',
+        args: ['-lc', 'pwd'],
+        cwd: '/tmp/project',
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it('responds once to a password prompt when a session has a configured password', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+
+    await store.openTab({
+      shell: 'ssh',
+      args: ['deploy@example.com'],
+      password: 'secret',
+      title: 'SSH deploy@example.com',
+    });
+    store.subscribeToSession('session-1', vi.fn());
+    await client.emit({
+      sessionId: 'session-1',
+      sequence: 1,
+      payload: Array.from(new TextEncoder().encode("deploy@example.com's password: ")),
+    });
+    await client.emit({
+      sessionId: 'session-1',
+      sequence: 2,
+      payload: Array.from(new TextEncoder().encode("deploy@example.com's password: ")),
+    });
+
+    expect(client.write).toHaveBeenCalledTimes(1);
+    expect(client.write.mock.calls[0]?.[0]).toBe('session-1');
+    expect(Array.from(client.write.mock.calls[0]?.[1] ?? [])).toEqual([
+      115,
+      101,
+      99,
+      114,
+      101,
+      116,
+      13,
+    ]);
+  });
+
   it('splits the focused pane with a newly opened session', async () => {
     const client = createClient();
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1', 'split-1', 'pane-2'));
@@ -88,7 +147,7 @@ describe('workspace store', () => {
     store.subscribeToSession('session-1', listener);
     const chunk: TerminalChunk = { sessionId: 'session-1', sequence: 1, payload: [97] };
 
-    client.emit(chunk);
+    await client.emit(chunk);
 
     expect(listener).toHaveBeenCalledWith(chunk);
   });
@@ -133,6 +192,7 @@ describe('workspace store', () => {
           shell: '/bin/zsh',
         };
       }),
+      write: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
     } satisfies WorkspaceSessionClient;
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
@@ -203,7 +263,7 @@ describe('workspace store', () => {
     expect(store.errorMessage).toBe('internal shell launch detail');
   });
 
-  it('removes sessions that closed before a partial tab-close failure', async () => {
+  it('removes a tab even when backend session close fails', async () => {
     const client = createClient();
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1', 'split-1', 'pane-2'));
     const store = useStore();
@@ -213,16 +273,13 @@ describe('workspace store', () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('Unable to close second terminal'));
 
-    await expect(store.closeTab('tab-1')).rejects.toThrow('Unable to close second terminal');
+    await store.closeTab('tab-1');
 
-    expect(store.workspace.tabs[0]?.root).toEqual({
-      kind: 'pane',
-      id: 'pane-2',
-      sessionId: 'session-2',
-    });
+    expect(store.workspace.tabs).toEqual([]);
     expect(store.snapshots['session-1']).toBeUndefined();
-    expect(store.snapshots['session-2']).toBeDefined();
-    expect(store.errorMessage).toBe('Unable to close second terminal');
+    expect(store.snapshots['session-2']).toBeUndefined();
+    expect(store.errorMessage).toBeNull();
+    expect(store.errorCode).toBeNull();
   });
 
   it('reorders existing tabs without opening or closing sessions', async () => {
@@ -278,6 +335,7 @@ function createClient() {
       };
     }),
     close: vi.fn(async () => undefined),
+    write: vi.fn(async () => undefined),
     emit(chunk: TerminalChunk): Promise<void> {
       return Promise.resolve(outputHandlers.get(chunk.sessionId)?.(chunk));
     },

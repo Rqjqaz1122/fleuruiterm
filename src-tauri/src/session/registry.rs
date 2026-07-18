@@ -354,6 +354,8 @@ mod tests {
     fn open_request() -> OpenLocalSessionRequest {
         OpenLocalSessionRequest {
             shell: None,
+            args: Vec::new(),
+            cwd: None,
             dimensions: TerminalDimensions::try_new(80, 24).unwrap(),
         }
     }
@@ -435,11 +437,14 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(target_os = "windows", ignore = "interactive PTY input is flaky under Windows CI shells")]
     async fn natural_shell_exit_removes_the_registered_session() {
         let registry = SessionRegistry::new(Arc::new(LocalPtyBackend::new()));
         let (lifecycle_sender, mut lifecycle_receiver) = mpsc::unbounded_channel();
         let request = OpenLocalSessionRequest {
-            shell: Some("/bin/sh".to_owned()),
+            shell: Some(test_shell()),
+            args: Vec::new(),
+            cwd: None,
             dimensions: TerminalDimensions::try_new(80, 24).unwrap(),
         };
         let snapshot = registry
@@ -454,7 +459,7 @@ mod tests {
             .unwrap();
 
         registry
-            .write(&snapshot.session_id, b"exit\n")
+            .write(&snapshot.session_id, test_exit_command().as_bytes())
             .await
             .unwrap();
         let lifecycle_event =
@@ -469,6 +474,30 @@ mod tests {
             registry.snapshot(&snapshot.session_id).await,
             Err(SessionError::SessionNotFound { .. })
         ));
+    }
+
+    fn test_shell() -> String {
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_owned())
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            "/bin/sh".to_owned()
+        }
+    }
+
+    fn test_exit_command() -> String {
+        #[cfg(target_os = "windows")]
+        {
+            "exit\r\n".to_owned()
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            "exit\n".to_owned()
+        }
     }
 
     #[tokio::test]

@@ -11,6 +11,7 @@ import {
   activateTab as activateWorkspaceTab,
   addTab,
   closePane as closeWorkspacePane,
+  closeTab as closeWorkspaceTab,
   createWorkspace,
   focusPane as focusWorkspacePane,
   mergeTabIntoPane as mergeWorkspaceTabIntoPane,
@@ -29,6 +30,14 @@ const DEFAULT_TERMINAL_COLUMNS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
 const MAX_OUTPUT_HISTORY_BYTES = 2 * 1024 * 1024;
 
+export interface OpenTerminalTabOptions {
+  shell?: string;
+  args?: string[];
+  cwd?: string;
+  password?: string;
+  title?: string;
+}
+
 export type WorkspaceErrorCode =
   'OPEN_TERMINAL_FAILED' | 'CLOSE_TERMINAL_FAILED' | 'CLOSE_TAB_FAILED';
 
@@ -38,6 +47,7 @@ export interface WorkspaceSessionClient {
     onOutput: (chunk: TerminalChunk) => void | Promise<void>,
     onState?: (event: SessionStateChanged) => void,
   ): Promise<SessionSnapshot>;
+  write(sessionId: string, input: Uint8Array): Promise<void>;
   close(sessionId: string): Promise<void>;
 }
 
@@ -63,18 +73,20 @@ export function createWorkspaceStore(
     const lastOutputSequence = new Map<string, number>();
     const pendingSessionStates = new Map<string, SessionState>();
     const pendingConsumptions = new Map<string, Map<number, PendingConsumption>>();
+    const passwordPromptResponses = new Map<string, string>();
 
     const activeSnapshot = computed(() => {
       const sessionId = workspace.value.focusedSessionId;
       return sessionId === null ? null : (snapshots.value[sessionId] ?? null);
     });
 
-    async function openTab(): Promise<void> {
-      const snapshot = await openSession();
+    async function openTab(options: OpenTerminalTabOptions = {}): Promise<void> {
+      const snapshot = await openSession(options);
+      const title = options.title;
       workspace.value =
         workspace.value.tabs.length === 0
-          ? createWorkspace(snapshot.sessionId, generateId)
-          : addTab(workspace.value, snapshot.sessionId, generateId);
+          ? createWorkspace(snapshot.sessionId, generateId, title)
+          : addTab(workspace.value, snapshot.sessionId, generateId, title);
     }
 
     async function splitFocused(direction: SplitDirection): Promise<void> {
@@ -150,29 +162,9 @@ export function createWorkspaceStore(
       const panes = collectPanes(tab.root);
       errorMessage.value = null;
       errorCode.value = null;
-      const closeResults = await Promise.allSettled(
-        panes.map((pane) => sessionClient.close(pane.sessionId)),
-      );
-      let nextWorkspace = workspace.value;
-      closeResults.forEach((result, index) => {
-        if (result.status !== 'fulfilled') {
-          return;
-        }
-        const pane = panes[index];
-        if (pane !== undefined) {
-          nextWorkspace = closeWorkspacePane(nextWorkspace, pane.paneId);
-          removeSessionState(pane.sessionId);
-        }
-      });
-      workspace.value = nextWorkspace;
-      const firstFailure = closeResults.find(
-        (result): result is PromiseRejectedResult => result.status === 'rejected',
-      );
-      if (firstFailure !== undefined) {
-        errorCode.value = 'CLOSE_TAB_FAILED';
-        errorMessage.value = userVisibleError(firstFailure.reason, 'Unable to close terminal tab');
-        throw firstFailure.reason;
-      }
+      workspace.value = closeWorkspaceTab(workspace.value, tabId);
+      panes.forEach((pane) => removeSessionState(pane.sessionId));
+      await Promise.allSettled(panes.map((pane) => sessionClient.close(pane.sessionId)));
     }
 
     function subscribeToSession(sessionId: string, listener: ChunkListener): () => void {
@@ -204,12 +196,18 @@ export function createWorkspaceStore(
       return (lastOutputSequence.get(sessionId) ?? 0) + 1;
     }
 
-    async function openSession(): Promise<SessionSnapshot> {
+    async function openSession(options: OpenTerminalTabOptions = {}): Promise<SessionSnapshot> {
       errorMessage.value = null;
       errorCode.value = null;
       try {
         const snapshot = await sessionClient.openLocal(
-          { columns: DEFAULT_TERMINAL_COLUMNS, rows: DEFAULT_TERMINAL_ROWS },
+          {
+            shell: options.shell,
+            args: options.args,
+            cwd: options.cwd,
+            columns: DEFAULT_TERMINAL_COLUMNS,
+            rows: DEFAULT_TERMINAL_ROWS,
+          },
           publishChunk,
           updateSessionState,
         );
@@ -218,6 +216,9 @@ export function createWorkspaceStore(
         const currentSnapshot =
           pendingState === undefined ? snapshot : { ...snapshot, state: pendingState };
         snapshots.value = { ...snapshots.value, [snapshot.sessionId]: currentSnapshot };
+        if (options.password) {
+          passwordPromptResponses.set(snapshot.sessionId, options.password);
+        }
         return currentSnapshot;
       } catch (error) {
         errorCode.value = 'OPEN_TERMINAL_FAILED';
@@ -229,6 +230,7 @@ export function createWorkspaceStore(
     async function publishChunk(chunk: TerminalChunk): Promise<void> {
       lastOutputSequence.set(chunk.sessionId, chunk.sequence);
       appendOutputHistory(chunk);
+      await respondToPasswordPrompt(chunk);
       const listeners = chunkListeners.get(chunk.sessionId);
       if (listeners !== undefined && listeners.size > 0) {
         await Promise.all(Array.from(listeners, (listener) => listener(chunk)));
@@ -270,7 +272,21 @@ export function createWorkspaceStore(
       outputHistoryBytes.delete(sessionId);
       lastOutputSequence.delete(sessionId);
       pendingSessionStates.delete(sessionId);
+      passwordPromptResponses.delete(sessionId);
       settlePendingSession(sessionId);
+    }
+
+    async function respondToPasswordPrompt(chunk: TerminalChunk): Promise<void> {
+      const password = passwordPromptResponses.get(chunk.sessionId);
+      if (!password) {
+        return;
+      }
+      const output = decodeTerminalPayload(chunk.payload).toLowerCase();
+      if (!/password(?: for [^:]+)?:\s*$/.test(output) && !output.includes("'s password:")) {
+        return;
+      }
+      passwordPromptResponses.delete(chunk.sessionId);
+      await sessionClient.write(chunk.sessionId, encodeTerminalInput(`${password}\r`));
     }
 
     function waitForTerminalConsumption(chunk: TerminalChunk): Promise<void> {
@@ -333,6 +349,17 @@ export function createWorkspaceStore(
       nextOutputSequence,
     };
   });
+}
+
+const terminalTextDecoder = new TextDecoder();
+const terminalTextEncoder = new TextEncoder();
+
+function decodeTerminalPayload(payload: number[]): string {
+  return terminalTextDecoder.decode(new Uint8Array(payload));
+}
+
+function encodeTerminalInput(input: string): Uint8Array {
+  return terminalTextEncoder.encode(input);
 }
 
 export const useWorkspaceStore = createWorkspaceStore(new SessionClient());

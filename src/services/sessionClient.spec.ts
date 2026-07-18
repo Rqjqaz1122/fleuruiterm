@@ -48,6 +48,43 @@ describe('SessionClient', () => {
     });
   });
 
+  it('passes shell arguments and working directory when opening a session', async () => {
+    const outputChannel = { onmessage: () => undefined };
+    const stateChannel = { onmessage: () => undefined };
+    const channels: MessageChannel<unknown>[] = [outputChannel, stateChannel];
+    const invoke = vi.fn(async () => ({
+      sessionId: 'session-a',
+      backendType: 'local',
+      state: 'ready',
+      shell: '/bin/zsh',
+    }));
+    const client = new SessionClient(invoke, () => {
+      const channel = channels.shift();
+      if (channel === undefined) {
+        throw new Error('test channel factory exhausted');
+      }
+      return channel;
+    });
+
+    await client.openLocal(
+      { shell: 'bash', args: ['-lc', 'pwd'], cwd: '/tmp/project', columns: 80, rows: 24 },
+      vi.fn(),
+    );
+
+    expect(invoke).toHaveBeenCalledWith(
+      'session_open_local',
+      expect.objectContaining({
+        request: {
+          shell: 'bash',
+          args: ['-lc', 'pwd'],
+          cwd: '/tmp/project',
+          columns: 80,
+          rows: 24,
+        },
+      }),
+    );
+  });
+
   it('acknowledges each delivered terminal output sequence', async () => {
     const outputChannel = { onmessage: () => undefined };
     const stateChannel = { onmessage: () => undefined };

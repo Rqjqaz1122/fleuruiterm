@@ -12,22 +12,22 @@ defineEmits<{
 <template>
   <section class="start-page" aria-labelledby="start-page-title">
     <div class="start-page-content">
-      <div class="start-brand-mark" aria-hidden="true">›_</div>
+      <div class="start-brand-mark" aria-hidden="true" />
       <h1 id="start-page-title">FleurTerm</h1>
-      <p class="start-brand-caption">{{ t('start.caption') }}</p>
 
       <div class="start-action-list" :aria-label="t('start.getStarted')">
-        <div
-          class="start-action start-action-static"
+        <button
+          class="start-action"
           data-testid="profiles-entry"
-          aria-disabled="true"
+          type="button"
+          @click="$emit('openSettings')"
         >
-          <span class="start-action-icon" aria-hidden="true">⌘</span>
+          <span class="start-action-icon" aria-hidden="true" />
           <span>
             <strong>{{ t('start.profiles') }}</strong>
             <small>{{ t('start.profilesDescription') }}</small>
           </span>
-        </div>
+        </button>
         <button
           class="start-action"
           data-testid="start-new-terminal"
@@ -35,36 +35,37 @@ defineEmits<{
           :disabled="pending"
           @click="$emit('createTerminal')"
         >
-          <span class="start-action-icon" aria-hidden="true">›_</span>
+          <span class="start-action-icon" aria-hidden="true" />
           <span>
             <strong>{{ pending ? t('start.opening') : t('start.newTerminal') }}</strong>
             <small>{{ t('start.newTerminalDescription') }}</small>
           </span>
         </button>
-        <div
-          class="start-action start-action-static"
+        <button
+          class="start-action"
           data-testid="recent-entry"
-          aria-disabled="true"
+          type="button"
+          @click="$emit('openSettings')"
         >
-          <span class="start-action-icon" aria-hidden="true">◷</span>
+          <span class="start-action-icon" aria-hidden="true" />
           <span>
             <strong>{{ t('start.recent') }}</strong>
             <small>{{ t('start.recentDescription') }}</small>
           </span>
-        </div>
+        </button>
+      </div>
+
+      <footer class="start-page-footer">
         <button
-          class="start-action"
+          class="link-button"
           data-testid="start-settings"
           type="button"
           @click="$emit('openSettings')"
         >
-          <span class="start-action-icon" aria-hidden="true">⚙</span>
-          <span>
-            <strong>{{ t('start.settings') }}</strong>
-            <small>{{ t('start.settingsDescription') }}</small>
-          </span>
+          {{ t('start.settings') }}
         </button>
-      </div>
+        <span class="version-text">v0.1.0</span>
+      </footer>
     </div>
   </section>
 </template>

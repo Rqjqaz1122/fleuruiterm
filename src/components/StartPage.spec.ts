@@ -23,8 +23,8 @@ describe('StartPage', () => {
 
     expect(wrapper.emitted('createTerminal')).toEqual([[]]);
     expect(wrapper.emitted('openSettings')).toEqual([[]]);
-    expect(wrapper.get('[data-testid="profiles-entry"]').attributes('aria-disabled')).toBe('true');
-    expect(wrapper.get('[data-testid="recent-entry"]').attributes('aria-disabled')).toBe('true');
+    expect(wrapper.get('[data-testid="profiles-entry"]').attributes('type')).toBe('button');
+    expect(wrapper.get('[data-testid="recent-entry"]').attributes('type')).toBe('button');
   });
 
   it('disables terminal creation while a terminal action is pending', () => {

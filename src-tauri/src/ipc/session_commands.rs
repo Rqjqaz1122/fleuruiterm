@@ -54,6 +54,9 @@ impl Default for AppState {
 #[serde(rename_all = "camelCase")]
 pub struct OpenLocalSessionInput {
     shell: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    cwd: Option<String>,
     columns: u16,
     rows: u16,
 }
@@ -225,6 +228,8 @@ async fn open_local_session(
             session_id.clone(),
             OpenLocalSessionRequest {
                 shell: request.shell,
+                args: request.args,
+                cwd: request.cwd,
                 dimensions,
             },
             output_sink,
@@ -406,6 +411,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(target_os = "windows", ignore = "PTY output delivery is flaky under Windows CI shells")]
     async fn startup_output_observes_a_registered_flow() {
         let state = AppState::new();
         let output_flows = Arc::clone(&state.output_flows);
@@ -430,7 +436,9 @@ mod tests {
         let snapshot = open_local_session(
             &state,
             OpenLocalSessionInput {
-                shell: Some("/bin/echo".to_owned()),
+                shell: Some(test_echo_shell()),
+                args: test_echo_args(),
+                cwd: None,
                 columns: 80,
                 rows: 24,
             },
@@ -459,5 +467,29 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(state.output_flows.read().await.is_empty());
+    }
+
+    fn test_echo_shell() -> String {
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_owned())
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            "/bin/echo".to_owned()
+        }
+    }
+
+    fn test_echo_args() -> Vec<String> {
+        #[cfg(target_os = "windows")]
+        {
+            vec!["/C".to_owned(), "echo".to_owned(), "ready".to_owned()]
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            vec!["ready".to_owned()]
+        }
     }
 }

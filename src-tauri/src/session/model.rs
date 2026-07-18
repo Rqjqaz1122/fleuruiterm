@@ -65,6 +65,8 @@ pub struct SessionStateChanged {
 #[serde(rename_all = "camelCase")]
 pub struct OpenLocalSessionRequest {
     pub shell: Option<String>,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
     pub dimensions: TerminalDimensions,
 }
 

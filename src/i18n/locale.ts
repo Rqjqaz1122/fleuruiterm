@@ -204,9 +204,19 @@ export function terminalTitle(index: number): string {
 }
 
 function readStoredLocale(): AppLocale {
-  if (typeof localStorage === 'undefined') {
-    return 'en-US';
+  if (typeof localStorage !== 'undefined') {
+    const storedLocale = localStorage.getItem(LOCALE_STORAGE_KEY);
+    if (storedLocale === 'zh-CN' || storedLocale === 'en-US') {
+      return storedLocale;
+    }
   }
-  const storedLocale = localStorage.getItem(LOCALE_STORAGE_KEY);
-  return storedLocale === 'zh-CN' ? 'zh-CN' : 'en-US';
+
+  if (typeof navigator !== 'undefined') {
+    const preferredLanguages = [navigator.language, ...navigator.languages];
+    return preferredLanguages.some((language) => language.toLowerCase().startsWith('zh'))
+      ? 'zh-CN'
+      : 'en-US';
+  }
+
+  return 'en-US';
 }

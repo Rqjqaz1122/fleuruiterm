@@ -35,6 +35,11 @@ let adapter: TerminalAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
 let disposed = false;
 
+function cssVar(styles: CSSStyleDeclaration, name: string, fallback: string): string {
+  const value = styles.getPropertyValue(name).trim();
+  return value.length > 0 ? value : fallback;
+}
+
 function onTerminalDragOver(event: DragEvent): void {
   if (draggedTab.value?.kind !== 'terminal' || draggedTab.value.id === props.tabId) {
     return;
@@ -84,6 +89,17 @@ onMounted(async () => {
     return;
   }
   const sessionClient = new SessionClient();
+  const styles = window.getComputedStyle(document.documentElement);
+  const terminalBackground = cssVar(styles, '--color-terminal', '#121212');
+  const foreground = cssVar(styles, '--color-text', '#eef3f8');
+  const muted = cssVar(styles, '--color-text-muted', 'rgb(255 255 255 / 50%)');
+  const accent = cssVar(styles, '--color-accent', '#4fadff');
+  const monoFont = cssVar(
+    styles,
+    '--font-mono',
+    'Source Code Pro, JetBrains Mono, Consolas, monospace',
+  );
+
   adapter = new TerminalAdapter({
     sessionId: props.sessionId,
     initialSequence: store.nextOutputSequence(props.sessionId),
@@ -91,19 +107,32 @@ onMounted(async () => {
     createTerminal: () =>
       new Terminal({
         cursorBlink: true,
-        fontFamily: 'JetBrains Mono, SFMono-Regular, Consolas, monospace',
+        fontFamily: monoFont,
         fontSize: 13,
+        lineHeight: 1.35,
         scrollback: TABBY_DEFAULT_SCROLLBACK_LINES,
         theme: {
-          background: '#181a1a',
-          foreground: '#d7d7d3',
-          cursor: '#8fd8e8',
-          cursorAccent: '#181a1a',
-          selectionBackground: '#8fd8e840',
-          black: '#202222',
-          brightBlack: '#666a67',
-          white: '#d7d7d3',
-          brightWhite: '#f1f2ee',
+          background: terminalBackground,
+          foreground,
+          cursor: accent,
+          cursorAccent: terminalBackground,
+          selectionBackground: 'rgba(79, 173, 255, 0.28)',
+          black: '#000000',
+          red: '#d9534f',
+          green: '#5cb85c',
+          yellow: '#f0ad4e',
+          blue: '#4fadff',
+          magenta: '#b68cff',
+          cyan: '#5bc0de',
+          white: foreground,
+          brightBlack: muted,
+          brightRed: '#ff6b66',
+          brightGreen: '#7bd87b',
+          brightYellow: '#ffd166',
+          brightBlue: '#78c3ff',
+          brightMagenta: '#d0a3ff',
+          brightCyan: '#7de3f3',
+          brightWhite: '#ffffff',
         },
       }),
     createFitAddon: () => new FitAddon(),

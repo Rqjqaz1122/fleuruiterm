@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ref } from 'vue';
 
 import { beginTabDrag, draggedTab, finishTabDrag } from '@/composables/tabDrag';
@@ -15,6 +16,7 @@ const emit = defineEmits<{
   activate: [tabId: string];
   close: [tabId: string];
   newTerminal: [];
+  openRecent: [];
   openSettings: [];
   reorder: [sourceTabId: string, targetTabId: string, placement: TabDropPlacement];
   dragHover: [tabId: string];
@@ -22,12 +24,23 @@ const emit = defineEmits<{
 
 const dropTargetTabId = ref<string | null>(null);
 const dropPlacement = ref<TabDropPlacement | null>(null);
+const tabBarElement = ref<HTMLElement | null>(null);
+const activePointerDrag = ref<{
+  tab: AppTab;
+  pointerId: number;
+  startX: number;
+  started: boolean;
+} | null>(null);
+const suppressedClickTabId = ref<string | null>(null);
+
+const POINTER_DRAG_THRESHOLD_PX = 4;
 
 function handleTabKey(event: KeyboardEvent, tabId: string): void {
   const currentIndex = props.tabs.findIndex((tab) => tab.id === tabId);
   if (currentIndex < 0 || props.tabs.length === 0) {
     return;
   }
+
   let targetIndex: number;
   switch (event.key) {
     case 'ArrowLeft':
@@ -45,6 +58,7 @@ function handleTabKey(event: KeyboardEvent, tabId: string): void {
     default:
       return;
   }
+
   const targetTab = props.tabs[targetIndex];
   if (targetTab === undefined) {
     return;
@@ -58,6 +72,7 @@ function onTabDragStart(event: DragEvent, tab: AppTab): void {
   beginTabDrag(tab);
   if (event.dataTransfer !== null) {
     event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-fleurterm-tab', tab.id);
     event.dataTransfer.setData('text/plain', tab.id);
   }
 }
@@ -112,15 +127,199 @@ function onTabDragEnd(): void {
   finishTabDrag();
 }
 
+function onTabPointerDown(event: PointerEvent, tab: AppTab): void {
+  if (event.button !== 0 || closestElement(event.target, '.tab-close') !== null) {
+    return;
+  }
+  activePointerDrag.value = {
+    tab,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    started: false,
+  };
+  const currentTarget = event.currentTarget as HTMLElement;
+  if (typeof currentTarget.setPointerCapture === 'function') {
+    currentTarget.setPointerCapture(event.pointerId);
+  }
+}
+
+function onTabPointerMove(event: PointerEvent): void {
+  const pointerDrag = activePointerDrag.value;
+  if (pointerDrag === null || pointerDrag.pointerId !== event.pointerId) {
+    return;
+  }
+  if (!pointerDrag.started) {
+    if (Math.abs(event.clientX - pointerDrag.startX) < POINTER_DRAG_THRESHOLD_PX) {
+      return;
+    }
+    pointerDrag.started = true;
+    suppressedClickTabId.value = pointerDrag.tab.id;
+    beginTabDrag(pointerDrag.tab);
+  }
+
+  event.preventDefault();
+  updatePointerDropTarget(event.clientX, pointerDrag.tab);
+}
+
+function onTabPointerUp(event: PointerEvent): void {
+  const pointerDrag = activePointerDrag.value;
+  if (pointerDrag === null || pointerDrag.pointerId !== event.pointerId) {
+    return;
+  }
+  if (pointerDrag.started) {
+    event.preventDefault();
+    const targetTabId = dropTargetTabId.value;
+    const placement = dropPlacement.value;
+    if (targetTabId !== null && targetTabId !== pointerDrag.tab.id && placement !== null) {
+      emit('reorder', pointerDrag.tab.id, targetTabId, placement);
+    }
+    window.setTimeout(() => {
+      if (suppressedClickTabId.value === pointerDrag.tab.id) {
+        suppressedClickTabId.value = null;
+      }
+    });
+  } else {
+    event.preventDefault();
+    suppressedClickTabId.value = pointerDrag.tab.id;
+    emit('activate', pointerDrag.tab.id);
+    document.getElementById(`app-tab-${pointerDrag.tab.id}`)?.focus();
+    window.setTimeout(() => {
+      if (suppressedClickTabId.value === pointerDrag.tab.id) {
+        suppressedClickTabId.value = null;
+      }
+    });
+  }
+  activePointerDrag.value = null;
+  clearTabDropIndicators();
+  finishTabDrag();
+}
+
+function onTabPointerCancel(event: PointerEvent): void {
+  const pointerDrag = activePointerDrag.value;
+  if (pointerDrag === null || pointerDrag.pointerId !== event.pointerId) {
+    return;
+  }
+  activePointerDrag.value = null;
+  suppressedClickTabId.value = null;
+  clearTabDropIndicators();
+  finishTabDrag();
+}
+
+function onTabClick(event: MouseEvent, tabId: string): void {
+  if (suppressedClickTabId.value === tabId) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  emit('activate', tabId);
+}
+
+async function onTabBarPointerDown(event: PointerEvent): Promise<void> {
+  if (event.button !== 0 || isInteractiveWindowChromeTarget(event.target)) {
+    return;
+  }
+  await getCurrentWindow().startDragging();
+}
+
+async function onTabBarDoubleClick(event: MouseEvent): Promise<void> {
+  if (event.button !== 0 || isInteractiveWindowChromeTarget(event.target)) {
+    return;
+  }
+  await toggleMaximizeWindow();
+}
+
+async function minimizeWindow(): Promise<void> {
+  await getCurrentWindow().minimize();
+}
+
+async function toggleMaximizeWindow(): Promise<void> {
+  await getCurrentWindow().toggleMaximize();
+}
+
+async function closeWindow(): Promise<void> {
+  await getCurrentWindow().close();
+}
+
 function clearTabDropIndicators(): void {
   dropTargetTabId.value = null;
   dropPlacement.value = null;
 }
+
+function updatePointerDropTarget(clientX: number, sourceTab: AppTab): void {
+  const tabItems = Array.from(
+    tabBarElement.value?.querySelectorAll<HTMLElement>('.tab-item[data-tab-id]') ?? [],
+  );
+  const candidate =
+    tabItems.find((element) => {
+      const rectangle = element.getBoundingClientRect();
+      return clientX >= rectangle.left && clientX <= rectangle.right;
+    }) ?? resolveNearestEdgeTab(tabItems, clientX);
+  const targetTabId = candidate?.dataset.tabId ?? null;
+  if (targetTabId === null || targetTabId === sourceTab.id) {
+    clearTabDropIndicators();
+    return;
+  }
+
+  const rectangle = candidate.getBoundingClientRect();
+  const targetTab = props.tabs.find((tab) => tab.id === targetTabId);
+  dropTargetTabId.value = targetTabId;
+  dropPlacement.value = clientX <= rectangle.left + rectangle.width / 2 ? 'before' : 'after';
+  if (sourceTab.kind === 'terminal' && targetTab?.kind === 'terminal') {
+    emit('dragHover', targetTab.id);
+  }
+}
+
+function resolveNearestEdgeTab(tabItems: HTMLElement[], clientX: number): HTMLElement | null {
+  const firstTab = tabItems[0];
+  const lastTab = tabItems[tabItems.length - 1];
+  if (firstTab === undefined || lastTab === undefined) {
+    return null;
+  }
+  if (clientX < firstTab.getBoundingClientRect().left) {
+    return firstTab;
+  }
+  if (clientX > lastTab.getBoundingClientRect().right) {
+    return lastTab;
+  }
+  return null;
+}
+
+function closestElement(target: EventTarget | null, selector: string): Element | null {
+  return target instanceof Element ? target.closest(selector) : null;
+}
+
+function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
+  return (
+    closestElement(
+      target,
+      '.tab-item, .tabbar-command, .window-controls, button, [role="button"], input, select, textarea, a',
+    ) !== null
+  );
+}
 </script>
 
 <template>
-  <nav class="terminal-tabs" :aria-label="t('tabs.openTabs')" data-tauri-drag-region>
-    <span class="window-control-space" aria-hidden="true" data-tauri-drag-region />
+  <nav
+    ref="tabBarElement"
+    class="terminal-tabs"
+    :aria-label="t('tabs.openTabs')"
+    @pointerdown="onTabBarPointerDown"
+    @dblclick="onTabBarDoubleClick"
+  >
+    <div class="tabbar-actions">
+      <button
+        class="tabbar-command tabbar-command-square"
+        type="button"
+        :aria-label="t('tabs.newTerminal')"
+        @click="$emit('newTerminal')"
+      >
+        +
+      </button>
+      <button class="tabbar-command" type="button" @click="$emit('openRecent')">
+        {{ t('start.recent') }}
+      </button>
+    </div>
+
     <TransitionGroup name="tab-shift" tag="div" class="tab-list" role="tablist">
       <div
         v-for="tab in tabs"
@@ -133,7 +332,11 @@ function clearTabDropIndicators(): void {
           'drop-after': dropTargetTabId === tab.id && dropPlacement === 'after',
         }"
         :data-tab-id="tab.id"
-        draggable="true"
+        draggable="false"
+        @pointerdown="onTabPointerDown($event, tab)"
+        @pointermove="onTabPointerMove"
+        @pointerup="onTabPointerUp"
+        @pointercancel="onTabPointerCancel"
         @dragstart="onTabDragStart($event, tab)"
         @dragover="onTabDragOver($event, tab.id)"
         @dragenter="onTabDragEnter(tab)"
@@ -149,11 +352,11 @@ function clearTabDropIndicators(): void {
           :tabindex="tab.id === activeTabId ? 0 : -1"
           :aria-selected="tab.id === activeTabId"
           :aria-controls="tab.panelId"
-          @click="$emit('activate', tab.id)"
+          @click="onTabClick($event, tab.id)"
           @keydown="handleTabKey($event, tab.id)"
         >
           <span v-if="tab.kind === 'terminal'" class="status-dot" aria-hidden="true" />
-          <span v-else class="settings-tab-icon" aria-hidden="true">⚙</span>
+          <span v-else class="settings-tab-icon" aria-hidden="true">S</span>
           <span class="tab-label">{{ tab.title }}</span>
         </button>
         <button
@@ -166,17 +369,10 @@ function clearTabDropIndicators(): void {
         </button>
       </div>
     </TransitionGroup>
-    <button
-      class="icon-button add-tab"
-      type="button"
-      :aria-label="t('tabs.newTerminal')"
-      @click="$emit('newTerminal')"
-    >
-      ＋
-    </button>
+
     <span class="tabbar-drag-region" aria-hidden="true" data-tauri-drag-region />
     <button
-      class="icon-button tabbar-settings"
+      class="tabbar-command tabbar-settings"
       :class="{ active: activeTabId === SETTINGS_TAB_ID }"
       data-testid="tabbar-settings"
       type="button"
@@ -184,11 +380,23 @@ function clearTabDropIndicators(): void {
       :aria-pressed="activeTabId === SETTINGS_TAB_ID"
       @click="$emit('openSettings')"
     >
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path
-          d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8.1 4.9-1.6 1.2c-.2.6-.4 1.1-.7 1.6l.3 2a1 1 0 0 1-.5 1l-1.8 1a1 1 0 0 1-1.1-.1l-1.6-1.2a9 9 0 0 1-1.8 0l-1.6 1.2a1 1 0 0 1-1.1.1l-1.8-1a1 1 0 0 1-.5-1l.3-2a8 8 0 0 1-.8-1.6l-1.5-1.2a1 1 0 0 1-.4-1.1v-2a1 1 0 0 1 .4-1l1.5-1.3c.2-.6.5-1.1.8-1.6l-.3-2a1 1 0 0 1 .5-1l1.8-1a1 1 0 0 1 1.1.1l1.6 1.2a9 9 0 0 1 1.8 0l1.6-1.2a1 1 0 0 1 1.1-.1l1.8 1a1 1 0 0 1 .5 1l-.3 2c.3.5.5 1 .7 1.6l1.6 1.2a1 1 0 0 1 .4 1v2a1 1 0 0 1-.4 1.1Z"
-        />
-      </svg>
+      {{ t('tabs.settings') }}
     </button>
+    <div class="window-controls">
+      <button class="window-button" type="button" aria-label="Minimize window" @click="minimizeWindow">
+        <span class="window-glyph minimize" />
+      </button>
+      <button
+        class="window-button"
+        type="button"
+        aria-label="Maximize window"
+        @click="toggleMaximizeWindow"
+      >
+        <span class="window-glyph maximize" />
+      </button>
+      <button class="window-button danger" type="button" aria-label="Close window" @click="closeWindow">
+        <span class="window-glyph close" />
+      </button>
+    </div>
   </nav>
 </template>

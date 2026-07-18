@@ -19,6 +19,8 @@ export interface MessageChannel<T> {
 
 export interface OpenLocalSessionOptions {
   shell?: string;
+  args?: string[];
+  cwd?: string;
   columns: number;
   rows: number;
 }
@@ -74,6 +76,8 @@ export class SessionClient {
     const result = await this.invokeSafely(SESSION_COMMANDS.openLocal, {
       request: {
         shell: options.shell,
+        args: options.args ?? [],
+        cwd: options.cwd,
         columns: options.columns,
         rows: options.rows,
       },

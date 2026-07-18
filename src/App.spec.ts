@@ -166,6 +166,160 @@ describe('FleurTerm app shell', () => {
     expect(wrapper.get('[role="alert"]').text()).toContain('Unable to start shell');
   });
 
+  it('opens an SSH terminal from connections settings', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[data-section="connections"]').trigger('click');
+    await wrapper.get('[data-testid="add-connection"]').trigger('click');
+    await wrapper.get('[data-testid="connection-name"]').setValue('Server');
+    await wrapper.get('[data-testid="connection-host"]').setValue('server.example.com');
+    await wrapper.get('[data-testid="connection-user"]').setValue('deploy');
+    await wrapper.get('[data-testid="connection-port"]').setValue(2222);
+    await wrapper.get('[data-testid="save-connection"]').trigger('click');
+    await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
+
+    expect(store.openTab).toHaveBeenCalledWith({
+      shell: 'ssh',
+      args: ['-p', '2222', 'deploy@server.example.com'],
+      title: 'SSH deploy@server.example.com',
+    });
+  });
+
+  it('opens a local connection with the configured shell and working directory', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[data-section="connections"]').trigger('click');
+    await wrapper.get('[data-testid="add-connection"]').trigger('click');
+    await wrapper.get('[data-testid="connection-name"]').setValue('Project');
+    await wrapper.get('[data-testid="connection-method"]').setValue('local');
+    await wrapper.findAll('.connection-field input').at(3)?.setValue('D:\\IT\\Projects\\fleuruiterm');
+    await wrapper.findAll('.connection-field input').at(4)?.setValue('wsl.exe');
+    await wrapper.get('[data-testid="save-connection"]').trigger('click');
+    await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
+
+    expect(store.openTab).toHaveBeenCalledWith({
+      shell: 'wsl.exe',
+      cwd: 'D:\\IT\\Projects\\fleuruiterm',
+      title: 'Project',
+    });
+  });
+
+  it('opens a Telnet connection with telnet host and port arguments', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[data-section="connections"]').trigger('click');
+    await wrapper.get('[data-testid="add-connection"]').trigger('click');
+    await wrapper.get('[data-testid="connection-name"]').setValue('Router');
+    await wrapper.get('[data-testid="connection-method"]').setValue('telnet');
+    await wrapper.get('[data-testid="connection-host"]').setValue('10.0.0.1');
+    await wrapper.get('[data-testid="connection-user"]').setValue('admin');
+    await wrapper.get('[data-testid="connection-port"]').setValue(2323);
+    await wrapper.get('[data-testid="save-connection"]').trigger('click');
+    await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
+
+    expect(store.openTab).toHaveBeenCalledWith({
+      shell: 'telnet',
+      args: ['10.0.0.1', '2323'],
+      title: 'Telnet 10.0.0.1',
+    });
+  });
+
+  it('passes SSH forwarded port rules to the ssh command', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[data-section="connections"]').trigger('click');
+    await wrapper.get('[data-testid="add-connection"]').trigger('click');
+    await wrapper.get('[data-testid="connection-name"]').setValue('Tunnel');
+    await wrapper.get('[data-testid="connection-host"]').setValue('server.example.com');
+    await wrapper.get('[data-testid="connection-user"]').setValue('deploy');
+    await wrapper.findAll('.connection-editor-tab').find((tab) => tab.text() === 'Ports')?.trigger('click');
+    await wrapper.get('textarea').setValue('8080:localhost:80\n-R 9000:localhost:9000');
+    await wrapper.get('[data-testid="save-connection"]').trigger('click');
+    await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
+
+    expect(store.openTab).toHaveBeenCalledWith({
+      shell: 'ssh',
+      args: [
+        '-p',
+        '22',
+        '-L',
+        '8080:localhost:80',
+        '-R',
+        '9000:localhost:9000',
+        'deploy@server.example.com',
+      ],
+      title: 'SSH deploy@server.example.com',
+    });
+  });
+
+  it('opens a password SSH connection with password prompt handling enabled', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[data-section="connections"]').trigger('click');
+    await wrapper.get('[data-testid="add-connection"]').trigger('click');
+    await wrapper.get('[data-testid="connection-name"]').setValue('Password Host');
+    await wrapper.get('[data-testid="connection-host"]').setValue('server.example.com');
+    await wrapper.get('[data-testid="connection-user"]').setValue('deploy');
+    await wrapper.findAll('.connection-auth-option').at(1)?.trigger('click');
+    await wrapper.find('.connection-auth-card .connection-dialog-secondary-button').trigger('click');
+    await wrapper.get('input[type="password"]').setValue('secret');
+    await wrapper.find('.password-dialog-actions .connection-dialog-primary-button').trigger('click');
+    await wrapper.get('[data-testid="save-connection"]').trigger('click');
+    await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
+
+    expect(store.openTab).toHaveBeenCalledWith({
+      shell: 'ssh',
+      args: [
+        '-p',
+        '22',
+        '-o',
+        'PreferredAuthentications=password,keyboard-interactive',
+        '-o',
+        'PubkeyAuthentication=no',
+        'deploy@server.example.com',
+      ],
+      password: 'secret',
+      title: 'SSH deploy@server.example.com',
+    });
+  });
+
+  it('does not offer unsupported serial connections in the settings dialog', async () => {
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[data-section="connections"]').trigger('click');
+    await wrapper.get('[data-testid="add-connection"]').trigger('click');
+
+    expect(wrapper.get('[data-testid="connection-method"]').text()).not.toContain('Serial');
+  });
+
   it('keeps inactive terminal tabs mounted for bounded background consumption', () => {
     const store = useWorkspaceStore();
     const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
@@ -239,7 +393,7 @@ describe('FleurTerm app shell', () => {
     const wrapper = mount(App);
     await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
 
-    await wrapper.get('[data-testid="language-select"]').setValue('zh-CN');
+    await wrapper.get('.settings-locale-toggle button:nth-child(2)').trigger('click');
 
     expect(wrapper.get('[data-tab-id="app-settings"] .tab-label').text()).toBe('设置');
     expect(wrapper.get('[data-testid="tabbar-settings"]').attributes('aria-label')).toBe(

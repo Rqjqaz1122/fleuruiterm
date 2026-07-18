@@ -3,6 +3,7 @@ import { storeToRefs } from 'pinia';
 import { computed, ref, watch } from 'vue';
 
 import SettingsView from '@/components/SettingsView.vue';
+import type { WorkbenchConnection } from '@/components/SettingsView.vue';
 import StartPage from '@/components/StartPage.vue';
 import StatusBar from '@/components/StatusBar.vue';
 import TerminalTabs from '@/components/TerminalTabs.vue';
@@ -87,6 +88,83 @@ async function openTerminal(): Promise<void> {
     await store.openTab();
     activeAppTabId.value = store.workspace.activeTabId;
     lastActiveTerminalTabId.value = store.workspace.activeTabId;
+  });
+}
+
+async function openWorkbenchConnection(connection: WorkbenchConnection): Promise<void> {
+  await runAction(async () => {
+    const openOptions = buildConnectionOpenOptions(connection);
+    await store.openTab(openOptions);
+    activeAppTabId.value = store.workspace.activeTabId;
+    lastActiveTerminalTabId.value = store.workspace.activeTabId;
+    settingsTabOpen.value = false;
+  });
+}
+
+function buildConnectionOpenOptions(connection: WorkbenchConnection): {
+  shell?: string;
+  args?: string[];
+  cwd?: string;
+  title?: string;
+} {
+  if (connection.method === 'local') {
+    return {
+      shell: connection.shell || undefined,
+      cwd: connection.cwd || undefined,
+      title: connection.name,
+    };
+  }
+
+  if (connection.method === 'telnet') {
+    return {
+      shell: 'telnet',
+      args: [connection.host, String(connection.port || 23)],
+      title: `Telnet ${connection.host}`,
+    };
+  }
+
+  if (connection.method === 'serial') {
+    throw new Error('Serial connections are not supported by the current terminal backend yet');
+  }
+
+  const target = `${connection.user}@${connection.host}`;
+  return {
+    shell: 'ssh',
+    args: [
+      '-p',
+      String(connection.port || 22),
+      ...(connection.authMethod === 'password'
+        ? ['-o', 'PreferredAuthentications=password,keyboard-interactive', '-o', 'PubkeyAuthentication=no']
+        : []),
+      ...buildSshForwardArgs(connection.forwardedPorts),
+      ...(connection.authMethod === 'publicKey' && connection.privateKeys[0]
+        ? ['-i', connection.privateKeys[0]]
+        : []),
+      target,
+      ...(connection.loginScripts.trim() ? [connection.loginScripts.trim()] : []),
+    ],
+    password: connection.password || undefined,
+    title: `SSH ${target}`,
+  };
+}
+
+function buildSshForwardArgs(forwardedPorts: string[]): string[] {
+  return forwardedPorts.flatMap((rule) => {
+    const normalized = rule.trim();
+    if (!normalized) {
+      return [];
+    }
+    if (normalized.startsWith('-L ') || normalized.startsWith('-R ') || normalized.startsWith('-D ')) {
+      const [flag, ...rest] = normalized.split(/\s+/);
+      const value = rest.join(' ');
+      return value ? [flag, value] : [];
+    }
+    if (normalized.startsWith('L ') || normalized.startsWith('R ') || normalized.startsWith('D ')) {
+      const [kind, ...rest] = normalized.split(/\s+/);
+      const value = rest.join(' ');
+      return value ? [`-${kind}`, value] : [];
+    }
+    return ['-L', normalized];
   });
 }
 
@@ -193,8 +271,12 @@ async function runAction(action: () => Promise<void>): Promise<void> {
   try {
     await action();
     retryAction.value = null;
-  } catch {
+  } catch (error) {
     // Store actions publish a sanitized, user-visible error message.
+    if (errorMessage.value === null) {
+      errorCode.value = null;
+      errorMessage.value = error instanceof Error ? error.message : 'Unable to open terminal';
+    }
     retryAction.value = action;
   } finally {
     actionPending.value = false;
@@ -210,6 +292,7 @@ async function runAction(action: () => Promise<void>): Promise<void> {
       @activate="activateAppTab"
       @close="closeAppTab"
       @new-terminal="openTerminal"
+      @open-recent="openSettings"
       @open-settings="openSettings"
       @reorder="reorderApplicationTabs"
       @drag-hover="activateAppTab"
@@ -241,7 +324,7 @@ async function runAction(action: () => Promise<void>): Promise<void> {
         aria-labelledby="app-tab-app-settings"
         :inert="!settingsActive"
       >
-        <SettingsView />
+        <SettingsView @open-connection="openWorkbenchConnection" />
       </section>
       <section
         class="workspace"

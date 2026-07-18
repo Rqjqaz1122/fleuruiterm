@@ -43,11 +43,12 @@ const defaultIdGenerator: IdGenerator = () => crypto.randomUUID();
 export function createWorkspace(
   sessionId: string,
   generateId: IdGenerator = defaultIdGenerator,
+  title = 'Local Terminal 1',
 ): WorkspaceState {
   const tabId = generateId();
   const pane = createPane(sessionId, generateId);
   return {
-    tabs: [{ id: tabId, title: 'Local Terminal 1', root: pane }],
+    tabs: [{ id: tabId, title, root: pane }],
     activeTabId: tabId,
     focusedPaneId: pane.id,
     focusedSessionId: pane.sessionId,
@@ -58,12 +59,13 @@ export function addTab(
   workspace: WorkspaceState,
   sessionId: string,
   generateId: IdGenerator = defaultIdGenerator,
+  title = `Local Terminal ${workspace.tabs.length + 1}`,
 ): WorkspaceState {
   const tabId = generateId();
   const pane = createPane(sessionId, generateId);
   const tab: TerminalTab = {
     id: tabId,
-    title: `Local Terminal ${workspace.tabs.length + 1}`,
+    title,
     root: pane,
   };
   return {
