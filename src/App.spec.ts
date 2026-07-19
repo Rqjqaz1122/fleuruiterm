@@ -201,8 +201,12 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-section="connections"]').trigger('click');
     await wrapper.get('[data-testid="add-connection"]').trigger('click');
     await wrapper.get('[data-testid="connection-name"]').setValue('Project');
-    await wrapper.get('[data-testid="connection-method"]').setValue('local');
-    await wrapper.findAll('.connection-field input').at(3)?.setValue('D:\\IT\\Projects\\fleuruiterm');
+    await wrapper.get('[data-testid="connection-method"]').trigger('click');
+    await wrapper.get('[data-value="local"]').trigger('click');
+    await wrapper
+      .findAll('.connection-field input')
+      .at(3)
+      ?.setValue('D:\\IT\\Projects\\fleuruiterm');
     await wrapper.findAll('.connection-field input').at(4)?.setValue('wsl.exe');
     await wrapper.get('[data-testid="save-connection"]').trigger('click');
     await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
@@ -225,7 +229,8 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-section="connections"]').trigger('click');
     await wrapper.get('[data-testid="add-connection"]').trigger('click');
     await wrapper.get('[data-testid="connection-name"]').setValue('Router');
-    await wrapper.get('[data-testid="connection-method"]').setValue('telnet');
+    await wrapper.get('[data-testid="connection-method"]').trigger('click');
+    await wrapper.get('[data-value="telnet"]').trigger('click');
     await wrapper.get('[data-testid="connection-host"]').setValue('10.0.0.1');
     await wrapper.get('[data-testid="connection-user"]').setValue('admin');
     await wrapper.get('[data-testid="connection-port"]').setValue(2323);
@@ -252,7 +257,10 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-testid="connection-name"]').setValue('Tunnel');
     await wrapper.get('[data-testid="connection-host"]').setValue('server.example.com');
     await wrapper.get('[data-testid="connection-user"]').setValue('deploy');
-    await wrapper.findAll('.connection-editor-tab').find((tab) => tab.text() === 'Ports')?.trigger('click');
+    await wrapper
+      .findAll('.connection-editor-tab')
+      .find((tab) => tab.text() === 'Ports')
+      ?.trigger('click');
     await wrapper.get('textarea').setValue('8080:localhost:80\n-R 9000:localhost:9000');
     await wrapper.get('[data-testid="save-connection"]').trigger('click');
     await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
@@ -286,9 +294,13 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-testid="connection-host"]').setValue('server.example.com');
     await wrapper.get('[data-testid="connection-user"]').setValue('deploy');
     await wrapper.findAll('.connection-auth-option').at(1)?.trigger('click');
-    await wrapper.find('.connection-auth-card .connection-dialog-secondary-button').trigger('click');
+    await wrapper
+      .find('.connection-auth-card .connection-dialog-secondary-button')
+      .trigger('click');
     await wrapper.get('input[type="password"]').setValue('secret');
-    await wrapper.find('.password-dialog-actions .connection-dialog-primary-button').trigger('click');
+    await wrapper
+      .find('.password-dialog-actions .connection-dialog-primary-button')
+      .trigger('click');
     await wrapper.get('[data-testid="save-connection"]').trigger('click');
     await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
 

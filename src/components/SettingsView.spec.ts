@@ -18,9 +18,28 @@ describe('SettingsView', () => {
     const wrapper = mount(SettingsView);
 
     expect(wrapper.get('.settings-nav').text()).toContain('General');
-    expect(wrapper.get('.settings-nav').text()).toContain('Connections');
     expect(wrapper.get('.settings-nav').text()).toContain('Appearance');
+    expect(wrapper.get('.settings-nav').text()).toContain('Terminal');
+    expect(wrapper.get('.settings-nav').text()).toContain('Profiles & connections');
+    expect(wrapper.get('.settings-nav').text()).toContain('Hotkeys');
+    expect(wrapper.get('.settings-nav').text()).toContain('AI');
     expect(wrapper.get('.settings-nav').text()).toContain('Advanced');
+  });
+
+  it('shows document-defined settings pages as static presentations', async () => {
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+    expect(wrapper.get('[data-testid="settings-scrollback"]').text()).toBe('25000 lines');
+    expect(wrapper.get('[data-testid="settings-scroll-on-input"]').exists()).toBe(true);
+
+    await wrapper.get('[data-section="hotkeys"]').trigger('click');
+    expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('New terminal');
+    expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Ctrl T');
+
+    await wrapper.get('[data-section="ai"]').trigger('click');
+    expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Not configured');
+    expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Preview only');
   });
 
   it('switches the application language from the general section', async () => {
@@ -39,6 +58,10 @@ describe('SettingsView', () => {
 
     await wrapper.get('[data-section="connections"]').trigger('click');
     await wrapper.get('[data-testid="add-connection"]').trigger('click');
+    expect(wrapper.get('.app-dialog-layer').attributes('style')).toContain(
+      '--app-dialog-width: 680px',
+    );
+    expect(wrapper.get('.connection-dialog-form').exists()).toBe(true);
     await wrapper.get('[data-testid="connection-name"]').setValue('Production');
     await wrapper.get('[data-testid="connection-host"]').setValue('prod.example.com');
     await wrapper.get('[data-testid="connection-user"]').setValue('deploy');

@@ -649,8 +649,7 @@ button.start-action:disabled {
 
 .settings-pane {
   background:
-    radial-gradient(circle at top left, rgb(79 173 255 / 8%), transparent 34%),
-    var(--color-canvas);
+    radial-gradient(circle at top left, rgb(79 173 255 / 8%), transparent 34%), var(--color-canvas);
 }
 
 .settings-sidebar-copy {
@@ -1257,11 +1256,19 @@ button.start-action:disabled {
   align-items: center;
 }
 
-.terminal-surface {
+.terminal-surface-frame {
+  position: relative;
   min-width: 0;
   min-height: 0;
   flex: 1 1 0;
-  padding: 12px 14px 14px;
+  background: var(--color-terminal);
+  overflow: hidden;
+}
+
+.terminal-surface {
+  width: 100%;
+  height: 100%;
+  padding: 12px 20px 14px 14px;
   background: var(--color-terminal);
   overflow: hidden;
 }
@@ -1282,6 +1289,45 @@ button.start-action:disabled {
 
 .terminal-surface .xterm-viewport::-webkit-scrollbar {
   display: none;
+}
+
+.terminal-scrollbar {
+  position: absolute;
+  top: 12px;
+  right: 5px;
+  bottom: 14px;
+  z-index: 4;
+  width: 10px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.terminal-scrollbar.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.terminal-scrollbar::before {
+  position: absolute;
+  inset: 0 4px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 6%);
+  content: '';
+}
+
+.terminal-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  left: 1px;
+  min-height: 34px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 34%);
+  cursor: default;
+}
+
+.terminal-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 48%);
 }
 
 .pane-error {
@@ -1400,7 +1446,9 @@ button.start-action:disabled {
   padding: 0 14px;
   border-radius: 10px;
   color: var(--theme-fg-muted);
-  transition: 0.16s ease background, 0.16s ease color;
+  transition:
+    0.16s ease background,
+    0.16s ease color;
 }
 
 .settings-tab .settings-nav-button:hover,
@@ -1696,7 +1744,9 @@ button.start-action:disabled {
   opacity: 0;
   transform: translate(6px);
   pointer-events: none;
-  transition: 0.16s ease opacity, 0.16s ease transform;
+  transition:
+    0.16s ease opacity,
+    0.16s ease transform;
 }
 
 .settings-tab .settings-connection-card:hover .settings-connection-actions,
@@ -1769,6 +1819,70 @@ button.start-action:disabled {
   color: var(--theme-fg);
   font-size: 12px;
   font-weight: 600;
+}
+
+.settings-tab .settings-readonly-toggle {
+  position: relative;
+  display: inline-flex;
+  width: 38px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--theme-border-soft) 78%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-surface-hover) 34%, transparent);
+}
+
+.settings-tab .settings-readonly-toggle span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--theme-fg-subtle);
+}
+
+.settings-tab .settings-readonly-toggle.is-active {
+  background: color-mix(in srgb, var(--theme-primary) 28%, var(--theme-surface-hover));
+}
+
+.settings-tab .settings-readonly-toggle.is-active span {
+  background: var(--theme-fg);
+  transform: translate(16px);
+}
+
+.settings-tab .settings-shortcut-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--theme-border-soft) 44%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--theme-surface-card) 56%, transparent);
+}
+
+.settings-tab .settings-shortcut-row {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border-soft) 30%, transparent);
+  color: var(--theme-fg-less);
+  font-size: 13px;
+}
+
+.settings-tab .settings-shortcut-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-tab .settings-shortcut-row kbd {
+  min-width: 74px;
+  padding: 5px 8px;
+  border: 1px solid var(--theme-border-soft);
+  border-radius: 5px;
+  background: var(--terminal-bg);
+  color: var(--theme-fg);
+  font: 600 11px var(--font-mono);
+  text-align: center;
 }
 
 .settings-tab .settings-terminal-colors-card,
@@ -1930,35 +2044,77 @@ button.start-action:disabled {
   gap: 10px;
 }
 
-.connection-dialog-layer,
-.password-dialog-layer {
+.app-dialog-layer {
   position: fixed;
   inset: 0;
   z-index: 70;
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 40px 24px 24px;
-  background: #000000ad;
-  backdrop-filter: blur(calc(var(--app-overlay-blur) + 4px));
+  padding: 24px;
+  background: rgb(0 0 0 / 72%);
+  backdrop-filter: blur(10px);
 }
 
-.connection-dialog {
+.app-dialog-panel {
+  --dialog-bg: var(--color-terminal);
+  --dialog-header: color-mix(in srgb, var(--color-surface) 82%, var(--color-terminal));
+  --dialog-surface: color-mix(in srgb, var(--color-terminal) 78%, var(--color-surface));
+  --dialog-surface-hover: color-mix(in srgb, var(--color-surface-hover) 40%, var(--color-terminal));
+  --dialog-border: rgb(255 255 255 / 8%);
+  --dialog-border-strong: rgb(255 255 255 / 14%);
+
   position: relative;
-  width: min(720px, calc(100vw - 48px));
-  max-height: calc(100vh - 72px);
+  width: min(var(--app-dialog-width), calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--theme-border-soft);
-  border-radius: 14px;
-  background: var(--content-bg-solid);
-  box-shadow: 0 28px 80px #00000070, inset 0 1px 0 var(--theme-panel-outline);
-  animation: connection-dialog-drop 0.18s ease-out;
+  border: 1px solid var(--dialog-border-strong);
+  border-radius: 6px;
+  background: var(--dialog-bg);
+  box-shadow:
+    0 18px 48px rgb(0 0 0 / 64%),
+    inset 0 0 0 1px rgb(255 255 255 / 3%);
+}
+
+.app-dialog-enter-active,
+.app-dialog-leave-active {
+  transition:
+    opacity 180ms ease,
+    backdrop-filter 180ms ease;
+}
+
+.app-dialog-enter-active .app-dialog-panel,
+.app-dialog-leave-active .app-dialog-panel {
+  transition:
+    opacity 180ms ease,
+    transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.app-dialog-enter-from {
+  opacity: 0;
+  backdrop-filter: blur(0);
+}
+
+.app-dialog-enter-from .app-dialog-panel {
+  opacity: 0;
+  transform: translate3d(0, -24px, 0) scale(0.985);
+}
+
+.app-dialog-leave-to {
+  opacity: 0;
+  backdrop-filter: blur(0);
+}
+
+.app-dialog-leave-to .app-dialog-panel {
+  opacity: 0;
+  transform: translate3d(0, -24px, 0) scale(0.985);
 }
 
 .connection-dialog-form {
-  width: min(900px, calc(100vw - 56px));
+  width: min(var(--app-dialog-width), calc(100vw - 48px));
+  max-height: min(620px, calc(100vh - 96px));
 }
 
 .connection-dialog-header {
@@ -1966,8 +2122,9 @@ button.start-action:disabled {
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--theme-border-soft);
+  padding: 12px 12px 10px 14px;
+  border-bottom: 1px solid var(--dialog-border);
+  background: var(--dialog-header);
 }
 
 .connection-dialog-copy {
@@ -1977,7 +2134,7 @@ button.start-action:disabled {
 }
 
 .connection-dialog-eyebrow {
-  color: var(--theme-fg-subtle);
+  color: var(--theme-fg);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -1986,25 +2143,37 @@ button.start-action:disabled {
 
 .connection-dialog-copy p {
   margin: 0;
-  color: var(--theme-fg-muted);
+  color: var(--theme-fg-subtle);
   font-size: 12px;
   line-height: 1.55;
 }
 
 .connection-dialog-close {
   position: relative;
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--theme-border-soft);
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 4px;
   background: transparent;
+  color: var(--theme-fg-muted);
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.connection-dialog-close:hover {
+  color: var(--theme-fg);
+  border-color: var(--dialog-border);
+  background: var(--dialog-surface-hover);
 }
 
 .connection-dialog-close span::before,
 .connection-dialog-close span::after {
   position: absolute;
-  top: 16px;
-  left: 10px;
+  top: 14px;
+  left: 9px;
   width: 12px;
   height: 1px;
   background: currentcolor;
@@ -2021,9 +2190,9 @@ button.start-action:disabled {
 
 .connection-dialog-form-body {
   min-height: 0;
-  padding: 16px;
+  padding: 12px;
   overflow-y: auto;
-  background: transparent;
+  background: var(--dialog-bg);
   scrollbar-width: none;
 }
 
@@ -2033,8 +2202,8 @@ button.start-action:disabled {
 
 .connection-editor-shell {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
 }
 
@@ -2043,17 +2212,17 @@ button.start-action:disabled {
 .connection-editor-stack {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
 }
 
 .connection-editor-preview {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid var(--theme-border-soft);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--theme-surface-card) 72%, transparent);
+  padding: 12px;
+  border: 1px solid var(--dialog-border);
+  border-radius: 4px;
+  background: var(--dialog-surface);
 }
 
 .connection-editor-preview strong {
@@ -2079,10 +2248,10 @@ button.start-action:disabled {
   height: 20px;
   align-items: center;
   padding: 0 8px;
-  border: 1px solid color-mix(in srgb, var(--theme-border-soft) 76%, transparent);
+  border: 1px solid var(--dialog-border);
   border-radius: 4px;
-  background: color-mix(in srgb, var(--theme-surface-hover) 40%, transparent);
-  color: var(--theme-fg-muted);
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-terminal));
+  color: color-mix(in srgb, var(--color-accent) 70%, var(--theme-fg-muted));
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -2091,22 +2260,23 @@ button.start-action:disabled {
 
 .connection-editor-main {
   min-width: 0;
-  border: 1px solid var(--theme-border-soft);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--theme-surface-card) 72%, transparent);
+  border: 1px solid var(--dialog-border);
+  border-radius: 4px;
+  background: var(--dialog-surface);
   overflow: visible;
 }
 
 .connection-editor-tabs {
   display: flex;
   align-items: center;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--theme-border-soft);
+  padding: 0 10px;
+  border-bottom: 1px solid var(--dialog-border);
+  background: var(--dialog-header);
 }
 
 .connection-editor-tab {
-  height: 38px;
-  padding: 0 14px;
+  height: 34px;
+  padding: 0 12px;
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
@@ -2116,18 +2286,28 @@ button.start-action:disabled {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.connection-editor-tab:hover {
+  color: var(--theme-fg);
+  background: color-mix(in srgb, var(--color-surface-hover) 28%, transparent);
 }
 
 .connection-editor-tab.is-active {
   color: var(--theme-fg);
-  border-bottom-color: color-mix(in srgb, var(--theme-primary) 72%, var(--theme-fg));
+  border-bottom-color: var(--color-accent);
+  background: rgb(255 255 255 / 2.5%);
 }
 
 .connection-editor-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
 }
 
 .connection-form {
@@ -2156,14 +2336,116 @@ button.start-action:disabled {
   display: flex;
   min-height: 36px;
   align-items: center;
-  border: 1px solid var(--theme-border-soft);
-  border-radius: 7px;
-  background: var(--theme-surface-card);
+  border: 1px solid var(--dialog-border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-canvas) 72%, var(--color-terminal));
+}
+
+.app-select {
+  position: relative;
+  width: 100%;
+}
+
+.app-select-button {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 38px 0 12px;
+  border: 1px solid var(--dialog-border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-canvas) 72%, var(--color-terminal));
+  color: var(--theme-fg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.app-select-button:hover,
+.app-select-button[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--color-accent) 34%, var(--dialog-border));
+  background: var(--dialog-surface-hover);
+}
+
+.app-select-arrow {
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -6px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  color: var(--theme-fg-muted);
+  transform: rotate(45deg);
+  transition: transform 140ms ease;
+  pointer-events: none;
+}
+
+.app-select-button[aria-expanded='true'] .app-select-arrow {
+  transform: translateY(3px) rotate(225deg);
+}
+
+.app-select-menu {
+  position: absolute;
+  z-index: 90;
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--dialog-border-strong);
+  border-radius: 4px;
+  background: var(--color-terminal);
+  box-shadow: 0 14px 32px rgb(0 0 0 / 64%);
+}
+
+.app-select-option {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--dialog-border);
+  background: transparent;
+  color: var(--theme-fg-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-select-option:last-child {
+  border-bottom: 0;
+}
+
+.app-select-option:hover,
+.app-select-option.is-selected {
+  color: var(--theme-fg);
+  background: color-mix(in srgb, var(--color-accent) 18%, var(--color-terminal));
+}
+
+.app-select-menu-enter-active,
+.app-select-menu-leave-active {
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.app-select-menu-enter-from,
+.app-select-menu-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 .connection-field input,
-.connection-field textarea,
-.connection-field select {
+.connection-field textarea {
   width: 100%;
   padding: 10px 12px;
   border: 0;
@@ -2179,25 +2461,6 @@ button.start-action:disabled {
   resize: vertical;
 }
 
-.connection-field select {
-  appearance: none;
-  cursor: pointer;
-}
-
-.connection-field-select-arrow {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  margin-top: -5px;
-  border-right: 1.5px solid currentcolor;
-  border-bottom: 1.5px solid currentcolor;
-  color: var(--theme-fg-subtle);
-  transform: rotate(45deg);
-  pointer-events: none;
-}
-
 .connection-auth-options {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
@@ -2210,23 +2473,28 @@ button.start-action:disabled {
 .connection-dialog-danger-button {
   min-height: 34px;
   padding: 0 12px;
-  border: 1px solid var(--theme-border-soft);
-  border-radius: 8px;
+  border: 1px solid var(--dialog-border);
+  border-radius: 4px;
   font-size: 12px;
   font-weight: 600;
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
 }
 
 .connection-auth-option {
   width: 100%;
-  background: color-mix(in srgb, var(--theme-surface-card) 84%, transparent);
+  background: var(--dialog-surface);
   color: var(--theme-fg-muted);
 }
 
 .connection-auth-option.is-active,
 .connection-auth-option:hover {
   color: var(--theme-fg);
-  border-color: color-mix(in srgb, var(--theme-primary) 34%, var(--theme-border-soft));
-  background: color-mix(in srgb, var(--theme-surface-hover) 98%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 34%, var(--dialog-border));
+  background: var(--dialog-surface-hover);
 }
 
 .connection-auth-card {
@@ -2236,9 +2504,9 @@ button.start-action:disabled {
   justify-content: space-between;
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--theme-border-soft);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--theme-surface-card) 84%, transparent);
+  border: 1px solid var(--dialog-border);
+  border-radius: 4px;
+  background: var(--dialog-surface);
 }
 
 .connection-auth-copy strong {
@@ -2270,9 +2538,9 @@ button.start-action:disabled {
   align-items: center;
   gap: 10px;
   padding: 0 12px 0 14px;
-  border: 1px solid var(--theme-border-soft);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--theme-surface-hover) 20%, transparent);
+  border: 1px solid var(--dialog-border);
+  border-radius: 4px;
+  background: var(--dialog-surface);
   color: var(--theme-fg-less);
   font: 11px var(--font-mono);
 }
@@ -2295,12 +2563,18 @@ button.start-action:disabled {
   color: var(--theme-fg-subtle);
   font-size: 10px;
   font-weight: 700;
+  cursor: pointer;
+}
+
+.connection-key-remove:hover {
+  color: var(--theme-danger);
+  background: color-mix(in srgb, var(--theme-danger) 14%, transparent);
 }
 
 .connection-empty-state {
   padding: 24px;
-  border: 1px dashed var(--theme-border-soft);
-  border-radius: 12px;
+  border: 1px dashed var(--dialog-border);
+  border-radius: 4px;
   color: var(--theme-fg-subtle);
   font-size: 12px;
 }
@@ -2315,28 +2589,44 @@ button.start-action:disabled {
 .connection-form-actions {
   justify-content: flex-end;
   padding-top: 14px;
-  border-top: 1px solid color-mix(in srgb, var(--theme-border-soft) 72%, transparent);
+  border-top: 1px solid var(--dialog-border);
 }
 
 .connection-dialog-secondary-button {
-  background: color-mix(in srgb, var(--theme-surface-hover) 62%, transparent);
+  background: var(--dialog-surface);
   color: var(--theme-fg);
+}
+
+.connection-dialog-secondary-button:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--dialog-border));
+  background: var(--dialog-surface-hover);
 }
 
 .connection-dialog-primary-button {
-  background: color-mix(in srgb, var(--theme-primary) 26%, var(--theme-surface-hover));
-  border-color: color-mix(in srgb, var(--theme-primary) 32%, var(--theme-border-soft));
+  background: color-mix(in srgb, var(--color-accent) 18%, var(--color-terminal));
+  border-color: color-mix(in srgb, var(--color-accent) 34%, var(--dialog-border));
   color: var(--theme-fg);
 }
 
+.connection-dialog-primary-button:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--color-accent) 58%, var(--dialog-border));
+  background: color-mix(in srgb, var(--color-accent) 28%, var(--color-terminal));
+}
+
 .connection-dialog-primary-button:disabled {
+  cursor: default;
   opacity: 0.45;
 }
 
 .connection-dialog-danger-button {
-  background: color-mix(in srgb, var(--theme-danger) 14%, var(--theme-surface-hover));
-  border-color: color-mix(in srgb, var(--theme-danger) 30%, var(--theme-border-soft));
+  background: color-mix(in srgb, var(--theme-danger) 12%, var(--color-terminal));
+  border-color: color-mix(in srgb, var(--theme-danger) 24%, var(--dialog-border));
   color: var(--theme-danger);
+}
+
+.connection-dialog-danger-button:hover {
+  border-color: color-mix(in srgb, var(--theme-danger) 48%, var(--dialog-border));
+  background: color-mix(in srgb, var(--theme-danger) 20%, var(--color-terminal));
 }
 
 .connection-toggle {
@@ -2358,7 +2648,9 @@ button.start-action:disabled {
   height: 16px;
   border-radius: 50%;
   background: var(--theme-fg-subtle);
-  transition: 0.16s ease transform, 0.16s ease background;
+  transition:
+    0.16s ease transform,
+    0.16s ease background;
 }
 
 .connection-toggle.is-active {
@@ -2370,24 +2662,16 @@ button.start-action:disabled {
   transform: translate(16px);
 }
 
-.password-dialog-layer {
-  position: absolute;
-  z-index: 4;
-  align-items: center;
-  padding: 24px;
-  background: #0000007a;
-}
-
 .connection-dialog-password {
-  width: min(420px, calc(100vw - 64px));
+  width: min(var(--app-dialog-width), calc(100vw - 48px));
   padding: 10px 5px;
 }
 
 .password-dialog-content {
   padding: 18px;
-  border: 1px solid color-mix(in srgb, var(--theme-border) 86%, var(--theme-border-soft));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--theme-surface-card) 88%, var(--panel-bg-elevated));
+  border: 1px solid var(--dialog-border);
+  border-radius: 4px;
+  background: var(--dialog-surface);
 }
 
 .password-dialog-actions {
@@ -2403,17 +2687,5 @@ button.start-action:disabled {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes connection-dialog-drop {
-  from {
-    opacity: 0;
-    transform: translate3d(0, -18px, 0);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateZ(0);
   }
 }
