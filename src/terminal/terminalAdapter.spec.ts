@@ -70,6 +70,25 @@ describe('TerminalAdapter', () => {
     );
   });
 
+  it('can keep the viewport position when scroll on input is disabled', async () => {
+    const terminal = new FakeTerminal();
+    const sessionClient = createSessionClient();
+    const adapter = createAdapter(terminal, sessionClient, vi.fn(), createResizeObserver(), 1, {
+      scrollOnInput: false,
+    });
+    adapter.open(document.createElement('div'));
+    terminal.scrollToBottom.mockClear();
+
+    terminal.emitData('pwd\n');
+    await Promise.resolve();
+
+    expect(terminal.scrollToBottom).not.toHaveBeenCalled();
+    expect(sessionClient.write).toHaveBeenCalledWith(
+      'session-a',
+      new TextEncoder().encode('pwd\n'),
+    );
+  });
+
   it('writes ordered terminal chunks and rejects a sequence gap', async () => {
     const terminal = new FakeTerminal();
     const onError = vi.fn();
@@ -336,6 +355,7 @@ function createFrameScheduler(): AnimationFrameScheduler & {
 interface AdapterFixtureOptions {
   fitAddon?: FitAddonPort;
   frames?: AnimationFrameScheduler;
+  scrollOnInput?: boolean;
 }
 
 function createAdapter(
@@ -352,6 +372,7 @@ function createAdapter(
     sessionId: 'session-a',
     initialSequence,
     sessionClient,
+    scrollOnInput: fixtureOptions.scrollOnInput,
     createTerminal: () => terminal,
     createFitAddon: () => fitAddon,
     createResizeObserver: (callback) => {

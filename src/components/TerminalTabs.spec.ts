@@ -79,7 +79,7 @@ describe('TerminalTabs', () => {
     expect(wrapper.get('[data-tab-id="app-settings"] .settings-tab-icon').exists()).toBe(true);
   });
 
-  it('places new-terminal and settings actions in the top tab row', () => {
+  it('places new-terminal, AI and settings actions in the top tab row', () => {
     const wrapper = mount(TerminalTabs, { props: { tabs: [], activeTabId: null } });
 
     expect(wrapper.get('.terminal-tabs').attributes()).not.toHaveProperty('data-tauri-drag-region');
@@ -88,7 +88,9 @@ describe('TerminalTabs', () => {
       'data-tauri-drag-region',
     );
     expect(wrapper.get('.window-controls').exists()).toBe(true);
+    expect(wrapper.get('[aria-label="Open AI panel"]').classes()).toContain('tabbar-ai');
     expect(wrapper.get('[aria-label="Open settings"]').classes()).toContain('tabbar-settings');
+    expect(wrapper.text()).not.toContain('Recent connections');
   });
 
   it('drags and maximizes the frameless window from non-interactive tabbar space', async () => {
@@ -117,9 +119,11 @@ describe('TerminalTabs', () => {
     const wrapper = mount(TerminalTabs, { props: { tabs, activeTabId: 'app-settings' } });
 
     await wrapper.get('[aria-label="Close Settings"]').trigger('click');
+    await wrapper.get('[aria-label="Open AI panel"]').trigger('click');
     await wrapper.get('[aria-label="Open settings"]').trigger('click');
 
     expect(wrapper.emitted('close')).toEqual([['app-settings']]);
+    expect(wrapper.emitted('openAI')).toEqual([[]]);
     expect(wrapper.emitted('openSettings')).toEqual([[]]);
   });
 

@@ -10,6 +10,7 @@ const props = defineProps<{
   modelValue: string;
   options: AppSelectOption[];
   ariaLabel: string;
+  menuPlacement?: 'bottom' | 'top';
   testId?: string;
 }>();
 
@@ -77,7 +78,13 @@ onBeforeUnmount(() => {
     </button>
 
     <Transition name="app-select-menu">
-      <div v-if="open" class="app-select-menu" role="listbox" :aria-label="ariaLabel">
+      <div
+        v-if="open"
+        class="app-select-menu"
+        :class="`app-select-menu-${props.menuPlacement ?? 'bottom'}`"
+        role="listbox"
+        :aria-label="ariaLabel"
+      >
         <button
           v-for="option in options"
           :key="option.value"

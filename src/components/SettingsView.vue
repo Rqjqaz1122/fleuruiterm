@@ -5,6 +5,17 @@ import AppDialog from '@/components/AppDialog.vue';
 import AppSelect from '@/components/AppSelect.vue';
 import { locale, setLocale, t, type AppLocale } from '@/i18n/locale';
 import { settingsClient } from '@/services/settingsClient';
+import {
+  defaultTerminalSettings,
+  defaultsForAiProvider,
+  sanitizeAiSettings,
+  sanitizeTerminalSettings,
+  useAppSettingsStore,
+  type AiCommandPolicy,
+  type AiProvider,
+  type AiSettings,
+  type TerminalSettings,
+} from '@/stores/appSettingsStore';
 
 type SettingsSectionId =
   'general' | 'appearance' | 'terminal' | 'connections' | 'hotkeys' | 'ai' | 'advanced';
@@ -118,6 +129,8 @@ const selectedSectionId = ref<SettingsSectionId>('general');
 const collapsedGroups = ref<Record<string, boolean>>({});
 const connectionFilter = ref('');
 const settingsReady = ref(!settingsClient.available);
+const appSettings = useAppSettingsStore();
+const { aiSettings, terminalSettings } = appSettings;
 const connections = ref<WorkbenchConnection[]>(loadConnections());
 const recentConnectionIds = ref<string[]>(loadRecentConnectionIds(connections.value));
 const themeMode = ref<ThemeMode>(loadThemeMode());
@@ -138,6 +151,12 @@ const selectedLocale = computed<AppLocale>({
 });
 
 const labels = computed(() => (selectedLocale.value === 'zh-CN' ? zhLabels : enLabels));
+const languageOptions = computed(() =>
+  appSettings.languageOptions.value.map((option) => ({
+    value: option.value,
+    label: `${option.label} / ${option.nativeLabel}`,
+  })),
+);
 const sections = computed<Array<{ id: SettingsSectionId; label: string; title: string }>>(() => [
   { id: 'general', label: labels.value.nav.general, title: labels.value.languageCardTitle },
   { id: 'appearance', label: labels.value.nav.appearance, title: labels.value.appearanceCardTitle },
@@ -222,6 +241,18 @@ const connectionMethodOptions = computed(() =>
     label: methodLabel(method),
   })),
 );
+const aiProviderOptions = computed(() =>
+  aiProviders.map((provider) => ({
+    value: provider,
+    label: labels.value.aiProviderOptions[provider],
+  })),
+);
+const aiCommandPolicyOptions = computed(() =>
+  aiCommandPolicies.map((policy) => ({
+    value: policy,
+    label: labels.value.aiPolicyOptions[policy],
+  })),
+);
 const draftEndpoint = computed(() => {
   if (draft.value.method === 'local') {
     return draft.value.cwd.trim() || 'localhost';
@@ -242,7 +273,16 @@ const draftIdentity = computed(() =>
 );
 
 watch(
-  [connections, recentConnectionIds, selectedLocale, themeMode, configTheme, windowAppearance],
+  [
+    connections,
+    recentConnectionIds,
+    selectedLocale,
+    themeMode,
+    configTheme,
+    windowAppearance,
+    terminalSettings,
+    aiSettings,
+  ],
   () => {
     if (!settingsReady.value) {
       return;
@@ -280,6 +320,8 @@ async function hydrateSettings(): Promise<void> {
   const theme = payload?.settings?.theme as
     { mode?: ThemeMode; config?: ThemeConfigFile } | undefined;
   const windowConfig = payload?.settings?.window as WindowAppearanceConfig | undefined;
+  const terminalConfig = payload?.settings?.terminal as Partial<TerminalSettings> | undefined;
+  const aiConfig = payload?.settings?.ai as Partial<AiSettings> | undefined;
 
   if (savedLocale === 'en-US' || savedLocale === 'zh-CN') {
     setLocale(savedLocale);
@@ -293,6 +335,10 @@ async function hydrateSettings(): Promise<void> {
   if (windowConfig) {
     windowAppearance.value = sanitizeWindowAppearance(windowConfig);
   }
+  appSettings.replaceRuntimeSettings({
+    terminal: terminalConfig,
+    ai: aiConfig,
+  });
   if (Array.isArray(workbench?.connections)) {
     connections.value = normalizeConnectionList(workbench.connections);
   }
@@ -472,6 +518,28 @@ function updateWindowTransparency(
   });
 }
 
+function updateTerminalSetting<Key extends keyof TerminalSettings>(
+  key: Key,
+  value: TerminalSettings[Key],
+): void {
+  appSettings.updateTerminalSettings({ [key]: value } as Partial<TerminalSettings>);
+}
+
+function resetTerminalSettings(): void {
+  appSettings.updateTerminalSettings(defaultTerminalSettings);
+}
+
+function updateAiSetting<Key extends keyof AiSettings>(key: Key, value: AiSettings[Key]): void {
+  appSettings.updateAiSettings({ [key]: value } as Partial<AiSettings>);
+}
+
+function updateAiProvider(provider: AiProvider): void {
+  appSettings.updateAiSettings({
+    provider,
+    ...defaultsForAiProvider(provider),
+  });
+}
+
 function resetSettingsEditor(): void {
   settingsEditorValue.value = buildSettingsEditorValue();
   settingsEditorStatus.value = null;
@@ -484,6 +552,10 @@ function applySettingsEditor(): void {
     themeMode.value = parsed.theme.mode;
     configTheme.value = parsed.theme.config;
     windowAppearance.value = parsed.window;
+    appSettings.replaceRuntimeSettings({
+      terminal: parsed.terminal,
+      ai: parsed.ai,
+    });
     connections.value = normalizeConnectionList(parsed.workbench.connections);
     recentConnectionIds.value = parsed.workbench.recentConnectionIds.filter((connectionId) =>
       connections.value.some((connection) => connection.id === connectionId),
@@ -675,6 +747,8 @@ function buildSettingsEditorValue(): string {
         },
       },
       window: windowAppearance.value,
+      terminal: terminalSettings.value,
+      ai: aiSettings.value,
       workbench: {
         recentConnectionIds: recentConnectionIds.value,
         connections: redactConnectionPasswords(connections.value),
@@ -689,6 +763,8 @@ function parseSettingsEditorValue(source: string): {
   locale: AppLocale;
   theme: { mode: ThemeMode; config: ThemeConfigFile };
   window: WindowAppearanceConfig;
+  terminal: TerminalSettings;
+  ai: AiSettings;
   workbench: { connections: WorkbenchConnection[]; recentConnectionIds: string[] };
 } {
   const parsed = JSON.parse(source) as Record<string, unknown>;
@@ -717,6 +793,10 @@ function parseSettingsEditorValue(source: string): {
     window: sanitizeWindowAppearance(
       (parsed.window as WindowAppearanceConfig | undefined) ?? windowAppearance.value,
     ),
+    terminal: sanitizeTerminalSettings(
+      (parsed.terminal as Partial<TerminalSettings> | undefined) ?? terminalSettings.value,
+    ),
+    ai: sanitizeAiSettings((parsed.ai as Partial<AiSettings> | undefined) ?? aiSettings.value),
     workbench: {
       connections: normalizeConnectionList(workbench.connections),
       recentConnectionIds: workbench.recentConnectionIds.filter(
@@ -752,6 +832,8 @@ function persistAll(): void {
         config: configTheme.value,
       },
       window: windowAppearance.value,
+      terminal: terminalSettings.value,
+      ai: aiSettings.value,
       workbench: {
         connections: redactConnectionPasswords(connections.value),
         recentConnectionIds: recentConnectionIds.value,
@@ -980,6 +1062,8 @@ function isColorScheme(value: unknown): value is ColorScheme {
 const authMethods: AuthMethod[] = ['auto', 'password', 'publicKey', 'agent', 'keyboardInteractive'];
 const connectionMethods: ConnectionMethod[] = ['ssh', 'telnet', 'local'];
 const themeModes: ThemeMode[] = ['system', 'dark', 'light'];
+const aiProviders: AiProvider[] = ['none', 'openai', 'anthropic', 'local', 'custom'];
+const aiCommandPolicies: AiCommandPolicy[] = ['ask', 'suggest', 'auto', 'fullAccess'];
 
 const enLabels = {
   pageTitle: 'Settings',
@@ -994,7 +1078,7 @@ const enLabels = {
   },
   localeName: { en: 'English', zh: 'Simplified Chinese' },
   languageCardTitle: 'Language',
-  languageCardDescription: 'Application interface language.',
+  languageCardDescription: 'Application interface language. More locales can be added to this list.',
   languageStatusLabel: 'Current language',
   generalSectionDescription: 'The interface updates immediately when the language changes.',
   startupCardTitle: 'Startup',
@@ -1027,17 +1111,21 @@ const enLabels = {
   windowTransparencyBlurLabel: 'Blur',
   terminalSectionTitle: 'Terminal',
   terminalFontTitle: 'Font',
-  terminalFontDescription: 'Rendering uses the terminal monospace stack.',
+  terminalFontDescription: 'Monospace stack used by newly opened terminals.',
   terminalFontValue: 'Source Code Pro / JetBrains Mono',
   terminalFontSizeTitle: 'Font size',
-  terminalFontSizeDescription: 'Current terminal renderer size.',
+  terminalFontSizeDescription: 'Text size used by newly opened terminals.',
+  terminalLineHeightTitle: 'Line height',
+  terminalLineHeightDescription: 'Vertical density used by newly opened terminals.',
   terminalScrollbackTitle: 'Scrollback',
   terminalScrollbackDescription: 'Number of terminal output lines kept in memory.',
+  terminalScrollbackUnit: 'lines',
   terminalScrollbackValue: '25000 lines',
   terminalScrollOnInputTitle: 'Scroll on input',
   terminalScrollOnInputDescription: 'Typing returns the viewport to the newest output.',
   terminalCursorTitle: 'Cursor blink',
   terminalCursorDescription: 'Blink the terminal cursor while focused.',
+  terminalReset: 'Reset terminal',
   hotkeysSectionTitle: 'Hotkeys',
   hotkeysNewTerminal: 'New terminal',
   hotkeysCloseTab: 'Close tab',
@@ -1047,11 +1135,38 @@ const enLabels = {
   hotkeysReadOnlyHint: 'Shortcut editing is not enabled in this build.',
   aiSectionTitle: 'AI',
   aiProviderTitle: 'Provider',
-  aiProviderDescription: 'No assistant provider is configured yet.',
+  aiProviderDescription: 'Choose which assistant backend the side panel should use.',
+  aiProviderOptions: {
+    none: 'Not configured',
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    local: 'Local model',
+    custom: 'Custom endpoint',
+  },
+  aiModelTitle: 'Model',
+  aiModelDescription: 'Model name or deployment label for the selected provider.',
+  aiBaseUrlTitle: 'Base URL',
+  aiBaseUrlDescription: 'API origin used by the selected provider.',
+  aiTokenTitle: 'Authentication token',
+  aiTokenDescription: 'Provider API key or bearer token used for requests.',
+  aiTokenHeaderTitle: 'Token header',
+  aiTokenHeaderDescription: 'Header name used by custom OpenAI-compatible providers.',
+  aiTokenPrefixTitle: 'Token prefix',
+  aiTokenPrefixDescription: 'Prefix before the token value, such as Bearer. Leave empty for raw tokens.',
+  aiStreamingTitle: 'Streaming output',
+  aiStreamingDescription: 'Show assistant responses as they arrive from providers that support streams.',
   aiContextTitle: 'Session context',
-  aiContextDescription: 'Future context collection will stay opt-in.',
+  aiContextDescription: 'Allow the AI panel to reference the active terminal session.',
+  aiWorkingDirectoryTitle: 'Working directory',
+  aiWorkingDirectoryDescription: 'Include the current working directory when session context is enabled.',
   aiPolicyTitle: 'Command policy',
-  aiPolicyDescription: 'Policy controls will be shown here before they affect sessions.',
+  aiPolicyDescription: 'How AI-generated commands should be handled before execution.',
+  aiPolicyOptions: {
+    ask: 'Ask every time',
+    suggest: 'Suggest only',
+    auto: 'Allow trusted commands',
+    fullAccess: 'Full terminal access',
+  },
   statusEnabled: 'Enabled',
   statusDisabled: 'Disabled',
   statusPreview: 'Preview only',
@@ -1121,6 +1236,7 @@ const enLabels = {
 };
 
 const zhLabels: typeof enLabels = {
+  ...enLabels,
   pageTitle: '设置',
   nav: {
     general: '通用',
@@ -1186,11 +1302,38 @@ const zhLabels: typeof enLabels = {
   hotkeysReadOnlyHint: '当前版本暂不启用快捷键编辑。',
   aiSectionTitle: 'AI',
   aiProviderTitle: '服务提供方',
-  aiProviderDescription: '尚未配置助手服务提供方。',
+  aiProviderDescription: '选择右侧 AI 面板使用的助手服务。',
+  aiProviderOptions: {
+    none: '未配置',
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    local: '本地模型',
+    custom: '自定义接口',
+  },
+  aiModelTitle: '模型',
+  aiModelDescription: '当前服务提供方使用的模型名称或部署名称。',
+  aiBaseUrlTitle: '接口地址',
+  aiBaseUrlDescription: '当前服务提供方使用的 API 地址。',
+  aiTokenTitle: '认证令牌',
+  aiTokenDescription: '请求服务提供方时使用的 API Key 或 Bearer Token。',
+  aiTokenHeaderTitle: '令牌请求头',
+  aiTokenHeaderDescription: '自定义 OpenAI 兼容接口使用的认证请求头名称。',
+  aiTokenPrefixTitle: '令牌前缀',
+  aiTokenPrefixDescription: '令牌值前面的前缀，例如 Bearer。留空则直接发送原始令牌。',
+  aiStreamingTitle: '流式输出',
+  aiStreamingDescription: '服务提供方支持时，AI 回复会边生成边显示。',
   aiContextTitle: '会话上下文',
-  aiContextDescription: '未来的上下文收集会保持主动开启。',
+  aiContextDescription: '允许 AI 面板引用当前活动终端会话。',
+  aiWorkingDirectoryTitle: '工作目录',
+  aiWorkingDirectoryDescription: '启用会话上下文时包含当前工作目录。',
   aiPolicyTitle: '命令策略',
-  aiPolicyDescription: '策略控制会先在这里展示，再影响会话。',
+  aiPolicyDescription: '控制 AI 生成的命令在执行前如何处理。',
+  aiPolicyOptions: {
+    ask: '每次询问',
+    suggest: '仅建议',
+    auto: '允许可信命令',
+    fullAccess: '完全访问',
+  },
   statusEnabled: '已启用',
   statusDisabled: '已禁用',
   statusPreview: '仅展示',
@@ -1293,22 +1436,13 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.languageCardDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <div class="settings-locale-toggle">
-                      <button
-                        type="button"
-                        :class="{ 'is-active': selectedLocale === 'en-US' }"
-                        @click="selectedLocale = 'en-US'"
-                      >
-                        {{ labels.localeName.en }}
-                      </button>
-                      <button
-                        type="button"
-                        :class="{ 'is-active': selectedLocale === 'zh-CN' }"
-                        @click="selectedLocale = 'zh-CN'"
-                      >
-                        {{ labels.localeName.zh }}
-                      </button>
-                    </div>
+                    <AppSelect
+                      :model-value="selectedLocale"
+                      :options="languageOptions"
+                      :aria-label="labels.languageCardTitle"
+                      test-id="settings-language-select"
+                      @update:model-value="selectedLocale = $event as AppLocale"
+                    />
                   </div>
                 </div>
 
@@ -1361,7 +1495,18 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.terminalFontDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span class="settings-value-pill">{{ labels.terminalFontValue }}</span>
+                    <label class="settings-compact-input">
+                      <input
+                        :value="terminalSettings.fontFamily"
+                        :aria-label="labels.terminalFontTitle"
+                        @input="
+                          updateTerminalSetting(
+                            'fontFamily',
+                            ($event.target as HTMLInputElement).value,
+                          )
+                        "
+                      />
+                    </label>
                   </div>
                 </div>
 
@@ -1371,7 +1516,57 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.terminalFontSizeDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span class="settings-value-pill">13 px</span>
+                    <label class="settings-range-field settings-range-field-inline">
+                      <div class="settings-range-control">
+                        <input
+                          class="settings-range-input"
+                          type="range"
+                          min="10"
+                          max="24"
+                          step="1"
+                          :value="terminalSettings.fontSize"
+                          @input="
+                            updateTerminalSetting(
+                              'fontSize',
+                              Number(($event.target as HTMLInputElement).value),
+                            )
+                          "
+                        />
+                        <strong class="settings-range-value">
+                          {{ terminalSettings.fontSize }} px
+                        </strong>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.terminalLineHeightTitle }}</strong>
+                    <span>{{ labels.terminalLineHeightDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <label class="settings-range-field settings-range-field-inline">
+                      <div class="settings-range-control">
+                        <input
+                          class="settings-range-input"
+                          type="range"
+                          min="1"
+                          max="1.8"
+                          step="0.05"
+                          :value="terminalSettings.lineHeight"
+                          @input="
+                            updateTerminalSetting(
+                              'lineHeight',
+                              Number(($event.target as HTMLInputElement).value),
+                            )
+                          "
+                        />
+                        <strong class="settings-range-value">
+                          {{ terminalSettings.lineHeight.toFixed(2) }}
+                        </strong>
+                      </div>
+                    </label>
                   </div>
                 </div>
 
@@ -1381,9 +1576,24 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.terminalScrollbackDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span class="settings-value-pill" data-testid="settings-scrollback">
-                      {{ labels.terminalScrollbackValue }}
-                    </span>
+                    <label class="settings-compact-input settings-number-input">
+                      <input
+                        data-testid="settings-scrollback"
+                        type="number"
+                        min="1000"
+                        max="100000"
+                        step="1000"
+                        :value="terminalSettings.scrollback"
+                        :aria-label="labels.terminalScrollbackTitle"
+                        @input="
+                          updateTerminalSetting(
+                            'scrollback',
+                            Number(($event.target as HTMLInputElement).value),
+                          )
+                        "
+                      />
+                      <span>{{ labels.terminalScrollbackUnit }}</span>
+                    </label>
                   </div>
                 </div>
 
@@ -1393,13 +1603,18 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.terminalScrollOnInputDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span
-                      class="settings-readonly-toggle is-active"
+                    <button
+                      class="connection-toggle"
+                      :class="{ 'is-active': terminalSettings.scrollOnInput }"
                       data-testid="settings-scroll-on-input"
                       :aria-label="labels.statusEnabled"
+                      type="button"
+                      @click="
+                        updateTerminalSetting('scrollOnInput', !terminalSettings.scrollOnInput)
+                      "
                     >
                       <span />
-                    </span>
+                    </button>
                   </div>
                 </div>
 
@@ -1409,12 +1624,27 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.terminalCursorDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span
-                      class="settings-readonly-toggle is-active"
+                    <button
+                      class="connection-toggle"
+                      :class="{ 'is-active': terminalSettings.cursorBlink }"
                       :aria-label="labels.statusEnabled"
+                      type="button"
+                      @click="updateTerminalSetting('cursorBlink', !terminalSettings.cursorBlink)"
                     >
                       <span />
-                    </span>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.terminalReset }}</strong>
+                    <span>{{ labels.terminalFontDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <button class="settings-reset-button" type="button" @click="resetTerminalSettings">
+                      {{ labels.configEditorReset }}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1565,7 +1795,117 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.aiProviderDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span class="settings-value-pill">{{ labels.statusNotConfigured }}</span>
+                    <AppSelect
+                      :model-value="aiSettings.provider"
+                      :options="aiProviderOptions"
+                      :aria-label="labels.aiProviderTitle"
+                      test-id="settings-ai-provider"
+                      @update:model-value="updateAiProvider($event as AiProvider)"
+                    />
+                  </div>
+                </div>
+
+                <div class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.aiBaseUrlTitle }}</strong>
+                    <span>{{ labels.aiBaseUrlDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <label class="settings-compact-input">
+                      <input
+                        data-testid="settings-ai-base-url"
+                        :value="aiSettings.baseUrl"
+                        :aria-label="labels.aiBaseUrlTitle"
+                        placeholder="https://api.openai.com/v1"
+                        @input="
+                          updateAiSetting('baseUrl', ($event.target as HTMLInputElement).value)
+                        "
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.aiModelTitle }}</strong>
+                    <span>{{ labels.aiModelDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <label class="settings-compact-input">
+                      <input
+                        data-testid="settings-ai-model"
+                        :value="aiSettings.model"
+                        :aria-label="labels.aiModelTitle"
+                        @input="
+                          updateAiSetting('model', ($event.target as HTMLInputElement).value)
+                        "
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.aiTokenTitle }}</strong>
+                    <span>{{ labels.aiTokenDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <label class="settings-compact-input">
+                      <input
+                        data-testid="settings-ai-token"
+                        type="password"
+                        autocomplete="off"
+                        :value="aiSettings.token"
+                        :aria-label="labels.aiTokenTitle"
+                        @input="
+                          updateAiSetting('token', ($event.target as HTMLInputElement).value)
+                        "
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="aiSettings.provider === 'custom'" class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.aiTokenHeaderTitle }}</strong>
+                    <span>{{ labels.aiTokenHeaderDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <label class="settings-compact-input">
+                      <input
+                        data-testid="settings-ai-token-header"
+                        :value="aiSettings.tokenHeaderName"
+                        :aria-label="labels.aiTokenHeaderTitle"
+                        @input="
+                          updateAiSetting(
+                            'tokenHeaderName',
+                            ($event.target as HTMLInputElement).value,
+                          )
+                        "
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="aiSettings.provider === 'custom'" class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.aiTokenPrefixTitle }}</strong>
+                    <span>{{ labels.aiTokenPrefixDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <label class="settings-compact-input">
+                      <input
+                        data-testid="settings-ai-token-prefix"
+                        :value="aiSettings.tokenPrefix"
+                        :aria-label="labels.aiTokenPrefixTitle"
+                        @input="
+                          updateAiSetting(
+                            'tokenPrefix',
+                            ($event.target as HTMLInputElement).value,
+                          )
+                        "
+                      />
+                    </label>
                   </div>
                 </div>
 
@@ -1575,9 +1915,57 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.aiContextDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span class="settings-readonly-toggle" :aria-label="labels.statusDisabled">
+                    <button
+                      class="connection-toggle"
+                      :class="{ 'is-active': aiSettings.contextEnabled }"
+                      :aria-label="labels.aiContextTitle"
+                      type="button"
+                      @click="updateAiSetting('contextEnabled', !aiSettings.contextEnabled)"
+                    >
                       <span />
-                    </span>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.aiStreamingTitle }}</strong>
+                    <span>{{ labels.aiStreamingDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <button
+                      class="connection-toggle"
+                      :class="{ 'is-active': aiSettings.streamingEnabled }"
+                      :aria-label="labels.aiStreamingTitle"
+                      data-testid="settings-ai-streaming"
+                      type="button"
+                      @click="updateAiSetting('streamingEnabled', !aiSettings.streamingEnabled)"
+                    >
+                      <span />
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-form-line">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.aiWorkingDirectoryTitle }}</strong>
+                    <span>{{ labels.aiWorkingDirectoryDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <button
+                      class="connection-toggle"
+                      :class="{ 'is-active': aiSettings.includeWorkingDirectory }"
+                      :aria-label="labels.aiWorkingDirectoryTitle"
+                      type="button"
+                      @click="
+                        updateAiSetting(
+                          'includeWorkingDirectory',
+                          !aiSettings.includeWorkingDirectory,
+                        )
+                      "
+                    >
+                      <span />
+                    </button>
                   </div>
                 </div>
 
@@ -1587,7 +1975,16 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.aiPolicyDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span class="settings-value-pill">{{ labels.statusPreview }}</span>
+                    <AppSelect
+                      :model-value="aiSettings.commandPolicy"
+                      :options="aiCommandPolicyOptions"
+                      :aria-label="labels.aiPolicyTitle"
+                      menu-placement="top"
+                      test-id="settings-ai-policy"
+                      @update:model-value="
+                        updateAiSetting('commandPolicy', $event as AiCommandPolicy)
+                      "
+                    />
                   </div>
                 </div>
               </div>

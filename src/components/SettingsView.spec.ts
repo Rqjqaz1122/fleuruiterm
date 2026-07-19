@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setLocale } from '@/i18n/locale';
 import { settingsClient } from '@/services/settingsClient';
+import {
+  defaultAiSettings,
+  defaultTerminalSettings,
+  useAppSettingsStore,
+} from '@/stores/appSettingsStore';
 
 import SettingsView from './SettingsView.vue';
 
@@ -10,6 +15,10 @@ describe('SettingsView', () => {
   beforeEach(() => {
     localStorage.clear();
     setLocale('en-US');
+    useAppSettingsStore().replaceRuntimeSettings({
+      ai: defaultAiSettings,
+      terminal: defaultTerminalSettings,
+    });
     document.documentElement.removeAttribute('style');
     vi.restoreAllMocks();
   });
@@ -30,7 +39,9 @@ describe('SettingsView', () => {
     const wrapper = mount(SettingsView);
 
     await wrapper.get('[data-section="terminal"]').trigger('click');
-    expect(wrapper.get('[data-testid="settings-scrollback"]').text()).toBe('25000 lines');
+    expect((wrapper.get('[data-testid="settings-scrollback"]').element as HTMLInputElement).value).toBe(
+      '25000',
+    );
     expect(wrapper.get('[data-testid="settings-scroll-on-input"]').exists()).toBe(true);
 
     await wrapper.get('[data-section="hotkeys"]').trigger('click');
@@ -38,14 +49,15 @@ describe('SettingsView', () => {
     expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Ctrl T');
 
     await wrapper.get('[data-section="ai"]').trigger('click');
-    expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Not configured');
-    expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Preview only');
+    expect(wrapper.get('[data-testid="settings-ai-provider"]').text()).toContain('Not configured');
+    expect(wrapper.get('[data-testid="settings-ai-policy"]').text()).toContain('Ask every time');
   });
 
   it('switches the application language from the general section', async () => {
     const wrapper = mount(SettingsView);
 
-    await wrapper.get('.settings-locale-toggle button:nth-child(2)').trigger('click');
+    await wrapper.get('[data-testid="settings-language-select"]').trigger('click');
+    await wrapper.get('[data-value="zh-CN"]').trigger('click');
 
     expect(localStorage.getItem('fleurterm.locale')).toBe('zh-CN');
     expect(wrapper.get('.settings-value-pill').text()).toBe('简体中文');
@@ -96,6 +108,77 @@ describe('SettingsView', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-terminal-fg')).toBe('#123456');
     expect(document.documentElement.style.getPropertyValue('--app-layer-blur')).toBe('18px');
     expect(opacitySpy).toHaveBeenLastCalledWith(0.75);
+  });
+
+  it('configures AI provider endpoint and authentication settings', async () => {
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="ai"]').trigger('click');
+    await wrapper.get('[data-testid="settings-ai-provider"]').trigger('click');
+    await wrapper.get('[data-value="openai"]').trigger('click');
+    await wrapper.get('[data-testid="settings-ai-model"]').setValue('gpt-test');
+    await wrapper.get('[data-testid="settings-ai-token"]').setValue('token-a');
+    expect(useAppSettingsStore().aiSettings.value.streamingEnabled).toBe(true);
+    await wrapper.get('[data-testid="settings-ai-streaming"]').trigger('click');
+    await wrapper.get('[data-testid="settings-ai-policy"]').trigger('click');
+    expect(wrapper.get('.app-select-menu').classes()).toContain('app-select-menu-top');
+    expect(wrapper.get('[data-value="fullAccess"]').text()).toBe('Full terminal access');
+    await wrapper.get('[data-value="fullAccess"]').trigger('click');
+    expect(useAppSettingsStore().aiSettings.value.streamingEnabled).toBe(false);
+    await wrapper.get('[data-testid="settings-ai-streaming"]').trigger('click');
+
+    expect((wrapper.get('[data-testid="settings-ai-base-url"]').element as HTMLInputElement).value).toBe(
+      'https://api.openai.com/v1',
+    );
+    await wrapper.get('[data-testid="settings-ai-base-url"]').setValue('');
+    expect((wrapper.get('[data-testid="settings-ai-base-url"]').element as HTMLInputElement).value).toBe(
+      '',
+    );
+    await wrapper.get('[data-testid="settings-ai-base-url"]').setValue('https://openai-proxy.example/v1');
+    expect(useAppSettingsStore().aiSettings.value).toMatchObject({
+      provider: 'openai',
+      baseUrl: 'https://openai-proxy.example/v1',
+      model: 'gpt-test',
+      token: 'token-a',
+      tokenHeaderName: 'Authorization',
+      tokenPrefix: 'Bearer',
+      streamingEnabled: true,
+      commandPolicy: 'fullAccess',
+    });
+
+    await wrapper.get('[data-testid="settings-ai-provider"]').trigger('click');
+    await wrapper.get('[data-value="custom"]').trigger('click');
+    await wrapper.get('[data-testid="settings-ai-base-url"]').setValue('https://proxy.example/v1');
+    await wrapper.get('[data-testid="settings-ai-token-header"]').setValue('X-API-Key');
+    await wrapper.get('[data-testid="settings-ai-token-prefix"]').setValue('');
+
+    expect(useAppSettingsStore().aiSettings.value).toMatchObject({
+      provider: 'custom',
+      baseUrl: 'https://proxy.example/v1',
+      tokenHeaderName: 'X-API-Key',
+      tokenPrefix: '',
+    });
+  });
+
+  it('localizes AI settings controls in Chinese', async () => {
+    setLocale('zh-CN');
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="ai"]').trigger('click');
+    await wrapper.get('[data-testid="settings-ai-policy"]').trigger('click');
+
+    const panelText = wrapper.get('[data-testid="settings-panel"]').text();
+    expect(panelText).toContain('服务提供方');
+    expect(panelText).toContain('接口地址');
+    expect(panelText).toContain('模型');
+    expect(panelText).toContain('认证令牌');
+    expect(panelText).toContain('流式输出');
+    expect(panelText).toContain('工作目录');
+    expect(wrapper.get('[data-value="fullAccess"]').text()).toBe('完全访问');
+    expect(panelText).not.toContain('Provider');
+    expect(panelText).not.toContain('Authentication token');
+    expect(panelText).not.toContain('Streaming output');
+    expect(panelText).not.toContain('Working directory');
   });
 
   it('applies workbench configuration from the advanced editor', async () => {

@@ -10,13 +10,14 @@ import { t } from '@/i18n/locale';
 const props = defineProps<{
   tabs: AppTab[];
   activeTabId: string | null;
+  aiOpen?: boolean;
 }>();
 
 const emit = defineEmits<{
   activate: [tabId: string];
   close: [tabId: string];
   newTerminal: [];
-  openRecent: [];
+  openAI: [];
   openSettings: [];
   reorder: [sourceTabId: string, targetTabId: string, placement: TabDropPlacement];
   dragHover: [tabId: string];
@@ -315,9 +316,6 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       >
         +
       </button>
-      <button class="tabbar-command" type="button" @click="$emit('openRecent')">
-        {{ t('start.recent') }}
-      </button>
     </div>
 
     <TransitionGroup name="tab-shift" tag="div" class="tab-list" role="tablist">
@@ -371,6 +369,17 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
     </TransitionGroup>
 
     <span class="tabbar-drag-region" aria-hidden="true" data-tauri-drag-region />
+    <button
+      class="tabbar-command tabbar-ai"
+      :class="{ active: aiOpen }"
+      data-testid="tabbar-ai"
+      type="button"
+      :aria-label="t('tabs.openAI')"
+      :aria-pressed="aiOpen"
+      @click="$emit('openAI')"
+    >
+      {{ t('tabs.ai') }}
+    </button>
     <button
       class="tabbar-command tabbar-settings"
       :class="{ active: activeTabId === SETTINGS_TAB_ID }"

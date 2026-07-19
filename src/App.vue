@@ -2,6 +2,7 @@
 import { storeToRefs } from 'pinia';
 import { computed, ref, watch } from 'vue';
 
+import AIPanel from '@/components/AIPanel.vue';
 import SettingsView from '@/components/SettingsView.vue';
 import type { WorkbenchConnection } from '@/components/SettingsView.vue';
 import StartPage from '@/components/StartPage.vue';
@@ -21,16 +22,30 @@ import type {
   TerminalTab,
 } from '@/domain/workspace';
 import { t, terminalTitle, type TranslationKey } from '@/i18n/locale';
+import type { AiAppAction } from '@/services/aiTerminalCommands';
+import { setLocale } from '@/i18n/locale';
+import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore, type WorkspaceErrorCode } from '@/stores/workspaceStore';
 
+const AI_PANEL_WIDTH_STORAGE_KEY = 'fleurterm.aiPanelWidth';
+const DEFAULT_AI_PANEL_WIDTH = 380;
+const MIN_AI_PANEL_WIDTH = 320;
+const MAX_AI_PANEL_WIDTH = 720;
+
 const store = useWorkspaceStore();
+const appSettings = useAppSettingsStore();
 const { workspace, activeSnapshot, errorMessage, errorCode } = storeToRefs(store);
 const actionPending = ref(false);
 const retryAction = ref<(() => Promise<void>) | null>(null);
 const settingsTabOpen = ref(false);
+const aiPanelOpen = ref(false);
+const aiPanelWidth = ref(loadAiPanelWidth());
 const activeAppTabId = ref<string | null>(workspace.value.activeTabId);
 const lastActiveTerminalTabId = ref<string | null>(workspace.value.activeTabId);
 const appTabOrder = ref<string[]>([]);
+const appContentStyle = computed<Record<string, string>>(() => ({
+  '--ai-panel-width': `${aiPanelWidth.value}px`,
+}));
 
 watch(
   () => [
@@ -66,6 +81,7 @@ const errorMessageKeyByCode: Record<WorkspaceErrorCode, TranslationKey> = {
   OPEN_TERMINAL_FAILED: 'error.openTerminal',
   CLOSE_TERMINAL_FAILED: 'error.closeTerminal',
   CLOSE_TAB_FAILED: 'error.closeTab',
+  WRITE_TERMINAL_FAILED: 'error.writeTerminal',
 };
 const visibleErrorMessage = computed(() => {
   if (errorMessage.value === null) {
@@ -171,6 +187,62 @@ function buildSshForwardArgs(forwardedPorts: string[]): string[] {
 function openSettings(): void {
   settingsTabOpen.value = true;
   activeAppTabId.value = SETTINGS_TAB_ID;
+}
+
+function toggleAiPanel(): void {
+  aiPanelOpen.value = !aiPanelOpen.value;
+}
+
+function resizeAiPanel(width: number): void {
+  aiPanelWidth.value = clampAiPanelWidth(width);
+  persistAiPanelWidth(aiPanelWidth.value);
+}
+
+async function runAiTerminalCommand(command: string): Promise<void> {
+  const input = command.endsWith('\r') || command.endsWith('\n') ? command : `${command}\r`;
+  await runAction(() => store.writeToFocusedSession(input));
+}
+
+async function runAiAppAction(action: AiAppAction): Promise<void> {
+  switch (action.type) {
+    case 'terminal.write':
+      await runAiTerminalCommand(action.input);
+      return;
+    case 'terminal.openLocal':
+      await runAction(async () => {
+        await store.openTab({
+          shell: action.shell,
+          cwd: action.cwd,
+          title: action.title,
+        });
+        activeAppTabId.value = store.workspace.activeTabId;
+        lastActiveTerminalTabId.value = store.workspace.activeTabId;
+      });
+      return;
+    case 'terminal.openSsh':
+      await runAction(async () => {
+        await store.openTab({
+          shell: 'ssh',
+          args: ['-p', String(action.port ?? 22), `${action.user}@${action.host}`],
+          title: action.title ?? `SSH ${action.user}@${action.host}`,
+        });
+        activeAppTabId.value = store.workspace.activeTabId;
+        lastActiveTerminalTabId.value = store.workspace.activeTabId;
+      });
+      return;
+    case 'settings.updateTerminal':
+      appSettings.updateTerminalSettings(action.patch);
+      return;
+    case 'settings.updateAi':
+      appSettings.updateAiSettings(action.patch);
+      return;
+    case 'settings.setLocale':
+      setLocale(action.locale);
+      return;
+    case 'settings.open':
+      openSettings();
+      return;
+  }
 }
 
 function activateAppTab(tabId: string): void {
@@ -282,6 +354,28 @@ async function runAction(action: () => Promise<void>): Promise<void> {
     actionPending.value = false;
   }
 }
+
+function loadAiPanelWidth(): number {
+  if (typeof localStorage === 'undefined') {
+    return DEFAULT_AI_PANEL_WIDTH;
+  }
+  const storedWidth = localStorage.getItem(AI_PANEL_WIDTH_STORAGE_KEY);
+  return storedWidth === null ? DEFAULT_AI_PANEL_WIDTH : clampAiPanelWidth(Number(storedWidth));
+}
+
+function persistAiPanelWidth(width: number): void {
+  if (typeof localStorage === 'undefined') {
+    return;
+  }
+  localStorage.setItem(AI_PANEL_WIDTH_STORAGE_KEY, String(width));
+}
+
+function clampAiPanelWidth(width: number): number {
+  if (!Number.isFinite(width)) {
+    return DEFAULT_AI_PANEL_WIDTH;
+  }
+  return Math.min(Math.max(Math.round(width), MIN_AI_PANEL_WIDTH), MAX_AI_PANEL_WIDTH);
+}
 </script>
 
 <template>
@@ -289,10 +383,11 @@ async function runAction(action: () => Promise<void>): Promise<void> {
     <TerminalTabs
       :tabs="appTabs"
       :active-tab-id="activeAppTabId"
+      :ai-open="aiPanelOpen"
       @activate="activateAppTab"
       @close="closeAppTab"
       @new-terminal="openTerminal"
-      @open-recent="openSettings"
+      @open-a-i="toggleAiPanel"
       @open-settings="openSettings"
       @reorder="reorderApplicationTabs"
       @drag-hover="activateAppTab"
@@ -314,11 +409,24 @@ async function runAction(action: () => Promise<void>): Promise<void> {
       </div>
     </Transition>
 
-    <div class="app-content">
+    <div class="app-content" :style="appContentStyle">
+      <Transition name="ai-panel-slide">
+        <AIPanel
+          v-if="aiPanelOpen"
+          :snapshot="activeSnapshot"
+          :width="aiPanelWidth"
+          @close="aiPanelOpen = false"
+          @resize="resizeAiPanel"
+          @run-app-action="runAiAppAction"
+          @run-terminal-command="runAiTerminalCommand"
+        />
+      </Transition>
+
       <section
         v-if="settingsTabOpen"
         id="settings-panel"
         class="settings-tab-panel"
+        :class="{ 'ai-panel-open': aiPanelOpen }"
         role="tabpanel"
         :aria-hidden="!settingsActive"
         aria-labelledby="app-tab-app-settings"
@@ -328,7 +436,7 @@ async function runAction(action: () => Promise<void>): Promise<void> {
       </section>
       <section
         class="workspace"
-        :class="{ 'settings-covered': settingsActive }"
+        :class="{ 'settings-covered': settingsActive, 'ai-panel-open': aiPanelOpen }"
         aria-label="Terminal workspace"
         :aria-hidden="settingsActive"
         :inert="settingsActive"

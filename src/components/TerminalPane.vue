@@ -6,9 +6,9 @@ import { resolvePaneDropPosition } from '@/domain/tabDrag';
 import type { PaneDropPosition, SplitDirection } from '@/domain/workspace';
 import { t } from '@/i18n/locale';
 import { SessionClient } from '@/services/sessionClient';
+import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { TerminalAdapter } from '@/terminal/terminalAdapter';
-import { TABBY_DEFAULT_SCROLLBACK_LINES } from '@/terminal/terminalConfig';
 
 const props = defineProps<{
   tabId: string;
@@ -25,6 +25,8 @@ const emit = defineEmits<{
 }>();
 
 const store = useWorkspaceStore();
+const appSettings = useAppSettingsStore();
+const { terminalSettings } = appSettings;
 const terminalElement = ref<HTMLElement | null>(null);
 const scrollbarTrackElement = ref<HTMLElement | null>(null);
 const terminalScrollbarVisible = ref(false);
@@ -227,23 +229,20 @@ onMounted(async () => {
   const foreground = cssVar(styles, '--color-text', '#eef3f8');
   const muted = cssVar(styles, '--color-text-muted', 'rgb(255 255 255 / 50%)');
   const accent = cssVar(styles, '--color-accent', '#4fadff');
-  const monoFont = cssVar(
-    styles,
-    '--font-mono',
-    'Source Code Pro, JetBrains Mono, Consolas, monospace',
-  );
+  const monoFont = terminalSettings.value.fontFamily;
 
   adapter = new TerminalAdapter({
     sessionId: props.sessionId,
     initialSequence: store.nextOutputSequence(props.sessionId),
     sessionClient,
+    scrollOnInput: terminalSettings.value.scrollOnInput,
     createTerminal: () =>
       new Terminal({
-        cursorBlink: true,
+        cursorBlink: terminalSettings.value.cursorBlink,
         fontFamily: monoFont,
-        fontSize: 13,
-        lineHeight: 1.35,
-        scrollback: TABBY_DEFAULT_SCROLLBACK_LINES,
+        fontSize: terminalSettings.value.fontSize,
+        lineHeight: terminalSettings.value.lineHeight,
+        scrollback: terminalSettings.value.scrollback,
         theme: {
           background: terminalBackground,
           foreground,

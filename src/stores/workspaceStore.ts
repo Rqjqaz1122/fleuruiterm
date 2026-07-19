@@ -29,6 +29,9 @@ import { SessionClient, type OpenLocalSessionOptions } from '@/services/sessionC
 const DEFAULT_TERMINAL_COLUMNS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
 const MAX_OUTPUT_HISTORY_BYTES = 2 * 1024 * 1024;
+const DEFAULT_AI_OUTPUT_CONTEXT_BYTES = 16 * 1024;
+const DEFAULT_TERMINAL_OUTPUT_IDLE_MS = 900;
+const DEFAULT_TERMINAL_OUTPUT_TIMEOUT_MS = 12_000;
 
 export interface OpenTerminalTabOptions {
   shell?: string;
@@ -38,8 +41,22 @@ export interface OpenTerminalTabOptions {
   title?: string;
 }
 
+export interface TerminalOutputCursor {
+  sessionId: string;
+  sequence: number;
+}
+
+export interface WaitForTerminalOutputOptions {
+  idleMs?: number;
+  maxBytes?: number;
+  timeoutMs?: number;
+}
+
 export type WorkspaceErrorCode =
-  'OPEN_TERMINAL_FAILED' | 'CLOSE_TERMINAL_FAILED' | 'CLOSE_TAB_FAILED';
+  'OPEN_TERMINAL_FAILED'
+  | 'CLOSE_TERMINAL_FAILED'
+  | 'CLOSE_TAB_FAILED'
+  | 'WRITE_TERMINAL_FAILED';
 
 export interface WorkspaceSessionClient {
   openLocal(
@@ -196,6 +213,52 @@ export function createWorkspaceStore(
       return (lastOutputSequence.get(sessionId) ?? 0) + 1;
     }
 
+    async function writeToFocusedSession(input: string): Promise<void> {
+      const sessionId = workspace.value.focusedSessionId;
+      if (sessionId === null) {
+        const error = new Error('No active terminal session');
+        errorCode.value = 'WRITE_TERMINAL_FAILED';
+        errorMessage.value = error.message;
+        throw error;
+      }
+      errorMessage.value = null;
+      errorCode.value = null;
+      try {
+        await sessionClient.write(sessionId, encodeTerminalInput(input));
+      } catch (error) {
+        errorCode.value = 'WRITE_TERMINAL_FAILED';
+        errorMessage.value = userVisibleError(error, 'Unable to write to terminal');
+        throw error;
+      }
+    }
+
+    function getFocusedTerminalOutput(maxBytes = DEFAULT_AI_OUTPUT_CONTEXT_BYTES): string {
+      const sessionId = workspace.value.focusedSessionId;
+      return sessionId === null ? '' : collectTerminalOutput(sessionId, 0, maxBytes);
+    }
+
+    function getFocusedTerminalOutputCursor(): TerminalOutputCursor | null {
+      const sessionId = workspace.value.focusedSessionId;
+      if (sessionId === null) {
+        return null;
+      }
+      return {
+        sessionId,
+        sequence: lastOutputSequence.get(sessionId) ?? 0,
+      };
+    }
+
+    function waitForFocusedTerminalOutput(
+      cursor: TerminalOutputCursor,
+      options: WaitForTerminalOutputOptions = {},
+    ): Promise<string> {
+      const sessionId = workspace.value.focusedSessionId;
+      if (sessionId === null || sessionId !== cursor.sessionId) {
+        return Promise.resolve('');
+      }
+      return waitForTerminalOutputAfter(cursor, options);
+    }
+
     async function openSession(options: OpenTerminalTabOptions = {}): Promise<SessionSnapshot> {
       errorMessage.value = null;
       errorCode.value = null;
@@ -276,6 +339,74 @@ export function createWorkspaceStore(
       settlePendingSession(sessionId);
     }
 
+    function waitForTerminalOutputAfter(
+      cursor: TerminalOutputCursor,
+      options: WaitForTerminalOutputOptions,
+    ): Promise<string> {
+      const maxBytes = options.maxBytes ?? DEFAULT_AI_OUTPUT_CONTEXT_BYTES;
+      const idleMs = options.idleMs ?? DEFAULT_TERMINAL_OUTPUT_IDLE_MS;
+      const timeoutMs = options.timeoutMs ?? DEFAULT_TERMINAL_OUTPUT_TIMEOUT_MS;
+
+      return new Promise((resolve) => {
+        let idleTimer: ReturnType<typeof setTimeout> | null = null;
+        let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+        let unsubscribe = () => undefined;
+
+        const settle = () => {
+          if (idleTimer !== null) {
+            clearTimeout(idleTimer);
+          }
+          if (timeoutTimer !== null) {
+            clearTimeout(timeoutTimer);
+          }
+          unsubscribe();
+          resolve(collectTerminalOutput(cursor.sessionId, cursor.sequence, maxBytes));
+        };
+        const scheduleIdle = () => {
+          if (idleTimer !== null) {
+            clearTimeout(idleTimer);
+          }
+          idleTimer = setTimeout(settle, idleMs);
+        };
+
+        unsubscribe = subscribeToSession(cursor.sessionId, (chunk) => {
+          if (chunk.sequence > cursor.sequence) {
+            scheduleIdle();
+          }
+        });
+
+        if (collectTerminalOutput(cursor.sessionId, cursor.sequence, maxBytes).trim()) {
+          scheduleIdle();
+        }
+        timeoutTimer = setTimeout(settle, timeoutMs);
+      });
+    }
+
+    function collectTerminalOutput(
+      sessionId: string,
+      afterSequence: number,
+      maxBytes: number,
+    ): string {
+      const chunks = (outputHistory.get(sessionId) ?? []).filter(
+        (chunk) => chunk.sequence > afterSequence,
+      );
+      const selectedChunks: TerminalChunk[] = [];
+      let byteCount = 0;
+      for (let index = chunks.length - 1; index >= 0; index -= 1) {
+        const chunk = chunks[index];
+        if (chunk === undefined) {
+          continue;
+        }
+        selectedChunks.unshift(chunk);
+        byteCount += chunk.payload.length;
+        if (byteCount >= maxBytes) {
+          break;
+        }
+      }
+      const payload = selectedChunks.flatMap((chunk) => chunk.payload);
+      return stripTerminalControlSequences(decodeTerminalPayload(payload));
+    }
+
     async function respondToPasswordPrompt(chunk: TerminalChunk): Promise<void> {
       const password = passwordPromptResponses.get(chunk.sessionId);
       if (!password) {
@@ -347,6 +478,10 @@ export function createWorkspaceStore(
       closeTab,
       subscribeToSession,
       nextOutputSequence,
+      writeToFocusedSession,
+      getFocusedTerminalOutput,
+      getFocusedTerminalOutputCursor,
+      waitForFocusedTerminalOutput,
     };
   });
 }
@@ -356,6 +491,15 @@ const terminalTextEncoder = new TextEncoder();
 
 function decodeTerminalPayload(payload: number[]): string {
   return terminalTextDecoder.decode(new Uint8Array(payload));
+}
+
+function stripTerminalControlSequences(output: string): string {
+  return output
+    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim();
 }
 
 function encodeTerminalInput(input: string): Uint8Array {

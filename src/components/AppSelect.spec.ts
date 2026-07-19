@@ -43,4 +43,19 @@ describe('AppSelect', () => {
     expect(wrapper.emitted('update:modelValue')).toEqual([['local']]);
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false);
   });
+
+  it('can open the menu above the trigger', async () => {
+    const wrapper = mount(AppSelect, {
+      props: {
+        modelValue: 'ssh',
+        options,
+        ariaLabel: 'Method',
+        menuPlacement: 'top',
+      },
+    });
+
+    await wrapper.get('.app-select-button').trigger('click');
+
+    expect(wrapper.get('[role="listbox"]').classes()).toContain('app-select-menu-top');
+  });
 });

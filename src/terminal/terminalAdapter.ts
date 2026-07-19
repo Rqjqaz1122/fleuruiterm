@@ -44,6 +44,7 @@ export interface TerminalAdapterOptions {
   sessionId: string;
   initialSequence?: number;
   sessionClient: TerminalSessionClient;
+  scrollOnInput?: boolean;
   createTerminal: () => TerminalPort;
   createFitAddon: () => FitAddonPort;
   createResizeObserver: (callback: () => void) => ResizeObserverPort;
@@ -89,7 +90,9 @@ export class TerminalAdapter {
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.open(element);
     this.inputSubscription = this.terminal.onData((input) => {
-      this.terminal.scrollToBottom();
+      if (this.options.scrollOnInput ?? true) {
+        this.terminal.scrollToBottom();
+      }
       void this.options.sessionClient
         .write(this.options.sessionId, new TextEncoder().encode(input))
         .catch((error: unknown) => this.reportClientError(error));

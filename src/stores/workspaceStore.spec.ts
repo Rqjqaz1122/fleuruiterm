@@ -152,6 +152,76 @@ describe('workspace store', () => {
     expect(listener).toHaveBeenCalledWith(chunk);
   });
 
+  it('writes AI terminal input to the focused session', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab();
+
+    await store.writeToFocusedSession('pwd\r');
+
+    expect(client.write).toHaveBeenCalledWith(
+      'session-1',
+      new TextEncoder().encode('pwd\r'),
+    );
+  });
+
+  it('exposes cleaned focused terminal output for AI context', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab();
+    store.subscribeToSession('session-1', vi.fn());
+
+    await client.emit({
+      sessionId: 'session-1',
+      sequence: 1,
+      payload: Array.from(new TextEncoder().encode('\x1B[32mhello\x1B[0m\r\n')),
+    });
+
+    expect(store.getFocusedTerminalOutput()).toBe('hello');
+  });
+
+  it('waits for focused terminal output after a cursor', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+      const store = useStore();
+      await store.openTab();
+      const cursor = store.getFocusedTerminalOutputCursor();
+      if (cursor === null) {
+        throw new Error('expected cursor');
+      }
+
+      const output = store.waitForFocusedTerminalOutput(cursor, {
+        idleMs: 20,
+        timeoutMs: 100,
+      });
+      await client.emit({
+        sessionId: 'session-1',
+        sequence: 1,
+        payload: Array.from(new TextEncoder().encode('done\r\n')),
+      });
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(output).resolves.toBe('done');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a stable error when AI terminal input has no active session', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client);
+    const store = useStore();
+
+    await expect(store.writeToFocusedSession('pwd\r')).rejects.toThrow('No active terminal session');
+
+    expect(store.errorCode).toBe('WRITE_TERMINAL_FAILED');
+    expect(store.errorMessage).toBe('No active terminal session');
+  });
+
   it('preserves the earliest buffered sequence for terminal remount', async () => {
     const client = createClient();
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));

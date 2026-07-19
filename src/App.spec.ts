@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addTab, createWorkspace } from '@/domain/workspace';
 import { setLocale } from '@/i18n/locale';
+import { defaultTerminalSettings, useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 import App from './App.vue';
@@ -14,6 +15,7 @@ describe('FleurTerm app shell', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     setLocale('en-US');
+    localStorage.clear();
   });
 
   it('opens a local terminal from the empty workspace', async () => {
@@ -405,7 +407,8 @@ describe('FleurTerm app shell', () => {
     const wrapper = mount(App);
     await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
 
-    await wrapper.get('.settings-locale-toggle button:nth-child(2)').trigger('click');
+    await wrapper.get('[data-testid="settings-language-select"]').trigger('click');
+    await wrapper.get('[data-value="zh-CN"]').trigger('click');
 
     expect(wrapper.get('[data-tab-id="app-settings"] .tab-label').text()).toBe('设置');
     expect(wrapper.get('[data-testid="tabbar-settings"]').attributes('aria-label')).toBe(
@@ -425,6 +428,110 @@ describe('FleurTerm app shell', () => {
 
     expect(wrapper.get('[role="alert"]').text()).toContain('无法打开终端');
     expect(wrapper.get('[role="alert"]').text()).not.toContain('internal shell launch detail');
+  });
+
+  it('opens the AI side panel from the tab bar', async () => {
+    const wrapper = mount(App);
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+
+    expect(wrapper.get('[aria-label="AI panel"]').exists()).toBe(true);
+    expect(wrapper.get('.workspace').classes()).toContain('ai-panel-open');
+    expect(wrapper.get('[data-testid="tabbar-ai"]').attributes('aria-pressed')).toBe('true');
+  });
+
+  it('resizes the AI side panel and applies the layout offset', async () => {
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          AIPanel: {
+            emits: ['resize'],
+            template:
+              '<button aria-label="AI panel" data-testid="resize-ai" @click="$emit(\'resize\', 520)">Resize</button>',
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+    expect(wrapper.get('.app-content').attributes('style')).toContain('--ai-panel-width: 380px');
+
+    await wrapper.get('[data-testid="resize-ai"]').trigger('click');
+
+    expect(wrapper.get('.app-content').attributes('style')).toContain('--ai-panel-width: 520px');
+    expect(localStorage.getItem('fleurterm.aiPanelWidth')).toBe('520');
+  });
+
+  it('writes AI terminal commands to the focused terminal session', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.writeToFocusedSession = vi.fn(async () => undefined);
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          TerminalPane: true,
+          AIPanel: {
+            emits: ['runTerminalCommand'],
+            template:
+              '<button data-testid="ai-run-command" @click="$emit(\'runTerminalCommand\', \'pwd\')">Run</button>',
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+    await wrapper.get('[data-testid="ai-run-command"]').trigger('click');
+
+    expect(store.writeToFocusedSession).toHaveBeenCalledWith('pwd\r');
+  });
+
+  it('lets AI application actions update terminal settings', async () => {
+    const appSettings = useAppSettingsStore();
+    appSettings.replaceRuntimeSettings({ terminal: defaultTerminalSettings });
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          AIPanel: {
+            emits: ['runAppAction'],
+            template:
+              '<button data-testid="ai-update-setting" @click="$emit(\'runAppAction\', { type: \'settings.updateTerminal\', patch: { fontSize: 16 } })">Apply</button>',
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+    await wrapper.get('[data-testid="ai-update-setting"]').trigger('click');
+
+    expect(appSettings.terminalSettings.value.fontSize).toBe(16);
+  });
+
+  it('lets AI application actions open an SSH terminal', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => {
+      store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    });
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          TerminalPane: true,
+          AIPanel: {
+            emits: ['runAppAction'],
+            template:
+              '<button data-testid="ai-open-ssh" @click="$emit(\'runAppAction\', { type: \'terminal.openSsh\', host: \'example.com\', user: \'root\', port: 2222 })">Open</button>',
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+    await wrapper.get('[data-testid="ai-open-ssh"]').trigger('click');
+
+    expect(store.openTab).toHaveBeenCalledWith({
+      shell: 'ssh',
+      args: ['-p', '2222', 'root@example.com'],
+      title: 'SSH root@example.com',
+    });
   });
 });
 
