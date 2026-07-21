@@ -7,8 +7,6 @@ export interface AppSettingsPayload {
   error: string | null;
 }
 
-export type CredentialVaultStatus = 'unconfigured' | 'locked' | 'unlocked';
-
 /** Persistent app settings live in Tauri's app config directory, never in the browser cache. */
 export class SettingsClient {
   get available(): boolean {
@@ -52,34 +50,6 @@ export class SettingsClient {
       return;
     }
     await invoke('delete_connection_password', { connectionId });
-  }
-
-  async credentialVaultStatus(): Promise<CredentialVaultStatus> {
-    if (!this.available) {
-      return 'unlocked';
-    }
-    return (await invoke('credential_vault_status')) as CredentialVaultStatus;
-  }
-
-  async configureCredentialVault(passphrase: string): Promise<void> {
-    if (!this.available) {
-      return;
-    }
-    await invoke('configure_credential_vault', { passphrase });
-  }
-
-  async unlockCredentialVault(passphrase: string): Promise<void> {
-    if (!this.available) {
-      return;
-    }
-    await invoke('unlock_credential_vault', { passphrase });
-  }
-
-  async lockCredentialVault(): Promise<void> {
-    if (!this.available) {
-      return;
-    }
-    await invoke('lock_credential_vault');
   }
 
   async setWindowOpacity(opacity: number): Promise<void> {

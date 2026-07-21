@@ -102,7 +102,7 @@ describe('SettingsView', () => {
     expect(loadPasswordsSpy).not.toHaveBeenCalled();
   });
 
-  it('unlocks the app vault only when a saved password is used', async () => {
+  it('loads a saved password without prompting for a master password', async () => {
     vi.spyOn(settingsClient, 'available', 'get').mockReturnValue(true);
     const loadSettingsSpy = vi.spyOn(settingsClient, 'load').mockResolvedValue({
       exists: true,
@@ -128,10 +128,6 @@ describe('SettingsView', () => {
       },
       error: null,
     });
-    const vaultStatusSpy = vi
-      .spyOn(settingsClient, 'credentialVaultStatus')
-      .mockResolvedValue('locked');
-    const unlockVaultSpy = vi.spyOn(settingsClient, 'unlockCredentialVault').mockResolvedValue();
     const loadPasswordsSpy = vi
       .spyOn(settingsClient, 'loadPasswords')
       .mockResolvedValue({ production: 'ssh-password' });
@@ -145,22 +141,16 @@ describe('SettingsView', () => {
       .find((card) => card.text().includes('Production'));
     await productionCard?.get('.settings-connection-main').trigger('click');
 
-    expect(wrapper.emitted('openConnection')).toBeUndefined();
-    expect(wrapper.get('[data-testid="vault-passphrase"]').exists()).toBe(true);
-    await wrapper.get('[data-testid="vault-passphrase"]').setValue('vault passphrase');
-    await wrapper.get('[data-testid="unlock-credential-vault"]').trigger('click');
-
     await vi.waitFor(() => {
-      expect(unlockVaultSpy).toHaveBeenCalledWith('vault passphrase');
       expect(loadPasswordsSpy).toHaveBeenCalledWith(['production']);
       expect(wrapper.emitted('openConnection')?.at(-1)).toEqual([
         expect.objectContaining({ id: 'production', password: 'ssh-password' }),
       ]);
     });
-    expect(vaultStatusSpy).toHaveBeenCalledOnce();
+    expect(wrapper.find('[data-testid="vault-passphrase"]').exists()).toBe(false);
   });
 
-  it('creates the app vault before saving the first connection password', async () => {
+  it('saves the first connection password without creating a master password', async () => {
     vi.spyOn(settingsClient, 'available', 'get').mockReturnValue(true);
     const loadSettingsSpy = vi.spyOn(settingsClient, 'load').mockResolvedValue({
       exists: true,
@@ -174,10 +164,6 @@ describe('SettingsView', () => {
       error: null,
     });
     vi.spyOn(settingsClient, 'save').mockResolvedValue();
-    vi.spyOn(settingsClient, 'credentialVaultStatus').mockResolvedValue('unconfigured');
-    const configureVaultSpy = vi
-      .spyOn(settingsClient, 'configureCredentialVault')
-      .mockResolvedValue();
     const savePasswordSpy = vi.spyOn(settingsClient, 'savePassword').mockResolvedValue();
     const wrapper = mount(SettingsView);
 
@@ -198,15 +184,65 @@ describe('SettingsView', () => {
     await wrapper.get('[data-testid="save-connection"]').trigger('click');
 
     await vi.waitFor(() => {
-      expect(wrapper.find('[data-testid="configure-credential-vault"]').exists()).toBe(true);
+      expect(savePasswordSpy).toHaveBeenCalledWith(expect.any(String), 'secret');
     });
-    await wrapper.get('[data-testid="vault-passphrase"]').setValue('vault passphrase');
-    await wrapper.get('[data-testid="vault-passphrase-confirmation"]').setValue('vault passphrase');
-    await wrapper.get('[data-testid="configure-credential-vault"]').trigger('click');
+    expect(wrapper.find('[data-testid="vault-passphrase"]').exists()).toBe(false);
+  });
+
+  it('asks for a replacement password when a legacy password is unavailable', async () => {
+    vi.spyOn(settingsClient, 'available', 'get').mockReturnValue(true);
+    const loadSettingsSpy = vi.spyOn(settingsClient, 'load').mockResolvedValue({
+      exists: true,
+      path: '/tmp/settings.json',
+      settings: {
+        workbench: {
+          connections: [
+            {
+              id: 'production',
+              name: 'Production',
+              group: 'Servers',
+              method: 'ssh',
+              host: 'prod.example.com',
+              user: 'deploy',
+              port: 22,
+              authMethod: 'password',
+              hasPassword: true,
+              password: '',
+            },
+          ],
+          recentConnectionIds: [],
+        },
+      },
+      error: null,
+    });
+    vi.spyOn(settingsClient, 'loadPasswords').mockResolvedValue({});
+    const savePasswordSpy = vi.spyOn(settingsClient, 'savePassword').mockResolvedValue();
+    const wrapper = mount(SettingsView);
+
+    await vi.waitFor(() => expect(loadSettingsSpy).toHaveBeenCalledOnce());
+    await wrapper.get('[data-section="connections"]').trigger('click');
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Production'));
+    const productionCard = wrapper
+      .findAll('.settings-connection-card')
+      .find((card) => card.text().includes('Production'));
+    await productionCard?.get('.settings-connection-main').trigger('click');
 
     await vi.waitFor(() => {
-      expect(configureVaultSpy).toHaveBeenCalledWith('vault passphrase');
-      expect(savePasswordSpy).toHaveBeenCalledWith(expect.any(String), 'secret');
+      expect(wrapper.get('.connection-dialog-password').exists()).toBe(true);
+      expect(wrapper.text()).toContain('save it again');
+    });
+    expect(wrapper.find('[data-testid="vault-passphrase"]').exists()).toBe(false);
+
+    await wrapper
+      .get('.connection-dialog-password input[type="password"]')
+      .setValue('replacement-password');
+    await wrapper
+      .get('.password-dialog-actions .connection-dialog-primary-button')
+      .trigger('click');
+    await wrapper.get('[data-testid="save-connection"]').trigger('click');
+
+    await vi.waitFor(() => {
+      expect(savePasswordSpy).toHaveBeenCalledWith('production', 'replacement-password');
     });
   });
 

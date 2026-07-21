@@ -4,7 +4,7 @@ mod credentials;
 pub mod ipc;
 pub mod session;
 
-use credential_vault::{CredentialVault, CredentialVaultStatus};
+use credential_vault::{CredentialVault, CredentialVaultError, platform_device_identifier};
 use ipc::session_commands::{
     AppState, session_ack_output, session_close, session_interrupt, session_open_local,
     session_resize, session_write,
@@ -17,6 +17,7 @@ use zeroize::Zeroize;
 
 const APP_SETTINGS_FILE_NAME: &str = "settings.json";
 const CREDENTIAL_VAULT_FILE_NAME: &str = "credentials.vault";
+const CREDENTIAL_INSTALLATION_KEY_FILE_NAME: &str = "credentials.key";
 const MIN_WINDOW_OPACITY: f64 = 0.58;
 const MAX_WINDOW_OPACITY: f64 = 1.0;
 
@@ -168,83 +169,6 @@ fn delete_connection_password(
 }
 
 #[tauri::command]
-fn credential_vault_status(
-    vault: tauri::State<'_, Mutex<CredentialVault>>,
-) -> Result<CredentialVaultStatus, String> {
-    #[cfg(target_os = "macos")]
-    {
-        vault
-            .lock()
-            .map(|credential_vault| credential_vault.status())
-            .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = vault;
-        Ok(CredentialVaultStatus::Unlocked)
-    }
-}
-
-#[tauri::command]
-fn configure_credential_vault(
-    mut passphrase: String,
-    vault: tauri::State<'_, Mutex<CredentialVault>>,
-) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let result = vault
-        .lock()
-        .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
-        .configure(&passphrase)
-        .map_err(|error| error.to_string());
-
-    #[cfg(not(target_os = "macos"))]
-    let result = {
-        let _ = vault;
-        Ok(())
-    };
-
-    passphrase.zeroize();
-    result
-}
-
-#[tauri::command]
-fn unlock_credential_vault(
-    mut passphrase: String,
-    vault: tauri::State<'_, Mutex<CredentialVault>>,
-) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let result = vault
-        .lock()
-        .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
-        .unlock(&passphrase)
-        .map_err(|error| error.to_string());
-
-    #[cfg(not(target_os = "macos"))]
-    let result = {
-        let _ = vault;
-        Ok(())
-    };
-
-    passphrase.zeroize();
-    result
-}
-
-#[tauri::command]
-fn lock_credential_vault(vault: tauri::State<'_, Mutex<CredentialVault>>) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        vault
-            .lock()
-            .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
-            .lock();
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = vault;
-    Ok(())
-}
-
-#[tauri::command]
 fn set_window_opacity(window: tauri::Window, opacity: f64) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -267,6 +191,16 @@ fn set_window_opacity(window: tauri::Window, opacity: f64) -> Result<(), String>
 
 fn normalize_window_opacity(opacity: f64) -> f64 {
     opacity.clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
+}
+
+fn device_identifier_for_vault(identifier_result: Result<String, CredentialVaultError>) -> String {
+    match identifier_result {
+        Ok(identifier) => identifier,
+        Err(error) => {
+            tracing::warn!(%error, "device-bound credential storage is unavailable");
+            String::new()
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -331,8 +265,11 @@ pub fn run() {
         .manage(AppState::new())
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
+            let device_identifier = device_identifier_for_vault(platform_device_identifier());
             app.manage(Mutex::new(CredentialVault::new(
                 directory.join(CREDENTIAL_VAULT_FILE_NAME),
+                directory.join(CREDENTIAL_INSTALLATION_KEY_FILE_NAME),
+                device_identifier,
             )));
             Ok(())
         })
@@ -348,10 +285,6 @@ pub fn run() {
             load_connection_passwords,
             save_connection_password,
             delete_connection_password,
-            credential_vault_status,
-            configure_credential_vault,
-            unlock_credential_vault,
-            lock_credential_vault,
             set_window_opacity
         ])
         .build(tauri::generate_context!())
@@ -375,12 +308,23 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_window_opacity;
+    use super::{
+        credential_vault::CredentialVaultError, device_identifier_for_vault,
+        normalize_window_opacity,
+    };
 
     #[test]
     fn window_opacity_is_limited_to_the_supported_range() {
         assert_eq!(normalize_window_opacity(0.2), 0.58);
         assert_eq!(normalize_window_opacity(0.75), 0.75);
         assert_eq!(normalize_window_opacity(1.4), 1.0);
+    }
+
+    #[test]
+    fn device_identifier_failure_does_not_abort_application_setup() {
+        let identifier =
+            device_identifier_for_vault(Err(CredentialVaultError::DeviceIdentifierUnavailable));
+
+        assert!(identifier.is_empty());
     }
 }

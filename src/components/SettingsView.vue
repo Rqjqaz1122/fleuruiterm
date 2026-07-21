@@ -34,7 +34,6 @@ type ThemeMode = 'system' | 'dark' | 'light';
 type ThemeTone = 'dark' | 'light';
 type ConnectionDialogIntent = 'create' | 'edit';
 type ConnectionFormTabId = 'general' | 'ports' | 'advanced' | 'loginScripts';
-type CredentialVaultDialogMode = 'configure' | 'unlock';
 
 export interface WorkbenchConnection {
   id: string;
@@ -154,12 +153,7 @@ const privateKeyInput = ref('');
 const passwordDialogOpen = ref(false);
 const passwordValue = ref('');
 const passwordChanged = ref(false);
-const vaultDialogMode = ref<CredentialVaultDialogMode | null>(null);
-const vaultPassphrase = ref('');
-const vaultPassphraseConfirmation = ref('');
-const vaultDialogError = ref('');
-const vaultDialogBusy = ref(false);
-let pendingVaultContinuation: (() => Promise<void>) | null = null;
+const credentialPersistenceError = ref('');
 const selectedLocale = computed<AppLocale>({
   get: () => locale.value,
   set: (nextLocale) => setLocale(nextLocale),
@@ -349,10 +343,8 @@ if (settingsClient.available) {
 if (typeof window !== 'undefined') {
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
-      if (vaultDialogMode.value !== null) {
-        closeCredentialVaultDialog();
-      } else if (passwordDialogOpen.value) {
-        passwordDialogOpen.value = false;
+      if (passwordDialogOpen.value) {
+        closePasswordDialog();
       } else {
         closeDialog();
       }
@@ -415,17 +407,31 @@ function toggleGroup(group: string): void {
 
 function openConnection(connection: WorkbenchConnection): void {
   if (connection.hasPassword && !connection.password) {
-    void runWithUnlockedCredentialVault(async () => {
-      const passwords = await settingsClient.loadPasswords([connection.id]);
-      const password = passwords[connection.id];
-      if (!password) {
-        throw new Error('VAULT_PASSWORD_NOT_FOUND');
-      }
-      emitConnection({ ...connection, password });
-    });
+    void loadStoredPasswordAndOpen(connection);
     return;
   }
   emitConnection(connection);
+}
+
+async function loadStoredPasswordAndOpen(connection: WorkbenchConnection): Promise<void> {
+  try {
+    const passwords = await settingsClient.loadPasswords([connection.id]);
+    const password = passwords[connection.id];
+    if (!password) {
+      openPasswordReplacement(connection, labels.value.dialog.credentialPasswordNotFound);
+      return;
+    }
+    emitConnection({ ...connection, password });
+  } catch {
+    openPasswordReplacement(connection, labels.value.dialog.credentialOperationFailed);
+  }
+}
+
+function openPasswordReplacement(connection: WorkbenchConnection, message: string): void {
+  startEditConnection(connection.id);
+  credentialPersistenceError.value = message;
+  passwordValue.value = '';
+  passwordDialogOpen.value = true;
 }
 
 function emitConnection(connection: WorkbenchConnection): void {
@@ -443,6 +449,7 @@ function startCreateConnection(): void {
   activeFormTab.value = 'general';
   privateKeyInput.value = '';
   passwordChanged.value = false;
+  credentialPersistenceError.value = '';
 }
 
 function startEditConnection(connectionId: string): void {
@@ -456,13 +463,16 @@ function startEditConnection(connectionId: string): void {
   activeFormTab.value = 'general';
   privateKeyInput.value = '';
   passwordChanged.value = false;
+  credentialPersistenceError.value = '';
 }
 
 function closeDialog(): void {
   dialogIntent.value = null;
   editingConnectionId.value = null;
   passwordDialogOpen.value = false;
+  passwordValue.value = '';
   passwordChanged.value = false;
+  credentialPersistenceError.value = '';
 }
 
 function updateDraft<Key extends keyof ConnectionDraft>(
@@ -539,14 +549,9 @@ async function saveDraftAfterCredentialPersistence(): Promise<void> {
   };
 
   try {
-    const vaultStatus = await settingsClient.credentialVaultStatus();
-    if (!normalized.password && vaultStatus === 'unconfigured') {
-      applyDraft();
-      return;
-    }
-    await runWithUnlockedCredentialVault(persistAndApplyDraft, vaultStatus);
-  } catch (error) {
-    showCredentialVaultError(error);
+    await persistAndApplyDraft();
+  } catch {
+    credentialPersistenceError.value = labels.value.dialog.credentialOperationFailed;
   }
 }
 
@@ -563,11 +568,9 @@ function deleteConnection(connectionId: string): void {
     recentConnectionIds.value = recentConnectionIds.value.filter((id) => id !== connectionId);
     closeDialog();
   };
-  if (connection?.hasPassword) {
-    void runWithUnlockedCredentialVault(removeConnection);
-  } else {
-    void removeConnection();
-  }
+  void removeConnection().catch(() => {
+    credentialPersistenceError.value = labels.value.dialog.credentialOperationFailed;
+  });
 }
 
 function addPrivateKey(): void {
@@ -581,11 +584,16 @@ function addPrivateKey(): void {
 
 function openPasswordDialog(): void {
   if (draft.value.hasPassword && !draft.value.password && editingConnectionId.value !== null) {
-    void runWithUnlockedCredentialVault(async () => {
-      const passwords = await settingsClient.loadPasswords([editingConnectionId.value!]);
-      passwordValue.value = passwords[editingConnectionId.value!] ?? '';
-      passwordDialogOpen.value = true;
-    });
+    const connectionId = editingConnectionId.value;
+    void settingsClient
+      .loadPasswords([connectionId])
+      .then((passwords) => {
+        passwordValue.value = passwords[connectionId] ?? '';
+        passwordDialogOpen.value = true;
+      })
+      .catch(() => {
+        credentialPersistenceError.value = labels.value.dialog.credentialOperationFailed;
+      });
     return;
   }
   passwordValue.value = draft.value.password;
@@ -593,113 +601,23 @@ function openPasswordDialog(): void {
 }
 
 function confirmPassword(): void {
-  updateDraft('password', passwordValue.value);
-  updateDraft('hasPassword', Boolean(passwordValue.value.trim()));
+  const password = passwordValue.value;
+  updateDraft('password', password);
+  updateDraft('hasPassword', Boolean(password.trim()));
   passwordChanged.value = true;
+  closePasswordDialog();
+}
+
+function closePasswordDialog(): void {
   passwordDialogOpen.value = false;
+  passwordValue.value = '';
 }
 
 function forgetPassword(): void {
   updateDraft('password', '');
   updateDraft('hasPassword', false);
+  passwordValue.value = '';
   passwordChanged.value = true;
-}
-
-async function runWithUnlockedCredentialVault(
-  continuation: () => Promise<void>,
-  knownStatus?: Awaited<ReturnType<typeof settingsClient.credentialVaultStatus>>,
-): Promise<void> {
-  let status: Awaited<ReturnType<typeof settingsClient.credentialVaultStatus>>;
-  try {
-    status = knownStatus ?? (await settingsClient.credentialVaultStatus());
-  } catch (error) {
-    showCredentialVaultError(error);
-    return;
-  }
-  if (status === 'unlocked') {
-    try {
-      await continuation();
-    } catch (error) {
-      pendingVaultContinuation = null;
-      vaultDialogMode.value = 'unlock';
-      vaultDialogError.value = vaultErrorMessage(error);
-    }
-    return;
-  }
-  pendingVaultContinuation = continuation;
-  vaultDialogMode.value = status === 'unconfigured' ? 'configure' : 'unlock';
-  vaultPassphrase.value = '';
-  vaultPassphraseConfirmation.value = '';
-  vaultDialogError.value = '';
-}
-
-function showCredentialVaultError(error: unknown): void {
-  pendingVaultContinuation = null;
-  vaultDialogMode.value = 'unlock';
-  vaultPassphrase.value = '';
-  vaultPassphraseConfirmation.value = '';
-  vaultDialogError.value = vaultErrorMessage(error);
-}
-
-function closeCredentialVaultDialog(): void {
-  if (vaultDialogBusy.value) {
-    return;
-  }
-  vaultDialogMode.value = null;
-  vaultPassphrase.value = '';
-  vaultPassphraseConfirmation.value = '';
-  vaultDialogError.value = '';
-  pendingVaultContinuation = null;
-}
-
-async function submitCredentialVaultDialog(): Promise<void> {
-  const mode = vaultDialogMode.value;
-  if (mode === null || vaultDialogBusy.value) {
-    return;
-  }
-  if (vaultPassphrase.value.length < 8) {
-    vaultDialogError.value = labels.value.dialog.vaultPassphraseTooShort;
-    return;
-  }
-  if (mode === 'configure' && vaultPassphrase.value !== vaultPassphraseConfirmation.value) {
-    vaultDialogError.value = labels.value.dialog.vaultPassphraseMismatch;
-    return;
-  }
-
-  vaultDialogBusy.value = true;
-  vaultDialogError.value = '';
-  try {
-    if (mode === 'configure') {
-      await settingsClient.configureCredentialVault(vaultPassphrase.value);
-      vaultDialogMode.value = 'unlock';
-      vaultPassphraseConfirmation.value = '';
-    } else {
-      await settingsClient.unlockCredentialVault(vaultPassphrase.value);
-    }
-    const continuation = pendingVaultContinuation;
-    if (continuation !== null) {
-      await continuation();
-    }
-    vaultDialogMode.value = null;
-    pendingVaultContinuation = null;
-    vaultPassphrase.value = '';
-    vaultPassphraseConfirmation.value = '';
-  } catch (error) {
-    vaultDialogError.value = vaultErrorMessage(error);
-  } finally {
-    vaultDialogBusy.value = false;
-  }
-}
-
-function vaultErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes('VAULT_INVALID_PASSPHRASE')) {
-    return labels.value.dialog.vaultInvalidPassphrase;
-  }
-  if (message.includes('VAULT_PASSWORD_NOT_FOUND')) {
-    return labels.value.dialog.vaultPasswordNotFound;
-  }
-  return labels.value.dialog.vaultOperationFailed;
 }
 
 function resetTerminalColors(): void {
@@ -1436,22 +1354,9 @@ const enLabels = {
     passwordEmptyHint: 'No password saved for this connection.',
     passwordSet: 'Set password',
     passwordForget: 'Forget',
-    vaultConfigureTitle: 'Create credential vault',
-    vaultUnlockTitle: 'Unlock credential vault',
-    vaultConfigureDescription:
-      'Create a FleurTerm master password. Connection passwords will be encrypted outside the system keychain.',
-    vaultUnlockDescription:
-      'Enter your FleurTerm master password to use the saved connection password.',
-    vaultPassphrase: 'Master password',
-    vaultPassphraseConfirmation: 'Confirm master password',
-    vaultCreate: 'Create vault',
-    vaultUnlock: 'Unlock',
-    vaultPassphraseTooShort: 'The master password must contain at least 8 characters.',
-    vaultPassphraseMismatch: 'The master passwords do not match.',
-    vaultInvalidPassphrase: 'The master password is incorrect.',
-    vaultPasswordNotFound:
+    credentialPasswordNotFound:
       'The saved password was not found. Edit the connection and save it again.',
-    vaultOperationFailed: 'The credential vault operation failed.',
+    credentialOperationFailed: 'FleurTerm could not access the encrypted connection password.',
     connectionPrivateKeys: 'Private keys',
     privateKeyPlaceholder: 'Path to private key',
     addPrivateKey: 'Add key',
@@ -1619,19 +1524,8 @@ const zhLabels: typeof enLabels = {
     passwordEmptyHint: '此连接未保存密码。',
     passwordSet: '设置密码',
     passwordForget: '忘记',
-    vaultConfigureTitle: '创建凭据保险库',
-    vaultUnlockTitle: '解锁凭据保险库',
-    vaultConfigureDescription: '设置 FleurTerm 独立主密码，连接密码将加密保存，不使用系统钥匙串。',
-    vaultUnlockDescription: '输入 FleurTerm 主密码以使用已保存的连接密码。',
-    vaultPassphrase: '主密码',
-    vaultPassphraseConfirmation: '确认主密码',
-    vaultCreate: '创建保险库',
-    vaultUnlock: '解锁',
-    vaultPassphraseTooShort: '主密码至少需要 8 个字符。',
-    vaultPassphraseMismatch: '两次输入的主密码不一致。',
-    vaultInvalidPassphrase: '主密码不正确。',
-    vaultPasswordNotFound: '未找到已保存的密码，请编辑连接并重新保存。',
-    vaultOperationFailed: '凭据保险库操作失败。',
+    credentialPasswordNotFound: '未找到已保存的密码，请编辑连接并重新保存。',
+    credentialOperationFailed: 'FleurTerm 无法访问已加密的连接密码。',
     connectionPrivateKeys: '私钥',
     privateKeyPlaceholder: '私钥路径',
     addPrivateKey: '添加私钥',
@@ -2795,6 +2689,10 @@ const zhLabels: typeof enLabels = {
                 </label>
               </div>
 
+              <p v-if="credentialPersistenceError" class="connection-credential-error" role="alert">
+                {{ credentialPersistenceError }}
+              </p>
+
               <div class="connection-form-actions">
                 <button
                   class="connection-dialog-secondary-button"
@@ -2840,7 +2738,7 @@ const zhLabels: typeof enLabels = {
       :aria-label="labels.dialog.connectionPassword"
       panel-class="connection-dialog-password"
       width="380px"
-      @close="passwordDialogOpen = false"
+      @close="closePasswordDialog"
     >
       <div class="connection-dialog-form-body">
         <div class="password-dialog-content">
@@ -2850,84 +2748,8 @@ const zhLabels: typeof enLabels = {
               <input v-model="passwordValue" autofocus type="password" />
             </div>
           </label>
-        </div>
-      </div>
-
-      <footer class="connection-form-actions password-dialog-actions">
-        <button
-          class="connection-dialog-secondary-button"
-          type="button"
-          @click="passwordDialogOpen = false"
-        >
-          {{ labels.dialog.connectionCancel }}
-        </button>
-        <button class="connection-dialog-primary-button" type="button" @click="confirmPassword">
-          {{ labels.dialog.connectionSave }}
-        </button>
-      </footer>
-    </AppDialog>
-
-    <AppDialog
-      :open="vaultDialogMode !== null"
-      :aria-label="
-        vaultDialogMode === 'configure'
-          ? labels.dialog.vaultConfigureTitle
-          : labels.dialog.vaultUnlockTitle
-      "
-      panel-class="connection-dialog-password"
-      width="420px"
-      @close="closeCredentialVaultDialog"
-    >
-      <div class="connection-dialog-form-body">
-        <div class="password-dialog-content credential-vault-dialog-content">
-          <div class="credential-vault-dialog-copy">
-            <strong>
-              {{
-                vaultDialogMode === 'configure'
-                  ? labels.dialog.vaultConfigureTitle
-                  : labels.dialog.vaultUnlockTitle
-              }}
-            </strong>
-            <span>
-              {{
-                vaultDialogMode === 'configure'
-                  ? labels.dialog.vaultConfigureDescription
-                  : labels.dialog.vaultUnlockDescription
-              }}
-            </span>
-          </div>
-          <label class="connection-field connection-field-full">
-            <span>{{ labels.dialog.vaultPassphrase }}</span>
-            <div class="connection-field-control">
-              <input
-                v-model="vaultPassphrase"
-                data-testid="vault-passphrase"
-                autofocus
-                type="password"
-                :autocomplete="
-                  vaultDialogMode === 'configure' ? 'new-password' : 'current-password'
-                "
-                @keydown.enter="submitCredentialVaultDialog"
-              />
-            </div>
-          </label>
-          <label
-            v-if="vaultDialogMode === 'configure'"
-            class="connection-field connection-field-full"
-          >
-            <span>{{ labels.dialog.vaultPassphraseConfirmation }}</span>
-            <div class="connection-field-control">
-              <input
-                v-model="vaultPassphraseConfirmation"
-                data-testid="vault-passphrase-confirmation"
-                autocomplete="new-password"
-                type="password"
-                @keydown.enter="submitCredentialVaultDialog"
-              />
-            </div>
-          </label>
-          <p v-if="vaultDialogError" class="credential-vault-dialog-error" role="alert">
-            {{ vaultDialogError }}
+          <p v-if="credentialPersistenceError" class="connection-credential-error" role="alert">
+            {{ credentialPersistenceError }}
           </p>
         </div>
       </div>
@@ -2936,25 +2758,12 @@ const zhLabels: typeof enLabels = {
         <button
           class="connection-dialog-secondary-button"
           type="button"
-          :disabled="vaultDialogBusy"
-          @click="closeCredentialVaultDialog"
+          @click="closePasswordDialog"
         >
           {{ labels.dialog.connectionCancel }}
         </button>
-        <button
-          class="connection-dialog-primary-button"
-          :data-testid="
-            vaultDialogMode === 'configure'
-              ? 'configure-credential-vault'
-              : 'unlock-credential-vault'
-          "
-          type="button"
-          :disabled="vaultDialogBusy"
-          @click="submitCredentialVaultDialog"
-        >
-          {{
-            vaultDialogMode === 'configure' ? labels.dialog.vaultCreate : labels.dialog.vaultUnlock
-          }}
+        <button class="connection-dialog-primary-button" type="button" @click="confirmPassword">
+          {{ labels.dialog.connectionSave }}
         </button>
       </footer>
     </AppDialog>
