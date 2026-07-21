@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 
 const CONNECTION_PASSWORD_TARGET_PREFIX: &str = "FleurTerm/ConnectionPassword/";
-#[cfg(target_os = "macos")]
-const KEYCHAIN_SERVICE_NAME: &str = "FleurTerm";
-#[cfg(target_os = "macos")]
-const MACOS_KEYCHAIN_ITEM_NOT_FOUND: i32 = -25_300;
 
 trait ConnectionPasswordBackend {
     fn read(&self, connection_id: &str) -> Result<Option<String>, String>;
@@ -76,7 +72,6 @@ fn password_target(connection_id: &str) -> String {
     format!("{CONNECTION_PASSWORD_TARGET_PREFIX}{connection_id}")
 }
 
-#[cfg(target_os = "windows")]
 fn read_connection_password(connection_id: &str) -> Result<Option<String>, String> {
     use windows::{
         Win32::Security::Credentials::{CRED_TYPE_GENERIC, CredFree, CredReadW},
@@ -111,27 +106,6 @@ fn read_connection_password(connection_id: &str) -> Result<Option<String>, Strin
     }
 }
 
-#[cfg(target_os = "macos")]
-fn read_connection_password(connection_id: &str) -> Result<Option<String>, String> {
-    use security_framework::passwords::{PasswordOptions, generic_password};
-
-    let account_name = password_target(connection_id);
-    let options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE_NAME, &account_name);
-    match generic_password(options) {
-        Ok(password_bytes) => String::from_utf8(password_bytes)
-            .map(Some)
-            .map_err(|error| error.to_string()),
-        Err(error) if error.code() == MACOS_KEYCHAIN_ITEM_NOT_FOUND => Ok(None),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn read_connection_password(_: &str) -> Result<Option<String>, String> {
-    Ok(None)
-}
-
-#[cfg(target_os = "windows")]
 fn write_connection_password(connection_id: &str, password: &str) -> Result<(), String> {
     use windows::{
         Win32::Security::Credentials::{
@@ -155,24 +129,6 @@ fn write_connection_password(connection_id: &str, password: &str) -> Result<(), 
     unsafe { CredWriteW(&credential, 0).map_err(|error| error.to_string()) }
 }
 
-#[cfg(target_os = "macos")]
-fn write_connection_password(connection_id: &str, password: &str) -> Result<(), String> {
-    use security_framework::passwords::set_generic_password;
-
-    set_generic_password(
-        KEYCHAIN_SERVICE_NAME,
-        &password_target(connection_id),
-        password.as_bytes(),
-    )
-    .map_err(|error| error.to_string())
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn write_connection_password(_: &str, _: &str) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
 fn remove_connection_password(connection_id: &str) -> Result<(), String> {
     use windows::{
         Win32::Security::Credentials::{CRED_TYPE_GENERIC, CredDeleteW},
@@ -189,28 +145,6 @@ fn remove_connection_password(connection_id: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn remove_connection_password(connection_id: &str) -> Result<(), String> {
-    use security_framework::passwords::delete_generic_password;
-
-    match delete_generic_password(KEYCHAIN_SERVICE_NAME, &password_target(connection_id)) {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == MACOS_KEYCHAIN_ITEM_NOT_FOUND => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn remove_connection_password(_: &str) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(all(test, target_os = "macos"))]
-fn connection_password_backend_name() -> &'static str {
-    "macos-keychain"
-}
-
-#[cfg(target_os = "windows")]
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -307,11 +241,5 @@ mod tests {
             vec![("server-a".to_string(), "secret".to_string())]
         );
         assert_eq!(backend.deleted.into_inner(), vec!["server-a".to_string()]);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_uses_the_system_keychain_backend() {
-        assert_eq!(super::connection_password_backend_name(), "macos-keychain");
     }
 }

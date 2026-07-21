@@ -1,17 +1,22 @@
+mod credential_vault;
+#[cfg(target_os = "windows")]
 mod credentials;
 pub mod ipc;
 pub mod session;
 
+use credential_vault::{CredentialVault, CredentialVaultStatus};
 use ipc::session_commands::{
     AppState, session_ack_output, session_close, session_interrupt, session_open_local,
     session_resize, session_write,
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::{collections::HashMap, fs, io::ErrorKind};
+use std::{collections::HashMap, fs, io::ErrorKind, sync::Mutex};
 use tauri::Manager;
+use zeroize::Zeroize;
 
 const APP_SETTINGS_FILE_NAME: &str = "settings.json";
+const CREDENTIAL_VAULT_FILE_NAME: &str = "credentials.vault";
 const MIN_WINDOW_OPACITY: f64 = 0.58;
 const MAX_WINDOW_OPACITY: f64 = 1.0;
 
@@ -80,18 +85,163 @@ fn save_app_settings(app: tauri::AppHandle, settings: Value) -> Result<String, S
 #[tauri::command]
 fn load_connection_passwords(
     connection_ids: Vec<String>,
+    vault: tauri::State<'_, Mutex<CredentialVault>>,
 ) -> Result<HashMap<String, String>, String> {
-    credentials::load_connection_passwords(&connection_ids)
+    #[cfg(target_os = "macos")]
+    {
+        return vault
+            .lock()
+            .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
+            .load_passwords(&connection_ids)
+            .map_err(|error| error.to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = vault;
+        return credentials::load_connection_passwords(&connection_ids);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = vault;
+        let _ = connection_ids;
+        Ok(HashMap::new())
+    }
 }
 
 #[tauri::command]
-fn save_connection_password(connection_id: String, password: String) -> Result<(), String> {
-    credentials::save_connection_password(&connection_id, &password)
+fn save_connection_password(
+    connection_id: String,
+    mut password: String,
+    vault: tauri::State<'_, Mutex<CredentialVault>>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let result = vault
+        .lock()
+        .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
+        .save_password(&connection_id, &password)
+        .map_err(|error| error.to_string());
+
+    #[cfg(target_os = "windows")]
+    let result = {
+        let _ = vault;
+        credentials::save_connection_password(&connection_id, &password)
+    };
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let result = {
+        let _ = vault;
+        Ok(())
+    };
+
+    password.zeroize();
+    result
 }
 
 #[tauri::command]
-fn delete_connection_password(connection_id: String) -> Result<(), String> {
-    credentials::delete_connection_password(&connection_id)
+fn delete_connection_password(
+    connection_id: String,
+    vault: tauri::State<'_, Mutex<CredentialVault>>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return vault
+            .lock()
+            .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
+            .delete_password(&connection_id)
+            .map_err(|error| error.to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = vault;
+        return credentials::delete_connection_password(&connection_id);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = vault;
+        let _ = connection_id;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn credential_vault_status(
+    vault: tauri::State<'_, Mutex<CredentialVault>>,
+) -> Result<CredentialVaultStatus, String> {
+    #[cfg(target_os = "macos")]
+    {
+        vault
+            .lock()
+            .map(|credential_vault| credential_vault.status())
+            .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = vault;
+        Ok(CredentialVaultStatus::Unlocked)
+    }
+}
+
+#[tauri::command]
+fn configure_credential_vault(
+    mut passphrase: String,
+    vault: tauri::State<'_, Mutex<CredentialVault>>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let result = vault
+        .lock()
+        .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
+        .configure(&passphrase)
+        .map_err(|error| error.to_string());
+
+    #[cfg(not(target_os = "macos"))]
+    let result = {
+        let _ = vault;
+        Ok(())
+    };
+
+    passphrase.zeroize();
+    result
+}
+
+#[tauri::command]
+fn unlock_credential_vault(
+    mut passphrase: String,
+    vault: tauri::State<'_, Mutex<CredentialVault>>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let result = vault
+        .lock()
+        .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
+        .unlock(&passphrase)
+        .map_err(|error| error.to_string());
+
+    #[cfg(not(target_os = "macos"))]
+    let result = {
+        let _ = vault;
+        Ok(())
+    };
+
+    passphrase.zeroize();
+    result
+}
+
+#[tauri::command]
+fn lock_credential_vault(vault: tauri::State<'_, Mutex<CredentialVault>>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        vault
+            .lock()
+            .map_err(|_| "VAULT_STATE_UNAVAILABLE".to_string())?
+            .lock();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = vault;
+    Ok(())
 }
 
 #[tauri::command]
@@ -179,6 +329,13 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState::new())
+        .setup(|app| {
+            let directory = app.path().app_config_dir()?;
+            app.manage(Mutex::new(CredentialVault::new(
+                directory.join(CREDENTIAL_VAULT_FILE_NAME),
+            )));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             session_open_local,
             session_ack_output,
@@ -191,6 +348,10 @@ pub fn run() {
             load_connection_passwords,
             save_connection_password,
             delete_connection_password,
+            credential_vault_status,
+            configure_credential_vault,
+            unlock_credential_vault,
+            lock_credential_vault,
             set_window_opacity
         ])
         .build(tauri::generate_context!())
@@ -198,6 +359,12 @@ pub fn run() {
 
     application.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+            if let Ok(mut credential_vault) = app_handle
+                .state::<Mutex<CredentialVault>>()
+                .lock()
+            {
+                credential_vault.lock();
+            }
             let state = app_handle.state::<AppState>();
             if let Err(error) = tauri::async_runtime::block_on(state.close_all()) {
                 tracing::error!(code = error.code, message = %error.message, "failed to close terminal sessions during application exit");

@@ -3822,6 +3822,34 @@ html[data-theme-tone='dark'] .app-select-menu {
   background: var(--dialog-surface);
 }
 
+.credential-vault-dialog-content {
+  display: grid;
+  gap: 16px;
+}
+
+.credential-vault-dialog-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.credential-vault-dialog-copy strong {
+  color: var(--theme-fg);
+  font-size: 14px;
+}
+
+.credential-vault-dialog-copy span {
+  color: var(--theme-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.credential-vault-dialog-error {
+  margin: 0;
+  color: #ff7777;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .password-dialog-actions {
   margin-right: 20px;
 }

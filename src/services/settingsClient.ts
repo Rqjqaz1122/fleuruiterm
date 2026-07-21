@@ -7,6 +7,8 @@ export interface AppSettingsPayload {
   error: string | null;
 }
 
+export type CredentialVaultStatus = 'unconfigured' | 'locked' | 'unlocked';
+
 /** Persistent app settings live in Tauri's app config directory, never in the browser cache. */
 export class SettingsClient {
   get available(): boolean {
@@ -35,33 +37,49 @@ export class SettingsClient {
     if (!this.available) {
       return {};
     }
-    try {
-      return (await invoke('load_connection_passwords', { connectionIds })) as Record<string, string>;
-    } catch {
-      return {};
-    }
+    return (await invoke('load_connection_passwords', { connectionIds })) as Record<string, string>;
   }
 
   async savePassword(connectionId: string, password: string): Promise<void> {
     if (!this.available) {
       return;
     }
-    try {
-      await invoke('save_connection_password', { connectionId, password });
-    } catch {
-      // The browser test environment and non-Tauri previews do not expose the vault.
-    }
+    await invoke('save_connection_password', { connectionId, password });
   }
 
   async deletePassword(connectionId: string): Promise<void> {
     if (!this.available) {
       return;
     }
-    try {
-      await invoke('delete_connection_password', { connectionId });
-    } catch {
-      // See savePassword.
+    await invoke('delete_connection_password', { connectionId });
+  }
+
+  async credentialVaultStatus(): Promise<CredentialVaultStatus> {
+    if (!this.available) {
+      return 'unlocked';
     }
+    return (await invoke('credential_vault_status')) as CredentialVaultStatus;
+  }
+
+  async configureCredentialVault(passphrase: string): Promise<void> {
+    if (!this.available) {
+      return;
+    }
+    await invoke('configure_credential_vault', { passphrase });
+  }
+
+  async unlockCredentialVault(passphrase: string): Promise<void> {
+    if (!this.available) {
+      return;
+    }
+    await invoke('unlock_credential_vault', { passphrase });
+  }
+
+  async lockCredentialVault(): Promise<void> {
+    if (!this.available) {
+      return;
+    }
+    await invoke('lock_credential_vault');
   }
 
   async setWindowOpacity(opacity: number): Promise<void> {
