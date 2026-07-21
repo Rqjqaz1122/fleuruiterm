@@ -1,9 +1,24 @@
 import { computed, ref } from 'vue';
 
+import type { AiTerminalToolCall } from '@/services/aiToolProtocol';
 import type { ParsedAiAppAction, ParsedAiTerminalCommand } from '@/services/aiTerminalCommands';
 
 export type AiConversationRole = 'assistant' | 'user';
-export type AiConversationStatus = 'idle' | 'sending';
+export type AiConversationStatus =
+  | 'idle'
+  | 'sending'
+  | 'thinking'
+  | 'streaming'
+  | 'awaitingApproval'
+  | 'runningTool'
+  | 'waitingTerminal'
+  | 'blocked'
+  | 'continuing'
+  | 'failed'
+  | 'stopped';
+
+export type AiToolDecision =
+  'approved' | 'denied' | 'continueWaiting' | 'interrupt' | 'usePartialOutput' | 'cancelled';
 
 export interface AiConversationMessage {
   id: string;
@@ -20,29 +35,45 @@ const draft = ref('');
 const status = ref<AiConversationStatus>('idle');
 const errorMessage = ref<string | null>(null);
 const activeAbortController = ref<AbortController | null>(null);
+const activeTurnId = ref<string | null>(null);
+const toolCalls = ref<AiTerminalToolCall[]>([]);
+const pendingToolDecisionResolvers = new Map<string, (decision: AiToolDecision) => void>();
 const hasConversationHistory = computed(() => messages.value.length > 0);
+const turnActive = computed(() => !['idle', 'failed', 'stopped'].includes(status.value));
 const lastFailedUserMessage = computed(() =>
-  [...messages.value].reverse().find((message) => message.role === 'user' && message.status === 'failed'),
+  [...messages.value]
+    .reverse()
+    .find((message) => message.role === 'user' && message.status === 'failed'),
 );
 
 export function useAiConversationStore() {
   return {
     activeAbortController,
+    activeTurnId,
     draft,
     errorMessage,
     hasConversationHistory,
     lastFailedUserMessage,
     messages,
     status,
+    toolCalls,
+    turnActive,
     appendAssistantMessage,
+    appendToolCall,
     appendUserMessage,
+    beginTurn,
     clearConversation,
     failMessage,
+    finishTurn,
     removeMessage,
+    resolveToolDecision,
     setActiveAbortController,
     setErrorMessage,
     setStatus,
+    stopTurn,
+    updateToolCall,
     updateMessage,
+    waitForToolDecision,
   };
 }
 
@@ -84,9 +115,70 @@ function updateMessage(
 }
 
 function clearConversation(): void {
+  cancelPendingToolDecisions();
   messages.value = [];
+  toolCalls.value = [];
+  activeTurnId.value = null;
+  activeAbortController.value?.abort();
+  activeAbortController.value = null;
+  status.value = 'idle';
   errorMessage.value = null;
   draft.value = '';
+}
+
+function appendToolCall(toolCall: AiTerminalToolCall): void {
+  toolCalls.value = [...toolCalls.value, toolCall];
+}
+
+function updateToolCall(toolCallId: string, patch: Partial<AiTerminalToolCall>): void {
+  toolCalls.value = toolCalls.value.map((toolCall) =>
+    toolCall.id === toolCallId ? { ...toolCall, ...patch } : toolCall,
+  );
+}
+
+function beginTurn(turnId: string): void {
+  cancelPendingToolDecisions();
+  activeTurnId.value = turnId;
+  errorMessage.value = null;
+  status.value = 'thinking';
+}
+
+function finishTurn(): void {
+  cancelPendingToolDecisions();
+  activeTurnId.value = null;
+  activeAbortController.value = null;
+  status.value = 'idle';
+}
+
+function stopTurn(): void {
+  activeAbortController.value?.abort();
+  activeAbortController.value = null;
+  cancelPendingToolDecisions();
+  activeTurnId.value = null;
+  status.value = 'stopped';
+}
+
+function waitForToolDecision(toolCallId: string): Promise<AiToolDecision> {
+  resolveToolDecision(toolCallId, 'cancelled');
+  return new Promise((resolve) => {
+    pendingToolDecisionResolvers.set(toolCallId, resolve);
+  });
+}
+
+function resolveToolDecision(toolCallId: string, decision: AiToolDecision): void {
+  const resolveDecision = pendingToolDecisionResolvers.get(toolCallId);
+  if (!resolveDecision) {
+    return;
+  }
+  pendingToolDecisionResolvers.delete(toolCallId);
+  resolveDecision(decision);
+}
+
+function cancelPendingToolDecisions(): void {
+  for (const resolveDecision of pendingToolDecisionResolvers.values()) {
+    resolveDecision('cancelled');
+  }
+  pendingToolDecisionResolvers.clear();
 }
 
 function setStatus(nextStatus: AiConversationStatus): void {

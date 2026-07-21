@@ -462,7 +462,7 @@ describe('FleurTerm app shell', () => {
     expect(localStorage.getItem('fleurterm.aiPanelWidth')).toBe('520');
   });
 
-  it('writes AI terminal commands to the focused terminal session', async () => {
+  it('provides terminal write actions to the AI conversation runner', async () => {
     const store = useWorkspaceStore();
     store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
     store.writeToFocusedSession = vi.fn(async () => undefined);
@@ -471,9 +471,9 @@ describe('FleurTerm app shell', () => {
         stubs: {
           TerminalPane: true,
           AIPanel: {
-            emits: ['runTerminalCommand'],
+            props: ['runAppAction'],
             template:
-              '<button data-testid="ai-run-command" @click="$emit(\'runTerminalCommand\', \'pwd\')">Run</button>',
+              '<button data-testid="ai-run-command" @click="runAppAction({ type: \'terminal.write\', input: \'pwd\' })">Run</button>',
           },
         },
       },
@@ -492,9 +492,9 @@ describe('FleurTerm app shell', () => {
       global: {
         stubs: {
           AIPanel: {
-            emits: ['runAppAction'],
+            props: ['runAppAction'],
             template:
-              '<button data-testid="ai-update-setting" @click="$emit(\'runAppAction\', { type: \'settings.updateTerminal\', patch: { fontSize: 16 } })">Apply</button>',
+              '<button data-testid="ai-update-setting" @click="runAppAction({ type: \'settings.updateTerminal\', patch: { fontSize: 16 } })">Apply</button>',
           },
         },
       },
@@ -516,9 +516,9 @@ describe('FleurTerm app shell', () => {
         stubs: {
           TerminalPane: true,
           AIPanel: {
-            emits: ['runAppAction'],
+            props: ['runAppAction'],
             template:
-              '<button data-testid="ai-open-ssh" @click="$emit(\'runAppAction\', { type: \'terminal.openSsh\', host: \'example.com\', user: \'root\', port: 2222 })">Open</button>',
+              '<button data-testid="ai-open-ssh" @click="runAppAction({ type: \'terminal.openSsh\', host: \'example.com\', user: \'root\', port: 2222 })">Open</button>',
           },
         },
       },

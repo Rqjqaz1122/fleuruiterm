@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { parseMarkdownBlocks } from './markdownRenderer';
 
 describe('parseMarkdownBlocks', () => {
+  it('renders shell logical OR and pipe operators as paragraph text', () => {
+    const content =
+      "<terminal-command>uname -a && echo '---' && sw_vers 2>/dev/null || uname -s | head -1";
+
+    expect(parseMarkdownBlocks(content)).toEqual([{ type: 'paragraph', content }]);
+  });
+
   it('renders fenced terminal blocks when the closing fence is followed by prose', () => {
     const blocks = parseMarkdownBlocks(
       '```terminal\ndir\n```已请求在当前本地终端执行 `dir` 命令。',

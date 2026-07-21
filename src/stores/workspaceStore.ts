@@ -49,13 +49,23 @@ export interface TerminalOutputCursor {
 export interface WaitForTerminalOutputOptions {
   idleMs?: number;
   maxBytes?: number;
+  settleOnIdle?: boolean;
+  signal?: AbortSignal;
   timeoutMs?: number;
+  until?: (output: string) => boolean;
+}
+
+export interface TerminalOutputWaitResult {
+  output: string;
+  reason: 'matched' | 'idle' | 'timeout' | 'sessionClosed' | 'cancelled';
+  truncated: boolean;
 }
 
 export type WorkspaceErrorCode =
-  'OPEN_TERMINAL_FAILED'
+  | 'OPEN_TERMINAL_FAILED'
   | 'CLOSE_TERMINAL_FAILED'
   | 'CLOSE_TAB_FAILED'
+  | 'INTERRUPT_TERMINAL_FAILED'
   | 'WRITE_TERMINAL_FAILED';
 
 export interface WorkspaceSessionClient {
@@ -65,6 +75,7 @@ export interface WorkspaceSessionClient {
     onState?: (event: SessionStateChanged) => void,
   ): Promise<SessionSnapshot>;
   write(sessionId: string, input: Uint8Array): Promise<void>;
+  interrupt(sessionId: string): Promise<void>;
   close(sessionId: string): Promise<void>;
 }
 
@@ -90,6 +101,7 @@ export function createWorkspaceStore(
     const lastOutputSequence = new Map<string, number>();
     const pendingSessionStates = new Map<string, SessionState>();
     const pendingConsumptions = new Map<string, Map<number, PendingConsumption>>();
+    const activeOutputWaitClosers = new Map<string, Set<() => void>>();
     const passwordPromptResponses = new Map<string, string>();
 
     const activeSnapshot = computed(() => {
@@ -221,6 +233,10 @@ export function createWorkspaceStore(
         errorMessage.value = error.message;
         throw error;
       }
+      await writeToSession(sessionId, input);
+    }
+
+    async function writeToSession(sessionId: string, input: string): Promise<void> {
       errorMessage.value = null;
       errorCode.value = null;
       try {
@@ -228,6 +244,18 @@ export function createWorkspaceStore(
       } catch (error) {
         errorCode.value = 'WRITE_TERMINAL_FAILED';
         errorMessage.value = userVisibleError(error, 'Unable to write to terminal');
+        throw error;
+      }
+    }
+
+    async function interruptSession(sessionId: string): Promise<void> {
+      errorMessage.value = null;
+      errorCode.value = null;
+      try {
+        await sessionClient.interrupt(sessionId);
+      } catch (error) {
+        errorCode.value = 'INTERRUPT_TERMINAL_FAILED';
+        errorMessage.value = userVisibleError(error, 'Unable to interrupt terminal');
         throw error;
       }
     }
@@ -242,10 +270,11 @@ export function createWorkspaceStore(
       if (sessionId === null) {
         return null;
       }
-      return {
-        sessionId,
-        sequence: lastOutputSequence.get(sessionId) ?? 0,
-      };
+      return getTerminalOutputCursor(sessionId);
+    }
+
+    function getTerminalOutputCursor(sessionId: string): TerminalOutputCursor {
+      return { sessionId, sequence: lastOutputSequence.get(sessionId) ?? 0 };
     }
 
     function waitForFocusedTerminalOutput(
@@ -256,7 +285,7 @@ export function createWorkspaceStore(
       if (sessionId === null || sessionId !== cursor.sessionId) {
         return Promise.resolve('');
       }
-      return waitForTerminalOutputAfter(cursor, options);
+      return waitForSessionTerminalOutput(cursor, options).then((result) => result.output);
     }
 
     async function openSession(options: OpenTerminalTabOptions = {}): Promise<SessionSnapshot> {
@@ -327,6 +356,7 @@ export function createWorkspaceStore(
     }
 
     function removeSessionState(sessionId: string): void {
+      resolveActiveOutputWaits(sessionId);
       const nextSnapshots = { ...snapshots.value };
       delete nextSnapshots[sessionId];
       snapshots.value = nextSnapshots;
@@ -339,46 +369,96 @@ export function createWorkspaceStore(
       settlePendingSession(sessionId);
     }
 
-    function waitForTerminalOutputAfter(
+    function waitForSessionTerminalOutput(
       cursor: TerminalOutputCursor,
       options: WaitForTerminalOutputOptions,
-    ): Promise<string> {
+    ): Promise<TerminalOutputWaitResult> {
       const maxBytes = options.maxBytes ?? DEFAULT_AI_OUTPUT_CONTEXT_BYTES;
       const idleMs = options.idleMs ?? DEFAULT_TERMINAL_OUTPUT_IDLE_MS;
       const timeoutMs = options.timeoutMs ?? DEFAULT_TERMINAL_OUTPUT_TIMEOUT_MS;
+      const settleOnIdle = options.settleOnIdle ?? true;
 
       return new Promise((resolve) => {
         let idleTimer: ReturnType<typeof setTimeout> | null = null;
         let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
-        let unsubscribe = () => undefined;
+        let settled = false;
+        const listeners = chunkListeners.get(cursor.sessionId) ?? new Set<ChunkListener>();
 
-        const settle = () => {
+        const listener: ChunkListener = (chunk) => {
+          if (chunk.sequence <= cursor.sequence) {
+            return;
+          }
+          evaluateOutput();
+        };
+        const unregister = () => {
+          options.signal?.removeEventListener('abort', abortWait);
+          listeners.delete(listener);
+          if (listeners.size === 0) {
+            chunkListeners.delete(cursor.sessionId);
+          }
+          const sessionWaitClosers = activeOutputWaitClosers.get(cursor.sessionId);
+          sessionWaitClosers?.delete(closeWait);
+          if (sessionWaitClosers?.size === 0) {
+            activeOutputWaitClosers.delete(cursor.sessionId);
+          }
+        };
+        const settle = (reason: TerminalOutputWaitResult['reason']) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           if (idleTimer !== null) {
             clearTimeout(idleTimer);
           }
           if (timeoutTimer !== null) {
             clearTimeout(timeoutTimer);
           }
-          unsubscribe();
-          resolve(collectTerminalOutput(cursor.sessionId, cursor.sequence, maxBytes));
+          unregister();
+          const collectedOutput = collectTerminalOutputResult(
+            cursor.sessionId,
+            cursor.sequence,
+            maxBytes,
+          );
+          resolve({ ...collectedOutput, reason });
         };
+        const closeWait = () => settle('sessionClosed');
+        const abortWait = () => settle('cancelled');
         const scheduleIdle = () => {
+          if (!settleOnIdle) {
+            return;
+          }
           if (idleTimer !== null) {
             clearTimeout(idleTimer);
           }
-          idleTimer = setTimeout(settle, idleMs);
+          idleTimer = setTimeout(() => settle('idle'), idleMs);
         };
-
-        unsubscribe = subscribeToSession(cursor.sessionId, (chunk) => {
-          if (chunk.sequence > cursor.sequence) {
+        const evaluateOutput = () => {
+          const collectedOutput = collectTerminalOutputResult(
+            cursor.sessionId,
+            cursor.sequence,
+            maxBytes,
+          );
+          if (options.until?.(collectedOutput.output)) {
+            settle('matched');
+            return;
+          }
+          if (collectedOutput.output.trim()) {
             scheduleIdle();
           }
-        });
+        };
 
-        if (collectTerminalOutput(cursor.sessionId, cursor.sequence, maxBytes).trim()) {
-          scheduleIdle();
+        listeners.add(listener);
+        chunkListeners.set(cursor.sessionId, listeners);
+        const sessionWaitClosers = activeOutputWaitClosers.get(cursor.sessionId) ?? new Set();
+        sessionWaitClosers.add(closeWait);
+        activeOutputWaitClosers.set(cursor.sessionId, sessionWaitClosers);
+        options.signal?.addEventListener('abort', abortWait, { once: true });
+        timeoutTimer = setTimeout(() => settle('timeout'), timeoutMs);
+        if (options.signal?.aborted) {
+          abortWait();
+        } else {
+          evaluateOutput();
         }
-        timeoutTimer = setTimeout(settle, timeoutMs);
       });
     }
 
@@ -387,6 +467,14 @@ export function createWorkspaceStore(
       afterSequence: number,
       maxBytes: number,
     ): string {
+      return collectTerminalOutputResult(sessionId, afterSequence, maxBytes).output;
+    }
+
+    function collectTerminalOutputResult(
+      sessionId: string,
+      afterSequence: number,
+      maxBytes: number,
+    ): Pick<TerminalOutputWaitResult, 'output' | 'truncated'> {
       const chunks = (outputHistory.get(sessionId) ?? []).filter(
         (chunk) => chunk.sequence > afterSequence,
       );
@@ -404,7 +492,12 @@ export function createWorkspaceStore(
         }
       }
       const payload = selectedChunks.flatMap((chunk) => chunk.payload);
-      return stripTerminalControlSequences(decodeTerminalPayload(payload));
+      const truncated = selectedChunks.length < chunks.length || payload.length > maxBytes;
+      const boundedPayload = payload.slice(Math.max(0, payload.length - maxBytes));
+      return {
+        output: stripTerminalControlSequences(decodeTerminalPayload(boundedPayload)),
+        truncated,
+      };
     }
 
     async function respondToPasswordPrompt(chunk: TerminalChunk): Promise<void> {
@@ -461,6 +554,11 @@ export function createWorkspaceStore(
       sessionConsumptions?.forEach((consumption) => consumption.resolve());
     }
 
+    function resolveActiveOutputWaits(sessionId: string): void {
+      const sessionWaitClosers = activeOutputWaitClosers.get(sessionId);
+      Array.from(sessionWaitClosers ?? []).forEach((closeWait) => closeWait());
+    }
+
     return {
       workspace,
       snapshots,
@@ -478,9 +576,13 @@ export function createWorkspaceStore(
       closeTab,
       subscribeToSession,
       nextOutputSequence,
+      writeToSession,
       writeToFocusedSession,
+      interruptSession,
       getFocusedTerminalOutput,
+      getTerminalOutputCursor,
       getFocusedTerminalOutputCursor,
+      waitForSessionTerminalOutput,
       waitForFocusedTerminalOutput,
     };
   });

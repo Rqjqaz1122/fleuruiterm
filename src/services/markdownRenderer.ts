@@ -233,7 +233,6 @@ function shouldContinueParagraph(line: string): boolean {
   return !(
     fencedCodePattern.test(line) ||
     headingPattern.test(line) ||
-    isTableRow(line) ||
     orderedListPattern.test(line) ||
     unorderedListPattern.test(line) ||
     blockquotePattern.test(line) ||

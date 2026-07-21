@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import TerminalTabs from './TerminalTabs.vue';
 
@@ -30,6 +30,10 @@ const tabs = [
 ];
 
 describe('TerminalTabs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('uses a roving tab stop and links every app tab to its panel', () => {
     const wrapper = mount(TerminalTabs, { props: { tabs, activeTabId: 'tab-1' } });
     const tabButtons = wrapper.findAll('[role="tab"]');
@@ -80,7 +84,9 @@ describe('TerminalTabs', () => {
   });
 
   it('places new-terminal, AI and settings actions in the top tab row', () => {
-    const wrapper = mount(TerminalTabs, { props: { tabs: [], activeTabId: null } });
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs: [], activeTabId: null, platform: 'windows' },
+    });
 
     expect(wrapper.get('.terminal-tabs').attributes()).not.toHaveProperty('data-tauri-drag-region');
     expect(wrapper.get('.tabbar-actions').exists()).toBe(true);
@@ -94,7 +100,9 @@ describe('TerminalTabs', () => {
   });
 
   it('drags and maximizes the frameless window from non-interactive tabbar space', async () => {
-    const wrapper = mount(TerminalTabs, { props: { tabs: [], activeTabId: null } });
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs: [], activeTabId: null, platform: 'windows' },
+    });
 
     await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0 });
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
@@ -104,7 +112,9 @@ describe('TerminalTabs', () => {
   });
 
   it('uses custom window controls for the frameless window', async () => {
-    const wrapper = mount(TerminalTabs, { props: { tabs: [], activeTabId: null } });
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs: [], activeTabId: null, platform: 'windows' },
+    });
 
     await wrapper.get('[aria-label="Minimize window"]').trigger('click');
     await wrapper.get('[aria-label="Maximize window"]').trigger('click');
@@ -113,6 +123,21 @@ describe('TerminalTabs', () => {
     expect(windowApi.minimize).toHaveBeenCalledOnce();
     expect(windowApi.toggleMaximize).toHaveBeenCalledOnce();
     expect(windowApi.close).toHaveBeenCalledOnce();
+  });
+
+  it('uses native window controls and reserves traffic-light space on macOS', async () => {
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs: [], activeTabId: null, platform: 'macos' },
+    });
+
+    expect(wrapper.find('.window-controls').exists()).toBe(false);
+    expect(wrapper.get('.macos-window-control-space').attributes()).toHaveProperty(
+      'data-tauri-drag-region',
+    );
+
+    await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
+
+    expect(windowApi.toggleMaximize).not.toHaveBeenCalled();
   });
 
   it('emits the selected application action', async () => {

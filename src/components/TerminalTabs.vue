@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 
 import { beginTabDrag, draggedTab, finishTabDrag } from '@/composables/tabDrag';
 import { SETTINGS_TAB_ID, type AppTab } from '@/domain/appTab';
 import type { TabDropPlacement } from '@/domain/workspace';
 import { t } from '@/i18n/locale';
+import { detectDesktopPlatform, type DesktopPlatform } from '@/services/desktopPlatform';
 
 const props = defineProps<{
   tabs: AppTab[];
   activeTabId: string | null;
   aiOpen?: boolean;
+  platform?: DesktopPlatform;
 }>();
 
 const emit = defineEmits<{
@@ -33,6 +35,8 @@ const activePointerDrag = ref<{
   started: boolean;
 } | null>(null);
 const suppressedClickTabId = ref<string | null>(null);
+const detectedDesktopPlatform = detectDesktopPlatform();
+const desktopPlatform = computed(() => props.platform ?? detectedDesktopPlatform);
 
 const POINTER_DRAG_THRESHOLD_PX = 4;
 
@@ -223,7 +227,11 @@ async function onTabBarPointerDown(event: PointerEvent): Promise<void> {
 }
 
 async function onTabBarDoubleClick(event: MouseEvent): Promise<void> {
-  if (event.button !== 0 || isInteractiveWindowChromeTarget(event.target)) {
+  if (
+    desktopPlatform.value !== 'windows' ||
+    event.button !== 0 ||
+    isInteractiveWindowChromeTarget(event.target)
+  ) {
     return;
   }
   await toggleMaximizeWindow();
@@ -307,6 +315,12 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
     @pointerdown="onTabBarPointerDown"
     @dblclick="onTabBarDoubleClick"
   >
+    <span
+      v-if="desktopPlatform === 'macos'"
+      class="macos-window-control-space"
+      aria-hidden="true"
+      data-tauri-drag-region
+    />
     <div class="tabbar-actions">
       <button
         class="tabbar-command tabbar-command-square"
@@ -391,8 +405,13 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
     >
       {{ t('tabs.settings') }}
     </button>
-    <div class="window-controls">
-      <button class="window-button" type="button" aria-label="Minimize window" @click="minimizeWindow">
+    <div v-if="desktopPlatform === 'windows'" class="window-controls">
+      <button
+        class="window-button"
+        type="button"
+        aria-label="Minimize window"
+        @click="minimizeWindow"
+      >
         <span class="window-glyph minimize" />
       </button>
       <button
@@ -403,7 +422,12 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       >
         <span class="window-glyph maximize" />
       </button>
-      <button class="window-button danger" type="button" aria-label="Close window" @click="closeWindow">
+      <button
+        class="window-button danger"
+        type="button"
+        aria-label="Close window"
+        @click="closeWindow"
+      >
         <span class="window-glyph close" />
       </button>
     </div>

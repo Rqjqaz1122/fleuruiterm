@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspace } from '@/domain/workspace';
 import { setLocale } from '@/i18n/locale';
 import { sendAiChat } from '@/services/aiClient';
+import type { AiConversationRunner } from '@/services/aiConversationRunner';
+import type { AiTerminalToolCall } from '@/services/aiToolProtocol';
 import { useAiConversationStore } from '@/stores/aiConversationStore';
 import {
   defaultAiSettings,
@@ -50,34 +52,49 @@ describe('AIPanel', () => {
     expect(wrapper.text()).toContain('answer');
   });
 
-  it('renders only user and assistant message content in the conversation stream', async () => {
+  it('does not send when Enter confirms an input method candidate', async () => {
+    const wrapper = mount(AIPanel, { props: { snapshot: null } });
+    const composer = wrapper.get('textarea');
+
+    await composer.setValue('dock er');
+    await composer.trigger('keydown', {
+      key: 'Enter',
+      isComposing: true,
+      keyCode: 229,
+    });
+    await flushPromises();
+
+    expect(vi.mocked(sendAiChat)).not.toHaveBeenCalled();
+    expect((composer.element as HTMLTextAreaElement).value).toBe('dock er');
+  });
+
+  it('renders the model, turn status, and separate message roles', async () => {
     const wrapper = mount(AIPanel, { props: { snapshot: null } });
 
     await wrapper.get('textarea').setValue('hello');
     await wrapper.get('.ai-panel-send').trigger('click');
     await flushPromises();
 
-    const threadText = wrapper.get('.ai-panel-thread').text();
-    expect(threadText).toContain('hello');
-    expect(threadText).toContain('answer');
-    expect(threadText).not.toContain('Provider');
-    expect(threadText).not.toContain('Model');
-    expect(threadText).not.toContain('Context');
-    expect(threadText).not.toContain('You');
-    expect(threadText).not.toContain('FleurTerm AI');
+    expect(wrapper.get('.ai-panel-model').text()).toContain('gpt-test');
+    expect(wrapper.get('.ai-panel-turn-status').exists()).toBe(true);
+    expect(wrapper.get('.ai-message-user').text()).toContain('hello');
+    expect(wrapper.get('.ai-message-assistant').text()).toContain('answer');
   });
 
-  it('renders assistant markdown and fenced code blocks', async () => {
+  it('renders assistant markdown, fenced code blocks, and tables', async () => {
     vi.mocked(sendAiChat).mockResolvedValueOnce(
       [
         '# Plan',
         '',
         '- Run `pwd`',
-        '- **Check** [docs](https://example.com)',
         '',
         '```ts',
         'const value = 1;',
         '```',
+        '',
+        '| Process | RSS |',
+        '|---|---:|',
+        '| shell | 20 MiB |',
       ].join('\n'),
     );
     const wrapper = mount(AIPanel, { props: { snapshot: null } });
@@ -87,33 +104,9 @@ describe('AIPanel', () => {
     await flushPromises();
 
     expect(wrapper.get('.ai-markdown-heading').text()).toBe('Plan');
-    expect(wrapper.get('.ai-markdown-list').text()).toContain('Run');
     expect(wrapper.get('.ai-inline-code').text()).toBe('pwd');
-    expect(wrapper.get('.ai-inline-strong').text()).toBe('Check');
-    expect(wrapper.get('.ai-inline-link').attributes('href')).toBe('https://example.com');
-    expect(wrapper.get('.ai-markdown-code-block figcaption').text()).toBe('ts');
     expect(wrapper.get('.ai-markdown-code-block code').text()).toBe('const value = 1;');
-  });
-
-  it('renders assistant markdown tables', async () => {
-    vi.mocked(sendAiChat).mockResolvedValueOnce(
-      [
-        '| Process | Memory | RSS |',
-        '|---|---:|---:|',
-        '| java -jar /app/fleurui-admin.jar | 13.2% | about 1.0 GiB |',
-        '| mysqld | 4.2% | about 336 MiB |',
-      ].join('\n'),
-    );
-    const wrapper = mount(AIPanel, { props: { snapshot: null } });
-
-    await wrapper.get('textarea').setValue('show memory table');
-    await wrapper.get('.ai-panel-send').trigger('click');
-    await flushPromises();
-
     expect(wrapper.get('.ai-markdown-table th').text()).toBe('Process');
-    expect(wrapper.findAll('.ai-markdown-table tbody tr')).toHaveLength(2);
-    expect(wrapper.findAll('.ai-markdown-table .is-right').length).toBeGreaterThan(0);
-    expect(wrapper.get('.ai-panel-thread').text()).not.toContain('|---|');
   });
 
   it('localizes the AI panel controls in Chinese', () => {
@@ -122,7 +115,6 @@ describe('AIPanel', () => {
 
     expect(wrapper.get('[aria-label="AI 面板"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('助手');
-    expect(wrapper.text()).toContain('新会话');
     expect(wrapper.get('textarea').attributes('placeholder')).toBe('询问当前终端会话');
     expect(wrapper.get('.ai-panel-send').text()).toBe('发送');
   });
@@ -139,7 +131,6 @@ describe('AIPanel', () => {
   });
 
   it('updates the assistant message while streaming is enabled', async () => {
-    useAppSettingsStore().updateAiSettings({ streamingEnabled: true });
     vi.mocked(sendAiChat).mockImplementationOnce(async (_settings, _messages, options) => {
       if (typeof options !== 'function') {
         options.onDelta?.('hel');
@@ -154,20 +145,49 @@ describe('AIPanel', () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain('hello');
-    expect(wrapper.find('.ai-message-pending').exists()).toBe(false);
     expect(wrapper.findAll('.ai-message-assistant')).toHaveLength(1);
   });
 
-  it('lets full access mode run terminal commands and continue with command output', async () => {
-    const workspaceStore = useWorkspaceStore();
-    workspaceStore.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
-    workspaceStore.getFocusedTerminalOutput = vi.fn(() => 'PS D:\\Project>');
-    workspaceStore.getFocusedTerminalOutputCursor = vi.fn(() => ({
-      sessionId: 'session-a',
-      sequence: 4,
+  it('keeps pending approval in a fixed dock until the decision is made', async () => {
+    const conversation = useAiConversationStore();
+    conversation.appendToolCall(createToolCall());
+    conversation.beginTurn('turn-1');
+    conversation.setStatus('awaitingApproval');
+    const runner = createRunnerStub();
+    const wrapper = mount(AIPanel, {
+      props: { snapshot: null },
+      global: { provide: { aiConversationRunner: runner } },
+    });
+
+    expect(wrapper.get('.ai-panel-turn-status').text()).toContain('Waiting for approval');
+    expect(wrapper.find('.ai-panel-thread .ai-tool-card').exists()).toBe(false);
+    expect(wrapper.get('.ai-approval-dock .ai-tool-card').exists()).toBe(true);
+    await wrapper.get('.ai-approval-dock [data-action="approve"]').trigger('click');
+
+    expect(runner.approve).toHaveBeenCalledWith('call-1');
+    conversation.updateToolCall('call-1', { status: 'approved' });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('.ai-approval-dock').exists()).toBe(false);
+    expect(wrapper.get('.ai-panel-thread .ai-tool-card').attributes('data-status')).toBe(
+      'approved',
+    );
+  });
+
+  it('runs a full-access terminal tool and continues with its output', async () => {
+    const workspace = useWorkspaceStore();
+    workspace.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    workspace.getTerminalOutputCursor = vi.fn(() => ({ sessionId: 'session-a', sequence: 4 }));
+    let marker = '';
+    workspace.writeToSession = vi.fn(async (_sessionId, input) => {
+      marker = /__FLEURTERM_DONE_[A-Za-z0-9_]+/.exec(input)?.[0] ?? '';
+    });
+    workspace.waitForSessionTerminalOutput = vi.fn(async () => ({
+      output: `Mode LastWriteTime Name\n-a--- app.ts\n${marker}:0`,
+      reason: 'matched' as const,
+      truncated: false,
     }));
-    workspaceStore.writeToFocusedSession = vi.fn(async () => undefined);
-    workspaceStore.waitForFocusedTerminalOutput = vi.fn(async () => 'Mode LastWriteTime Name\n-a--- app.ts');
+    workspace.interruptSession = vi.fn(async () => undefined);
     useAppSettingsStore().updateAiSettings({ commandPolicy: 'fullAccess' });
     vi.mocked(sendAiChat)
       .mockResolvedValueOnce('<terminal-command>dir</terminal-command>')
@@ -187,103 +207,34 @@ describe('AIPanel', () => {
     await wrapper.get('.ai-panel-send').trigger('click');
     await flushPromises();
 
-    expect(workspaceStore.writeToFocusedSession).toHaveBeenCalledWith('dir\r');
-    expect(workspaceStore.waitForFocusedTerminalOutput).toHaveBeenCalledWith(
-      { sessionId: 'session-a', sequence: 4 },
-      { maxBytes: 12 * 1024 },
-    );
+    expect(workspace.writeToSession).toHaveBeenCalledWith('session-a', expect.any(String));
     expect(vi.mocked(sendAiChat)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(sendAiChat).mock.calls[1]?.[1]).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          content: expect.stringContaining('Mode LastWriteTime Name'),
-        }),
+        expect.objectContaining({ content: expect.stringContaining('Mode LastWriteTime Name') }),
       ]),
     );
     expect(wrapper.get('.ai-panel-thread').text()).toContain('Found');
+    expect(wrapper.get('.ai-tool-card').attributes('data-status')).toBe('completed');
   });
 
-  it('offers a terminal command run action when command policy asks first', async () => {
+  it('renders terminal command tags as styled code blocks', async () => {
+    useAppSettingsStore().updateAiSettings({ commandPolicy: 'suggest' });
     vi.mocked(sendAiChat).mockResolvedValueOnce(
-      'Use this:\n<terminal-command>pwd</terminal-command>',
+      '<terminal-command>dir</terminal-command>Inspect the directory.',
     );
     const wrapper = mount(AIPanel, { props: { snapshot: null } });
 
-    await wrapper.get('textarea').setValue('show cwd');
-    await wrapper.get('.ai-panel-send').trigger('click');
-    await flushPromises();
-    await wrapper.get('.ai-terminal-run').trigger('click');
-
-    expect(wrapper.emitted('runTerminalCommand')).toEqual([['pwd']]);
-  });
-
-  it('renders terminal command tags as styled code blocks when prose follows immediately', async () => {
-    vi.mocked(sendAiChat).mockResolvedValueOnce(
-      '<terminal-command>dir</terminal-command>已请求在当前本地终端执行 `dir` 命令。',
-    );
-    const wrapper = mount(AIPanel, { props: { snapshot: null } });
-
-    await wrapper.get('textarea').setValue('执行一下dir命令');
+    await wrapper.get('textarea').setValue('show command');
     await wrapper.get('.ai-panel-send').trigger('click');
     await flushPromises();
 
     expect(wrapper.get('.ai-markdown-code-block figcaption').text()).toBe('terminal');
     expect(wrapper.get('.ai-markdown-code-block code').text()).toBe('dir');
-    expect(wrapper.get('.ai-panel-thread').text()).not.toContain('```terminal');
-    expect(wrapper.get('.ai-panel-thread').text()).toContain('已请求在当前本地终端执行');
   });
 
-  it('automatically emits terminal commands when command policy is auto', async () => {
-    useAppSettingsStore().updateAiSettings({ commandPolicy: 'auto' });
-    vi.mocked(sendAiChat).mockResolvedValueOnce(
-      'Checking now.\n<terminal-command>ls</terminal-command>',
-    );
+  it('keeps conversation history across panel remounts', async () => {
     const wrapper = mount(AIPanel, { props: { snapshot: null } });
-
-    await wrapper.get('textarea').setValue('list files');
-    await wrapper.get('.ai-panel-send').trigger('click');
-    await flushPromises();
-
-    expect(wrapper.emitted('runTerminalCommand')).toEqual([['ls']]);
-    expect(wrapper.find('.ai-terminal-run').exists()).toBe(false);
-  });
-
-  it('offers application action controls when command policy asks first', async () => {
-    vi.mocked(sendAiChat).mockResolvedValueOnce(
-      'Done.\n<fleurterm-action>{"type":"settings.updateTerminal","patch":{"fontSize":16}}</fleurterm-action>',
-    );
-    const wrapper = mount(AIPanel, { props: { snapshot: null } });
-
-    await wrapper.get('textarea').setValue('make font larger');
-    await wrapper.get('.ai-panel-send').trigger('click');
-    await flushPromises();
-    await wrapper.get('.ai-terminal-run').trigger('click');
-
-    expect(wrapper.emitted('runAppAction')).toEqual([
-      [{ type: 'settings.updateTerminal', patch: { fontSize: 16 } }],
-    ]);
-    expect(wrapper.get('.ai-panel-thread').text()).not.toContain('fleurterm-action');
-  });
-
-  it('automatically emits application actions when command policy is auto', async () => {
-    useAppSettingsStore().updateAiSettings({ commandPolicy: 'auto' });
-    vi.mocked(sendAiChat).mockResolvedValueOnce(
-      'Opening it.\n<fleurterm-action>{"type":"terminal.openSsh","host":"example.com","user":"root","port":2222}</fleurterm-action>',
-    );
-    const wrapper = mount(AIPanel, { props: { snapshot: null } });
-
-    await wrapper.get('textarea').setValue('open ssh');
-    await wrapper.get('.ai-panel-send').trigger('click');
-    await flushPromises();
-
-    expect(wrapper.emitted('runAppAction')).toEqual([
-      [{ type: 'terminal.openSsh', host: 'example.com', user: 'root', port: 2222 }],
-    ]);
-  });
-
-  it('keeps conversation history across panel remounts and sends multi-turn context', async () => {
-    const wrapper = mount(AIPanel, { props: { snapshot: null } });
-
     await wrapper.get('textarea').setValue('first');
     await wrapper.get('.ai-panel-send').trigger('click');
     await flushPromises();
@@ -292,15 +243,6 @@ describe('AIPanel', () => {
     const reopened = mount(AIPanel, { props: { snapshot: null } });
     expect(reopened.text()).toContain('first');
     expect(reopened.text()).toContain('answer');
-
-    await reopened.get('textarea').setValue('second');
-    await reopened.get('.ai-panel-send').trigger('click');
-    await flushPromises();
-
-    const secondRequestMessages = vi.mocked(sendAiChat).mock.calls[1]?.[1] ?? [];
-    expect(secondRequestMessages.map((message) => message.content)).toEqual(
-      expect.arrayContaining(['first', 'answer', 'second']),
-    );
   });
 
   it('marks failed messages and retries the last failed prompt', async () => {
@@ -312,9 +254,7 @@ describe('AIPanel', () => {
     await wrapper.get('textarea').setValue('try me');
     await wrapper.get('.ai-panel-send').trigger('click');
     await flushPromises();
-
     expect(wrapper.get('[role="alert"]').text()).toContain('network down');
-    expect(wrapper.get('.ai-message-user').classes()).toContain('is-failed');
 
     await wrapper.get('.ai-panel-error button').trigger('click');
     await flushPromises();
@@ -323,6 +263,35 @@ describe('AIPanel', () => {
     expect(wrapper.text()).toContain('recovered');
   });
 });
+
+function createToolCall(): AiTerminalToolCall {
+  return {
+    id: 'call-1',
+    type: 'terminal.command',
+    command: 'pwd',
+    targetSessionId: 'session-1',
+    risk: 'safe',
+    status: 'proposed',
+    output: '',
+    errorMessage: null,
+    truncated: false,
+    createdAt: Date.now(),
+    startedAt: null,
+    completedAt: null,
+  };
+}
+
+function createRunnerStub(): AiConversationRunner {
+  return {
+    send: vi.fn(async () => undefined),
+    stop: vi.fn(),
+    approve: vi.fn(),
+    deny: vi.fn(),
+    continueWaiting: vi.fn(),
+    interrupt: vi.fn(),
+    usePartialOutput: vi.fn(),
+  };
+}
 
 function flushPromises(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve));

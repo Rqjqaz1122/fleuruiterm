@@ -411,7 +411,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(target_os = "windows", ignore = "PTY output delivery is flaky under Windows CI shells")]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "PTY output delivery is flaky under Windows CI shells"
+    )]
     async fn startup_output_observes_a_registered_flow() {
         let state = AppState::new();
         let output_flows = Arc::clone(&state.output_flows);

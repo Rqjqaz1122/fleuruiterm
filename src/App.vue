@@ -22,7 +22,7 @@ import type {
   TerminalTab,
 } from '@/domain/workspace';
 import { t, terminalTitle, type TranslationKey } from '@/i18n/locale';
-import type { AiAppAction } from '@/services/aiTerminalCommands';
+import type { AiAppAction, AiToolResult } from '@/services/aiToolProtocol';
 import { setLocale } from '@/i18n/locale';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore, type WorkspaceErrorCode } from '@/stores/workspaceStore';
@@ -81,6 +81,7 @@ const errorMessageKeyByCode: Record<WorkspaceErrorCode, TranslationKey> = {
   OPEN_TERMINAL_FAILED: 'error.openTerminal',
   CLOSE_TERMINAL_FAILED: 'error.closeTerminal',
   CLOSE_TAB_FAILED: 'error.closeTab',
+  INTERRUPT_TERMINAL_FAILED: 'error.writeTerminal',
   WRITE_TERMINAL_FAILED: 'error.writeTerminal',
 };
 const visibleErrorMessage = computed(() => {
@@ -150,7 +151,12 @@ function buildConnectionOpenOptions(connection: WorkbenchConnection): {
       '-p',
       String(connection.port || 22),
       ...(connection.authMethod === 'password'
-        ? ['-o', 'PreferredAuthentications=password,keyboard-interactive', '-o', 'PubkeyAuthentication=no']
+        ? [
+            '-o',
+            'PreferredAuthentications=password,keyboard-interactive',
+            '-o',
+            'PubkeyAuthentication=no',
+          ]
         : []),
       ...buildSshForwardArgs(connection.forwardedPorts),
       ...(connection.authMethod === 'publicKey' && connection.privateKeys[0]
@@ -170,7 +176,11 @@ function buildSshForwardArgs(forwardedPorts: string[]): string[] {
     if (!normalized) {
       return [];
     }
-    if (normalized.startsWith('-L ') || normalized.startsWith('-R ') || normalized.startsWith('-D ')) {
+    if (
+      normalized.startsWith('-L ') ||
+      normalized.startsWith('-R ') ||
+      normalized.startsWith('-D ')
+    ) {
       const [flag, ...rest] = normalized.split(/\s+/);
       const value = rest.join(' ');
       return value ? [flag, value] : [];
@@ -198,37 +208,55 @@ function resizeAiPanel(width: number): void {
   persistAiPanelWidth(aiPanelWidth.value);
 }
 
-async function runAiTerminalCommand(command: string): Promise<void> {
-  const input = command.endsWith('\r') || command.endsWith('\n') ? command : `${command}\r`;
-  await runAction(() => store.writeToFocusedSession(input));
+async function runAiAppAction(action: AiAppAction): Promise<AiToolResult> {
+  const callId = `app-${Date.now()}-${action.type}`;
+  try {
+    await executeAiAppAction(action);
+    return {
+      callId,
+      outcome: 'completed',
+      command: action.type,
+      output: 'Application action submitted successfully.',
+      truncated: false,
+    };
+  } catch (error) {
+    return {
+      callId,
+      outcome: 'failed',
+      command: action.type,
+      output: '',
+      truncated: false,
+      errorMessage: error instanceof Error ? error.message : 'Application action failed',
+    };
+  }
 }
 
-async function runAiAppAction(action: AiAppAction): Promise<void> {
+async function executeAiAppAction(action: AiAppAction): Promise<void> {
   switch (action.type) {
     case 'terminal.write':
-      await runAiTerminalCommand(action.input);
+      await store.writeToFocusedSession(
+        action.input.endsWith('\r') || action.input.endsWith('\n')
+          ? action.input
+          : `${action.input}\r`,
+      );
       return;
     case 'terminal.openLocal':
-      await runAction(async () => {
-        await store.openTab({
-          shell: action.shell,
-          cwd: action.cwd,
-          title: action.title,
-        });
-        activeAppTabId.value = store.workspace.activeTabId;
-        lastActiveTerminalTabId.value = store.workspace.activeTabId;
+      await store.openTab({
+        shell: action.shell,
+        cwd: action.cwd,
+        title: action.title,
       });
+      activeAppTabId.value = store.workspace.activeTabId;
+      lastActiveTerminalTabId.value = store.workspace.activeTabId;
       return;
     case 'terminal.openSsh':
-      await runAction(async () => {
-        await store.openTab({
-          shell: 'ssh',
-          args: ['-p', String(action.port ?? 22), `${action.user}@${action.host}`],
-          title: action.title ?? `SSH ${action.user}@${action.host}`,
-        });
-        activeAppTabId.value = store.workspace.activeTabId;
-        lastActiveTerminalTabId.value = store.workspace.activeTabId;
+      await store.openTab({
+        shell: 'ssh',
+        args: ['-p', String(action.port ?? 22), `${action.user}@${action.host}`],
+        title: action.title ?? `SSH ${action.user}@${action.host}`,
       });
+      activeAppTabId.value = store.workspace.activeTabId;
+      lastActiveTerminalTabId.value = store.workspace.activeTabId;
       return;
     case 'settings.updateTerminal':
       appSettings.updateTerminalSettings(action.patch);
@@ -415,10 +443,9 @@ function clampAiPanelWidth(width: number): number {
           v-if="aiPanelOpen"
           :snapshot="activeSnapshot"
           :width="aiPanelWidth"
+          :run-app-action="runAiAppAction"
           @close="aiPanelOpen = false"
           @resize="resizeAiPanel"
-          @run-app-action="runAiAppAction"
-          @run-terminal-command="runAiTerminalCommand"
         />
       </Transition>
 

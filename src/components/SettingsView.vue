@@ -19,6 +19,12 @@ import {
 
 type SettingsSectionId =
   'general' | 'appearance' | 'terminal' | 'connections' | 'hotkeys' | 'ai' | 'advanced';
+interface SettingsSection {
+  id: SettingsSectionId;
+  label: string;
+  title: string;
+  iconPath: string;
+}
 type ConnectionMethod = 'ssh' | 'telnet' | 'serial' | 'local';
 type AuthMethod = 'auto' | 'password' | 'publicKey' | 'agent' | 'keyboardInteractive';
 type SessionEndBehavior = 'auto' | 'keep' | 'reconnect' | 'close';
@@ -157,18 +163,49 @@ const languageOptions = computed(() =>
     label: `${option.label} / ${option.nativeLabel}`,
   })),
 );
-const sections = computed<Array<{ id: SettingsSectionId; label: string; title: string }>>(() => [
-  { id: 'general', label: labels.value.nav.general, title: labels.value.languageCardTitle },
-  { id: 'appearance', label: labels.value.nav.appearance, title: labels.value.appearanceCardTitle },
-  { id: 'terminal', label: labels.value.nav.terminal, title: labels.value.terminalSectionTitle },
+const sections = computed<SettingsSection[]>(() => [
+  {
+    id: 'general',
+    label: labels.value.nav.general,
+    title: labels.value.languageCardTitle,
+    iconPath: 'M4 5h16v14H4V5Zm0 4h16',
+  },
+  {
+    id: 'appearance',
+    label: labels.value.nav.appearance,
+    title: labels.value.appearanceCardTitle,
+    iconPath: 'M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 0-4.2H12a1.8 1.8 0 0 1 0-3.6h2.4A6.6 6.6 0 0 0 12 3Z',
+  },
+  {
+    id: 'terminal',
+    label: labels.value.nav.terminal,
+    title: labels.value.terminalSectionTitle,
+    iconPath: 'm5 7 5 5-5 5m7 0h7',
+  },
   {
     id: 'connections',
     label: labels.value.nav.connections,
     title: labels.value.connectionsSectionTitle,
+    iconPath: 'M5 6h14v4H5V6Zm0 8h14v4H5v-4Zm3-6h.01M8 16h.01',
   },
-  { id: 'hotkeys', label: labels.value.nav.hotkeys, title: labels.value.hotkeysSectionTitle },
-  { id: 'ai', label: labels.value.nav.ai, title: labels.value.aiSectionTitle },
-  { id: 'advanced', label: labels.value.nav.advanced, title: labels.value.configTitle },
+  {
+    id: 'hotkeys',
+    label: labels.value.nav.hotkeys,
+    title: labels.value.hotkeysSectionTitle,
+    iconPath: 'M4 7h16v10H4V7Zm3 3h.01M10 10h.01M13 10h.01M16 10h.01M8 14h8',
+  },
+  {
+    id: 'ai',
+    label: labels.value.nav.ai,
+    title: labels.value.aiSectionTitle,
+    iconPath: 'm12 3 1.35 4.65L18 9l-4.65 1.35L12 15l-1.35-4.65L6 9l4.65-1.35L12 3Zm6 11 .7 2.3L21 17l-2.3.7L18 20l-.7-2.3L15 17l2.3-.7L18 14Z',
+  },
+  {
+    id: 'advanced',
+    label: labels.value.nav.advanced,
+    title: labels.value.configTitle,
+    iconPath: 'M4 7h16M4 17h16M8 4v6m8 4v6',
+  },
 ]);
 const activeSection = computed(
   () =>
@@ -816,7 +853,10 @@ function redactConnectionPasswords(nextConnections: WorkbenchConnection[]): Work
 
 function persistAll(): void {
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections.value));
+    localStorage.setItem(
+      CONNECTIONS_STORAGE_KEY,
+      JSON.stringify(redactConnectionPasswords(connections.value)),
+    );
     localStorage.setItem(RECENT_CONNECTIONS_STORAGE_KEY, JSON.stringify(recentConnectionIds.value));
     localStorage.setItem(
       THEME_STORAGE_KEY,
@@ -966,20 +1006,22 @@ function applyCssTheme(): void {
           subtle: 'rgb(23 32 42 / 42%)',
           less: '#2d3a46',
           card: 'rgb(20 34 48 / 5%)',
+          cardSoft: 'rgb(20 34 48 / 3.5%)',
         }
       : {
           canvas: '#000000',
-          surface: '#000000',
-          raised: '#121212',
-          hover: 'rgb(122 122 122 / 50%)',
-          terminal: '#121212',
-          border: 'rgb(255 255 255 / 8%)',
-          strongBorder: 'rgb(255 255 255 / 22%)',
-          text: '#eef3f8',
-          muted: 'rgb(255 255 255 / 50%)',
-          subtle: 'rgb(255 255 255 / 36%)',
-          less: '#dce5ed',
-          card: 'rgb(255 255 255 / 2.5%)',
+          surface: '#111111',
+          raised: '#202020',
+          hover: 'rgb(144 144 144 / 32%)',
+          terminal: '#202020',
+          border: 'rgb(255 255 255 / 9%)',
+          strongBorder: 'rgb(255 255 255 / 15%)',
+          text: '#f1f1f1',
+          muted: 'rgb(255 255 255 / 56%)',
+          subtle: 'rgb(255 255 255 / 42%)',
+          less: '#dddddd',
+          card: '#1c1c1c',
+          cardSoft: '#181818',
         };
   const rootStyle = document.documentElement.style;
   rootStyle.setProperty('--color-canvas', colors.canvas);
@@ -992,6 +1034,7 @@ function applyCssTheme(): void {
   rootStyle.setProperty('--color-text', colors.text);
   rootStyle.setProperty('--color-text-muted', colors.muted);
   rootStyle.setProperty('--color-surface-card', colors.card);
+  rootStyle.setProperty('--color-surface-card-soft', colors.cardSoft);
   rootStyle.setProperty('--theme-fg-less', colors.less);
   rootStyle.setProperty('--theme-fg-subtle', colors.subtle);
   rootStyle.setProperty('--terminal-bg', colors.terminal);
@@ -1009,6 +1052,7 @@ function applyCssTheme(): void {
     configTheme.value.palette.terminalMuted,
   );
   document.documentElement.dataset.themeMode = themeMode.value;
+  document.documentElement.dataset.themeTone = resolvedTone;
   const opacity = windowAppearance.value.transparency.enabled
     ? windowAppearance.value.transparency.opacity / 100
     : 1;
@@ -1417,13 +1461,24 @@ const zhLabels: typeof enLabels = {
               type="button"
               @click="selectSection(section.id)"
             >
+              <svg
+                class="settings-nav-icon"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path :d="section.iconPath" />
+              </svg>
               <span class="settings-nav-label">{{ section.label }}</span>
             </button>
           </nav>
         </aside>
 
         <div class="settings-content-panel" data-testid="settings-panel">
-          <div :key="selectedSectionId" class="settings-section-view">
+          <div
+            :key="selectedSectionId"
+            class="settings-section-view"
+            :data-settings-section="selectedSectionId"
+          >
             <header class="settings-section-header">
               <h3>{{ activeSection.title }}</h3>
             </header>

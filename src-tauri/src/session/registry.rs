@@ -437,7 +437,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(target_os = "windows", ignore = "interactive PTY input is flaky under Windows CI shells")]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "interactive PTY input is flaky under Windows CI shells"
+    )]
     async fn natural_shell_exit_removes_the_registered_session() {
         let registry = SessionRegistry::new(Arc::new(LocalPtyBackend::new()));
         let (lifecycle_sender, mut lifecycle_receiver) = mpsc::unbounded_channel();

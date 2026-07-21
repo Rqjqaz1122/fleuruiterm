@@ -93,10 +93,11 @@ impl SessionBackend for LocalPtyBackend {
             lifecycle_sink,
         } = context;
         let shell_for_spawn = shell.clone();
-        let created =
-            tokio::task::spawn_blocking(move || create_pty(&shell_for_spawn, &args, cwd.as_deref(), dimensions))
-            .await
-            .map_err(|error| backend_failure("spawn PTY task", error))??;
+        let created = tokio::task::spawn_blocking(move || {
+            create_pty(&shell_for_spawn, &args, cwd.as_deref(), dimensions)
+        })
+        .await
+        .map_err(|error| backend_failure("spawn PTY task", error))??;
 
         let (sender, receiver) = mpsc::channel(OUTPUT_QUEUE_CAPACITY);
         let (reader_done_sender, reader_done_receiver) = oneshot::channel();
@@ -602,7 +603,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(target_os = "windows", ignore = "interactive PTY input is flaky under Windows CI shells")]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "interactive PTY input is flaky under Windows CI shells"
+    )]
     async fn local_shell_emits_command_output() {
         let backend = LocalPtyBackend::new();
         let session_id = SessionId::new();
@@ -652,7 +656,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(target_os = "windows", ignore = "interactive PTY input is flaky under Windows CI shells")]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "interactive PTY input is flaky under Windows CI shells"
+    )]
     async fn natural_shell_exit_is_reaped_and_reported_closed() {
         let backend = LocalPtyBackend::new();
         let session_id = SessionId::new();
@@ -672,7 +679,11 @@ mod tests {
         };
         let opened = backend.open(request, context).await.unwrap();
 
-        opened.session.write(test_exit_command().as_bytes()).await.unwrap();
+        opened
+            .session
+            .write(test_exit_command().as_bytes())
+            .await
+            .unwrap();
         let event =
             tokio::time::timeout(std::time::Duration::from_secs(3), lifecycle_receiver.recv())
                 .await
@@ -685,7 +696,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(target_os = "windows", ignore = "interactive PTY input is flaky under Windows CI shells")]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "interactive PTY input is flaky under Windows CI shells"
+    )]
     async fn natural_exit_waits_for_terminal_output_consumption() {
         let backend = LocalPtyBackend::new();
         let session_id = SessionId::new();
@@ -738,7 +752,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(target_os = "windows", ignore = "interactive PTY input is flaky under Windows CI shells")]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "interactive PTY input is flaky under Windows CI shells"
+    )]
     async fn explicit_close_cancels_pending_output_consumption() {
         let backend = LocalPtyBackend::new();
         let session_id = SessionId::new();

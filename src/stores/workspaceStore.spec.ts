@@ -166,6 +166,23 @@ describe('workspace store', () => {
     );
   });
 
+  it('writes and interrupts the requested session even after focus changes', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1', 'tab-2', 'pane-2'));
+    const store = useStore();
+    await store.openTab();
+    await store.openTab();
+
+    await store.writeToSession('session-1', 'pwd\r');
+    await store.interruptSession('session-1');
+
+    expect(client.write).toHaveBeenCalledWith(
+      'session-1',
+      new TextEncoder().encode('pwd\r'),
+    );
+    expect(client.interrupt).toHaveBeenCalledWith('session-1');
+  });
+
   it('exposes cleaned focused terminal output for AI context', async () => {
     const client = createClient();
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
@@ -206,6 +223,30 @@ describe('workspace store', () => {
       await vi.advanceTimersByTimeAsync(20);
 
       await expect(output).resolves.toBe('done');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports whether terminal output matched a completion marker or timed out', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+      const store = useStore();
+      await store.openTab();
+
+      const resultPromise = store.waitForSessionTerminalOutput(
+        { sessionId: 'session-1', sequence: 0 },
+        {
+          settleOnIdle: false,
+          timeoutMs: 20,
+          until: (output) => output.includes('__DONE__'),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(resultPromise).resolves.toMatchObject({ reason: 'timeout' });
     } finally {
       vi.useRealTimers();
     }
@@ -263,6 +304,7 @@ describe('workspace store', () => {
         };
       }),
       write: vi.fn(async () => undefined),
+      interrupt: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
     } satisfies WorkspaceSessionClient;
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
@@ -405,6 +447,7 @@ function createClient() {
       };
     }),
     close: vi.fn(async () => undefined),
+    interrupt: vi.fn(async () => undefined),
     write: vi.fn(async () => undefined),
     emit(chunk: TerminalChunk): Promise<void> {
       return Promise.resolve(outputHandlers.get(chunk.sessionId)?.(chunk));

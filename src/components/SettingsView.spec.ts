@@ -33,6 +33,8 @@ describe('SettingsView', () => {
     expect(wrapper.get('.settings-nav').text()).toContain('Hotkeys');
     expect(wrapper.get('.settings-nav').text()).toContain('AI');
     expect(wrapper.get('.settings-nav').text()).toContain('Advanced');
+    expect(wrapper.findAll('.settings-nav-icon')).toHaveLength(7);
+    expect(wrapper.get('[data-section="general"]').classes()).toContain('is-active');
   });
 
   it('shows document-defined settings pages as static presentations', async () => {
@@ -92,6 +94,36 @@ describe('SettingsView', () => {
     ]);
   });
 
+  it('keeps saved connection passwords out of local storage', async () => {
+    const savePasswordSpy = vi.spyOn(settingsClient, 'savePassword').mockResolvedValue();
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="connections"]').trigger('click');
+    await wrapper.get('[data-testid="add-connection"]').trigger('click');
+    await wrapper.get('[data-testid="connection-name"]').setValue('Production');
+    await wrapper.get('[data-testid="connection-host"]').setValue('prod.example.com');
+    await wrapper.get('[data-testid="connection-user"]').setValue('deploy');
+    await wrapper
+      .findAll('.connection-auth-actions .connection-dialog-secondary-button')
+      .at(0)
+      ?.trigger('click');
+    await wrapper.get('.connection-dialog-password input[type="password"]').setValue('secret');
+    await wrapper
+      .get('.password-dialog-actions .connection-dialog-primary-button')
+      .trigger('click');
+    await wrapper.get('[data-testid="save-connection"]').trigger('click');
+
+    await vi.waitFor(() => {
+      expect(savePasswordSpy).toHaveBeenCalledWith(expect.any(String), 'secret');
+    });
+    const cachedConnections = JSON.parse(
+      localStorage.getItem('fleurterm.connections') ?? '[]',
+    ) as Array<{ hasPassword: boolean; password: string }>;
+    const productionConnection = cachedConnections.find((connection) => connection.hasPassword);
+
+    expect(productionConnection).toMatchObject({ hasPassword: true, password: '' });
+  });
+
   it('applies appearance controls to runtime theme and window opacity', async () => {
     const opacitySpy = vi.spyOn(settingsClient, 'setWindowOpacity').mockResolvedValue();
     const wrapper = mount(SettingsView);
@@ -108,6 +140,21 @@ describe('SettingsView', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-terminal-fg')).toBe('#123456');
     expect(document.documentElement.style.getPropertyValue('--app-layer-blur')).toBe('18px');
     expect(opacitySpy).toHaveBeenLastCalledWith(0.75);
+  });
+
+  it('uses neutral black and gray surfaces for the dark theme', async () => {
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="appearance"]').trigger('click');
+    await wrapper.findAll('.settings-theme-inline-button').at(1)?.trigger('click');
+
+    expect(document.documentElement.dataset.themeTone).toBe('dark');
+    expect(document.documentElement.style.getPropertyValue('--color-canvas')).toBe('#000000');
+    expect(document.documentElement.style.getPropertyValue('--color-surface')).toBe('#111111');
+    expect(document.documentElement.style.getPropertyValue('--color-surface-raised')).toBe(
+      '#202020',
+    );
+    expect(document.documentElement.style.getPropertyValue('--color-terminal')).toBe('#202020');
   });
 
   it('configures AI provider endpoint and authentication settings', async () => {
