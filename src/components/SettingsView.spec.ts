@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setLocale } from '@/i18n/locale';
@@ -13,6 +14,7 @@ import SettingsView from './SettingsView.vue';
 
 describe('SettingsView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     localStorage.clear();
     setLocale('en-US');
     useAppSettingsStore().replaceRuntimeSettings({
@@ -41,9 +43,9 @@ describe('SettingsView', () => {
     const wrapper = mount(SettingsView);
 
     await wrapper.get('[data-section="terminal"]').trigger('click');
-    expect((wrapper.get('[data-testid="settings-scrollback"]').element as HTMLInputElement).value).toBe(
-      '25000',
-    );
+    expect(
+      (wrapper.get('[data-testid="settings-scrollback"]').element as HTMLInputElement).value,
+    ).toBe('25000');
     expect(wrapper.get('[data-testid="settings-scroll-on-input"]').exists()).toBe(true);
 
     await wrapper.get('[data-section="hotkeys"]').trigger('click');
@@ -65,6 +67,16 @@ describe('SettingsView', () => {
     expect(wrapper.get('.settings-value-pill').text()).toBe('简体中文');
     expect(wrapper.get('.settings-nav').text()).toContain('通用');
     expect(wrapper.get('.settings-sidebar-copy').text()).toContain('设置');
+  });
+
+  it('shows one software update card in the general section', async () => {
+    const wrapper = mount(SettingsView);
+
+    expect(wrapper.findAll('[data-testid="software-update-card"]')).toHaveLength(1);
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+    await wrapper.get('[data-section="general"]').trigger('click');
+
+    expect(wrapper.findAll('[data-testid="software-update-card"]')).toHaveLength(1);
   });
 
   it('creates and opens an SSH connection from the connections section', async () => {
@@ -174,14 +186,16 @@ describe('SettingsView', () => {
     expect(useAppSettingsStore().aiSettings.value.streamingEnabled).toBe(false);
     await wrapper.get('[data-testid="settings-ai-streaming"]').trigger('click');
 
-    expect((wrapper.get('[data-testid="settings-ai-base-url"]').element as HTMLInputElement).value).toBe(
-      'https://api.openai.com/v1',
-    );
+    expect(
+      (wrapper.get('[data-testid="settings-ai-base-url"]').element as HTMLInputElement).value,
+    ).toBe('https://api.openai.com/v1');
     await wrapper.get('[data-testid="settings-ai-base-url"]').setValue('');
-    expect((wrapper.get('[data-testid="settings-ai-base-url"]').element as HTMLInputElement).value).toBe(
-      '',
-    );
-    await wrapper.get('[data-testid="settings-ai-base-url"]').setValue('https://openai-proxy.example/v1');
+    expect(
+      (wrapper.get('[data-testid="settings-ai-base-url"]').element as HTMLInputElement).value,
+    ).toBe('');
+    await wrapper
+      .get('[data-testid="settings-ai-base-url"]')
+      .setValue('https://openai-proxy.example/v1');
     expect(useAppSettingsStore().aiSettings.value).toMatchObject({
       provider: 'openai',
       baseUrl: 'https://openai-proxy.example/v1',

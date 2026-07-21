@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 
 import AIPanel from '@/components/AIPanel.vue';
 import SettingsView from '@/components/SettingsView.vue';
@@ -25,6 +25,7 @@ import { t, terminalTitle, type TranslationKey } from '@/i18n/locale';
 import type { AiAppAction, AiToolResult } from '@/services/aiToolProtocol';
 import { setLocale } from '@/i18n/locale';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
+import { useAppUpdateStore } from '@/stores/appUpdateStore';
 import { useWorkspaceStore, type WorkspaceErrorCode } from '@/stores/workspaceStore';
 
 const AI_PANEL_WIDTH_STORAGE_KEY = 'fleurterm.aiPanelWidth';
@@ -34,6 +35,7 @@ const MAX_AI_PANEL_WIDTH = 720;
 
 const store = useWorkspaceStore();
 const appSettings = useAppSettingsStore();
+const appUpdate = useAppUpdateStore();
 const { workspace, activeSnapshot, errorMessage, errorCode } = storeToRefs(store);
 const actionPending = ref(false);
 const retryAction = ref<(() => Promise<void>) | null>(null);
@@ -61,6 +63,10 @@ watch(
   },
   { immediate: true, flush: 'sync' },
 );
+
+onMounted(() => {
+  void appUpdate.checkAtStartup();
+});
 
 const appTabs = computed<AppTab[]>(() => {
   const terminalTabs = workspace.value.tabs.map((tab, index) =>

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 
 import AppDialog from '@/components/AppDialog.vue';
 import AppSelect from '@/components/AppSelect.vue';
+import SoftwareUpdateCard from '@/components/SoftwareUpdateCard.vue';
 import { locale, setLocale, t, type AppLocale } from '@/i18n/locale';
 import { settingsClient } from '@/services/settingsClient';
 import {
@@ -174,7 +175,8 @@ const sections = computed<SettingsSection[]>(() => [
     id: 'appearance',
     label: labels.value.nav.appearance,
     title: labels.value.appearanceCardTitle,
-    iconPath: 'M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 0-4.2H12a1.8 1.8 0 0 1 0-3.6h2.4A6.6 6.6 0 0 0 12 3Z',
+    iconPath:
+      'M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 0-4.2H12a1.8 1.8 0 0 1 0-3.6h2.4A6.6 6.6 0 0 0 12 3Z',
   },
   {
     id: 'terminal',
@@ -198,7 +200,8 @@ const sections = computed<SettingsSection[]>(() => [
     id: 'ai',
     label: labels.value.nav.ai,
     title: labels.value.aiSectionTitle,
-    iconPath: 'm12 3 1.35 4.65L18 9l-4.65 1.35L12 15l-1.35-4.65L6 9l4.65-1.35L12 3Zm6 11 .7 2.3L21 17l-2.3.7L18 20l-.7-2.3L15 17l2.3-.7L18 14Z',
+    iconPath:
+      'm12 3 1.35 4.65L18 9l-4.65 1.35L12 15l-1.35-4.65L6 9l4.65-1.35L12 3Zm6 11 .7 2.3L21 17l-2.3.7L18 20l-.7-2.3L15 17l2.3-.7L18 14Z',
   },
   {
     id: 'advanced',
@@ -1122,7 +1125,8 @@ const enLabels = {
   },
   localeName: { en: 'English', zh: 'Simplified Chinese' },
   languageCardTitle: 'Language',
-  languageCardDescription: 'Application interface language. More locales can be added to this list.',
+  languageCardDescription:
+    'Application interface language. More locales can be added to this list.',
   languageStatusLabel: 'Current language',
   generalSectionDescription: 'The interface updates immediately when the language changes.',
   startupCardTitle: 'Startup',
@@ -1196,13 +1200,16 @@ const enLabels = {
   aiTokenHeaderTitle: 'Token header',
   aiTokenHeaderDescription: 'Header name used by custom OpenAI-compatible providers.',
   aiTokenPrefixTitle: 'Token prefix',
-  aiTokenPrefixDescription: 'Prefix before the token value, such as Bearer. Leave empty for raw tokens.',
+  aiTokenPrefixDescription:
+    'Prefix before the token value, such as Bearer. Leave empty for raw tokens.',
   aiStreamingTitle: 'Streaming output',
-  aiStreamingDescription: 'Show assistant responses as they arrive from providers that support streams.',
+  aiStreamingDescription:
+    'Show assistant responses as they arrive from providers that support streams.',
   aiContextTitle: 'Session context',
   aiContextDescription: 'Allow the AI panel to reference the active terminal session.',
   aiWorkingDirectoryTitle: 'Working directory',
-  aiWorkingDirectoryDescription: 'Include the current working directory when session context is enabled.',
+  aiWorkingDirectoryDescription:
+    'Include the current working directory when session context is enabled.',
   aiPolicyTitle: 'Command policy',
   aiPolicyDescription: 'How AI-generated commands should be handled before execution.',
   aiPolicyOptions: {
@@ -1461,11 +1468,7 @@ const zhLabels: typeof enLabels = {
               type="button"
               @click="selectSection(section.id)"
             >
-              <svg
-                class="settings-nav-icon"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
+              <svg class="settings-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path :d="section.iconPath" />
               </svg>
               <span class="settings-nav-label">{{ section.label }}</span>
@@ -1512,6 +1515,8 @@ const zhLabels: typeof enLabels = {
                     </span>
                   </div>
                 </div>
+
+                <SoftwareUpdateCard />
 
                 <div class="settings-form-line">
                   <div class="settings-form-copy">
@@ -1697,7 +1702,11 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.terminalFontDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <button class="settings-reset-button" type="button" @click="resetTerminalSettings">
+                    <button
+                      class="settings-reset-button"
+                      type="button"
+                      @click="resetTerminalSettings"
+                    >
                       {{ labels.configEditorReset }}
                     </button>
                   </div>
@@ -1891,9 +1900,7 @@ const zhLabels: typeof enLabels = {
                         data-testid="settings-ai-model"
                         :value="aiSettings.model"
                         :aria-label="labels.aiModelTitle"
-                        @input="
-                          updateAiSetting('model', ($event.target as HTMLInputElement).value)
-                        "
+                        @input="updateAiSetting('model', ($event.target as HTMLInputElement).value)"
                       />
                     </label>
                   </div>
@@ -1912,9 +1919,7 @@ const zhLabels: typeof enLabels = {
                         autocomplete="off"
                         :value="aiSettings.token"
                         :aria-label="labels.aiTokenTitle"
-                        @input="
-                          updateAiSetting('token', ($event.target as HTMLInputElement).value)
-                        "
+                        @input="updateAiSetting('token', ($event.target as HTMLInputElement).value)"
                       />
                     </label>
                   </div>
@@ -1954,10 +1959,7 @@ const zhLabels: typeof enLabels = {
                         :value="aiSettings.tokenPrefix"
                         :aria-label="labels.aiTokenPrefixTitle"
                         @input="
-                          updateAiSetting(
-                            'tokenPrefix',
-                            ($event.target as HTMLInputElement).value,
-                          )
+                          updateAiSetting('tokenPrefix', ($event.target as HTMLInputElement).value)
                         "
                       />
                     </label>

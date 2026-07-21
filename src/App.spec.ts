@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addTab, createWorkspace } from '@/domain/workspace';
 import { setLocale } from '@/i18n/locale';
 import { defaultTerminalSettings, useAppSettingsStore } from '@/stores/appSettingsStore';
+import { useAppUpdateStore } from '@/stores/appUpdateStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 import App from './App.vue';
@@ -16,6 +17,16 @@ describe('FleurTerm app shell', () => {
     setActivePinia(createPinia());
     setLocale('en-US');
     localStorage.clear();
+  });
+
+  it('checks for application updates when the app starts', async () => {
+    const updateStore = useAppUpdateStore();
+    updateStore.checkAtStartup = vi.fn(async () => undefined);
+
+    mount(App);
+    await Promise.resolve();
+
+    expect(updateStore.checkAtStartup).toHaveBeenCalledOnce();
   });
 
   it('opens a local terminal from the empty workspace', async () => {
@@ -518,7 +529,7 @@ describe('FleurTerm app shell', () => {
           AIPanel: {
             props: ['runAppAction'],
             template:
-              '<button data-testid="ai-open-ssh" @click="runAppAction({ type: \'terminal.openSsh\', host: \'example.com\', user: \'root\', port: 2222 })">Open</button>',
+              "<button data-testid=\"ai-open-ssh\" @click=\"runAppAction({ type: 'terminal.openSsh', host: 'example.com', user: 'root', port: 2222 })\">Open</button>",
           },
         },
       },
