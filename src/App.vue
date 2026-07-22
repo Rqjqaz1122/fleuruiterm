@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import AIPanel from '@/components/AIPanel.vue';
 import SettingsView from '@/components/SettingsView.vue';
@@ -15,14 +15,16 @@ import {
   toTerminalAppTab,
   type AppTab,
 } from '@/domain/appTab';
-import type {
-  PaneDropPosition,
-  SplitDirection,
-  TabDropPlacement,
-  TerminalTab,
-} from '@/domain/workspace';
+import type { TabDropPlacement, TerminalTab } from '@/domain/workspace';
 import { t, terminalTitle, type TranslationKey } from '@/i18n/locale';
 import type { AiAppAction, AiToolResult } from '@/services/aiToolProtocol';
+import { resolveAppShortcut, type AppCommand } from '@/services/appShortcuts';
+import { desktopMenuClient } from '@/services/desktopMenuClient';
+import { detectDesktopPlatform } from '@/services/desktopPlatform';
+import {
+  terminalEditingActions,
+  type TerminalEditingCommand,
+} from '@/services/terminalEditingActions';
 import { setLocale } from '@/i18n/locale';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useAppUpdateStore } from '@/stores/appUpdateStore';
@@ -36,6 +38,7 @@ const MAX_AI_PANEL_WIDTH = 720;
 const store = useWorkspaceStore();
 const appSettings = useAppSettingsStore();
 const appUpdate = useAppUpdateStore();
+const shortcutPlatform = detectDesktopPlatform() === 'macos' ? 'macos' : 'default';
 const { workspace, activeSnapshot, errorMessage, errorCode } = storeToRefs(store);
 const actionPending = ref(false);
 const retryAction = ref<(() => Promise<void>) | null>(null);
@@ -48,6 +51,8 @@ const appTabOrder = ref<string[]>([]);
 const appContentStyle = computed<Record<string, string>>(() => ({
   '--ai-panel-width': `${aiPanelWidth.value}px`,
 }));
+let removeDesktopMenuListener: (() => void) | null = null;
+let appDisposed = false;
 
 watch(
   () => [
@@ -66,6 +71,23 @@ watch(
 
 onMounted(() => {
   void appUpdate.checkAtStartup();
+  window.addEventListener('keydown', handleApplicationKeyDown);
+  void desktopMenuClient
+    .listen((command) => void executeAppCommand(command))
+    .then((unlisten) => {
+      if (appDisposed) {
+        unlisten();
+        return;
+      }
+      removeDesktopMenuListener = unlisten;
+    });
+});
+
+onBeforeUnmount(() => {
+  appDisposed = true;
+  window.removeEventListener('keydown', handleApplicationKeyDown);
+  removeDesktopMenuListener?.();
+  removeDesktopMenuListener = null;
 });
 
 const appTabs = computed<AppTab[]>(() => {
@@ -209,6 +231,80 @@ function toggleAiPanel(): void {
   aiPanelOpen.value = !aiPanelOpen.value;
 }
 
+function handleApplicationKeyDown(event: KeyboardEvent): void {
+  const command = resolveAppShortcut(event, appSettings.shortcutSettings.value, shortcutPlatform);
+  if (command === null) {
+    return;
+  }
+  if (isTerminalEditingCommand(command) && isTextEditingTarget(event.target)) {
+    return;
+  }
+  event.preventDefault();
+  void executeAppCommand(command);
+}
+
+async function executeAppCommand(command: AppCommand): Promise<void> {
+  switch (command) {
+    case 'new-terminal':
+      await openTerminal();
+      return;
+    case 'close-tab':
+      if (activeAppTabId.value !== null) {
+        await closeAppTab(activeAppTabId.value);
+      }
+      return;
+    case 'next-tab':
+      activateRelativeAppTab(1);
+      return;
+    case 'previous-tab':
+      activateRelativeAppTab(-1);
+      return;
+    case 'open-settings':
+      openSettings();
+      return;
+    case 'toggle-ai':
+      toggleAiPanel();
+      return;
+    case 'clear-terminal':
+      if (!settingsActive.value && workspace.value.focusedPaneId !== null) {
+        await runAction(() => store.writeToFocusedSession('\x0c'));
+      }
+      return;
+    case 'copy':
+    case 'paste':
+    case 'select-all':
+      if (!settingsActive.value && workspace.value.focusedPaneId !== null) {
+        await terminalEditingActions.execute(workspace.value.focusedPaneId, command);
+      }
+      return;
+  }
+}
+
+function isTerminalEditingCommand(command: AppCommand): command is TerminalEditingCommand {
+  return command === 'copy' || command === 'paste' || command === 'select-all';
+}
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target.isContentEditable
+  );
+}
+
+function activateRelativeAppTab(offset: -1 | 1): void {
+  const tabIds = appTabs.value.map((tab) => tab.id);
+  if (tabIds.length < 2) {
+    return;
+  }
+  const currentIndex = tabIds.indexOf(activeAppTabId.value ?? '');
+  const nextIndex = (Math.max(0, currentIndex) + offset + tabIds.length) % tabIds.length;
+  activateAppTab(tabIds[nextIndex]);
+}
+
 function resizeAiPanel(width: number): void {
   aiPanelWidth.value = clampAiPanelWidth(width);
   persistAiPanelWidth(aiPanelWidth.value);
@@ -338,24 +434,6 @@ function reorderApplicationTabs(
   if (sourceIsTerminal && targetIsTerminal) {
     store.reorderTabById(sourceTabId, targetTabId, placement);
   }
-}
-
-function mergeDraggedTab(
-  sourceTabId: string,
-  targetPaneId: string,
-  position: PaneDropPosition,
-): void {
-  const sourceTabExists = workspace.value.tabs.some((tab) => tab.id === sourceTabId);
-  if (!sourceTabExists) {
-    return;
-  }
-  store.mergeTabIntoPane(sourceTabId, targetPaneId, position);
-  activeAppTabId.value = store.workspace.activeTabId;
-  lastActiveTerminalTabId.value = store.workspace.activeTabId;
-}
-
-async function splitTerminal(paneId: string, direction: SplitDirection): Promise<void> {
-  await runAction(() => store.splitPaneById(paneId, direction));
 }
 
 async function closePane(paneId: string): Promise<void> {
@@ -489,10 +567,8 @@ function clampAiPanelWidth(width: number): number {
             :tab-id="tab.id"
             :node="tab.root"
             :focused-pane-id="workspace.focusedPaneId"
-            @split="splitTerminal"
             @close="closePane"
             @focus="store.focusPane"
-            @drop-tab="mergeDraggedTab"
           />
         </div>
         <StartPage

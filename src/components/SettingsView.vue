@@ -5,6 +5,20 @@ import AppDialog from '@/components/AppDialog.vue';
 import AppSelect from '@/components/AppSelect.vue';
 import SoftwareUpdateCard from '@/components/SoftwareUpdateCard.vue';
 import { locale, setLocale, t, type AppLocale } from '@/i18n/locale';
+import {
+  APP_SHORTCUTS,
+  captureShortcutBinding,
+  findShortcutConflict,
+  formatShortcutKeys,
+  resolveShortcutBinding,
+  sanitizeShortcutSettings,
+  type AppCommand,
+  type AppShortcutDefinition,
+  type ShortcutBinding,
+  type ShortcutPlatform,
+  type ShortcutSettings,
+} from '@/services/appShortcuts';
+import { detectDesktopPlatform } from '@/services/desktopPlatform';
 import { settingsClient } from '@/services/settingsClient';
 import {
   defaultTerminalSettings,
@@ -17,6 +31,7 @@ import {
   type AiSettings,
   type TerminalSettings,
 } from '@/stores/appSettingsStore';
+import { TERMINAL_THEME_CHANGED_EVENT } from '@/terminal/terminalTheme';
 
 type SettingsSectionId =
   'general' | 'appearance' | 'terminal' | 'connections' | 'hotkeys' | 'ai' | 'advanced';
@@ -33,7 +48,7 @@ type ColorScheme = 'auto' | 'green' | 'amber' | 'blue' | 'monochrome';
 type ThemeMode = 'system' | 'dark' | 'light';
 type ThemeTone = 'dark' | 'light';
 type ConnectionDialogIntent = 'create' | 'edit';
-type ConnectionFormTabId = 'general' | 'ports' | 'advanced' | 'loginScripts';
+type ConnectionFormTabId = 'general' | 'authentication' | 'ports' | 'advanced';
 
 export interface WorkbenchConnection {
   id: string;
@@ -72,12 +87,12 @@ type ConnectionDraft = Omit<
   'id' | 'status' | 'latency' | 'lastSeen' | 'tags' | 'adapter'
 >;
 type WindowAppearanceConfig = { transparency: { enabled: boolean; opacity: number; blur: number } };
+type TerminalColorPalette = {
+  terminalForeground: string;
+  terminalMuted: string;
+};
 type ThemeConfigFile = {
-  tone: ThemeTone;
-  palette: {
-    terminalForeground: string;
-    terminalMuted: string;
-  };
+  palettes: Record<ThemeTone, TerminalColorPalette>;
 };
 
 const CONNECTIONS_STORAGE_KEY = 'fleurterm.connections';
@@ -90,16 +105,26 @@ const emit = defineEmits<{
 }>();
 
 const defaultTheme: ThemeConfigFile = {
-  tone: 'dark',
-  palette: {
-    terminalForeground: '#eef3f8',
-    terminalMuted: '#8a98a8',
+  palettes: {
+    dark: {
+      terminalForeground: '#eef3f8',
+      terminalMuted: '#8a98a8',
+    },
+    light: {
+      terminalForeground: '#1f2937',
+      terminalMuted: '#667085',
+    },
   },
 };
-const presetTheme = { ...defaultTheme, palette: { ...defaultTheme.palette } };
 const defaultWindowAppearance: WindowAppearanceConfig = {
   transparency: { enabled: false, opacity: 100, blur: 0 },
 };
+const connectionTextInputAttributes = {
+  autocomplete: 'off',
+  autocapitalize: 'none',
+  autocorrect: 'off',
+  spellcheck: false,
+} as const;
 const defaultLocalConnection: WorkbenchConnection = {
   id: 'local-shell',
   name: 'Local Shell',
@@ -137,11 +162,12 @@ const collapsedGroups = ref<Record<string, boolean>>({});
 const connectionFilter = ref('');
 const settingsReady = ref(!settingsClient.available);
 const appSettings = useAppSettingsStore();
-const { aiSettings, terminalSettings } = appSettings;
+const { aiSettings, shortcutSettings, terminalSettings } = appSettings;
 const connections = ref<WorkbenchConnection[]>(loadConnections());
 const recentConnectionIds = ref<string[]>(loadRecentConnectionIds(connections.value));
 const themeMode = ref<ThemeMode>(loadThemeMode());
 const configTheme = ref<ThemeConfigFile>(loadThemeConfig());
+const terminalPaletteTone = ref<ThemeTone>(themeMode.value === 'light' ? 'light' : 'dark');
 const windowAppearance = ref<WindowAppearanceConfig>(loadWindowAppearance());
 const settingsEditorValue = ref('');
 const settingsEditorStatus = ref<{ kind: 'success' | 'error'; message: string } | null>(null);
@@ -154,12 +180,29 @@ const passwordDialogOpen = ref(false);
 const passwordValue = ref('');
 const passwordChanged = ref(false);
 const credentialPersistenceError = ref('');
+const recordingShortcutId = ref<AppCommand | null>(null);
+const shortcutError = ref('');
 const selectedLocale = computed<AppLocale>({
   get: () => locale.value,
   set: (nextLocale) => setLocale(nextLocale),
 });
 
 const labels = computed(() => (selectedLocale.value === 'zh-CN' ? zhLabels : enLabels));
+const shortcutPlatform: ShortcutPlatform =
+  detectDesktopPlatform() === 'macos' ? 'macos' : 'default';
+const shortcutGroups = computed(() =>
+  (['workspace', 'terminal', 'editing'] as const).map((group) => ({
+    id: group,
+    label: labels.value.hotkeyGroups[group],
+    shortcuts: APP_SHORTCUTS.filter((shortcutDefinition) => shortcutDefinition.group === group),
+  })),
+);
+const terminalPalette = computed(() => configTheme.value.palettes[terminalPaletteTone.value]);
+const terminalPreviewStyle = computed<Record<string, string>>(() => ({
+  '--terminal-preview-bg': terminalPaletteTone.value === 'light' ? '#ffffff' : '#202020',
+  '--terminal-preview-fg': terminalPalette.value.terminalForeground,
+  '--terminal-preview-muted': terminalPalette.value.terminalMuted,
+}));
 const languageOptions = computed(() =>
   appSettings.languageOptions.value.map((option) => ({
     value: option.value,
@@ -271,18 +314,10 @@ const showsPrivateKeyTools = computed(
 );
 const formTabs = computed<Array<{ id: ConnectionFormTabId; label: string }>>(() => [
   { id: 'general', label: labels.value.dialog.tabs.general },
-  ...(supportsPorts.value ? [{ id: 'ports' as const, label: labels.value.dialog.tabs.ports }] : []),
-  ...(supportsAdvanced.value
-    ? [{ id: 'advanced' as const, label: labels.value.dialog.tabs.advanced }]
-    : []),
-  { id: 'loginScripts', label: labels.value.dialog.tabs.loginScripts },
+  { id: 'authentication', label: labels.value.dialog.tabs.authentication },
+  { id: 'ports', label: labels.value.dialog.tabs.ports },
+  { id: 'advanced', label: labels.value.dialog.tabs.advanced },
 ]);
-const connectionMethodOptions = computed(() =>
-  connectionMethods.map((method) => ({
-    value: method,
-    label: methodLabel(method),
-  })),
-);
 const aiProviderOptions = computed(() =>
   aiProviders.map((provider) => ({
     value: provider,
@@ -302,16 +337,13 @@ const draftEndpoint = computed(() => {
   if (draft.value.method === 'serial') {
     return draft.value.serialPath.trim() || labels.value.connectionMeta.serialDevice;
   }
-  return draft.value.host.trim()
-    ? `${draft.value.host.trim()}${draft.value.port > 0 ? `:${draft.value.port}` : ''}`
-    : '--';
+  const user = draft.value.user.trim() || labels.value.connectionMeta.defaultUser;
+  const host = draft.value.host.trim() || 'host';
+  const port = draft.value.port > 0 ? `:${draft.value.port}` : '';
+  return `${user}@${host}${port}`;
 });
-const draftIdentity = computed(() =>
-  draft.value.method === 'local'
-    ? draft.value.name.trim() || labels.value.dialog.connectionLabel
-    : `${draft.value.user.trim() || labels.value.connectionMeta.defaultUser}@${
-        draft.value.name.trim() || methodLabel(draft.value.method)
-      }`,
+const draftIdentity = computed(
+  () => draft.value.name.trim() || labels.value.dialog.unnamedConnection,
 );
 
 watch(
@@ -324,6 +356,7 @@ watch(
     windowAppearance,
     terminalSettings,
     aiSettings,
+    shortcutSettings,
   ],
   () => {
     if (!settingsReady.value) {
@@ -336,12 +369,22 @@ watch(
   { deep: true, immediate: true },
 );
 
+watch(themeMode, (mode) => {
+  if (mode === 'dark' || mode === 'light') {
+    terminalPaletteTone.value = mode;
+  }
+});
+
 if (settingsClient.available) {
   void hydrateSettings();
 }
 
 if (typeof window !== 'undefined') {
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (recordingShortcutId.value !== null) {
+      recordShortcut(event);
+      return;
+    }
     if (event.key === 'Escape') {
       if (passwordDialogOpen.value) {
         closePasswordDialog();
@@ -364,6 +407,7 @@ async function hydrateSettings(): Promise<void> {
   const windowConfig = payload?.settings?.window as WindowAppearanceConfig | undefined;
   const terminalConfig = payload?.settings?.terminal as Partial<TerminalSettings> | undefined;
   const aiConfig = payload?.settings?.ai as Partial<AiSettings> | undefined;
+  const shortcutConfig = payload?.settings?.shortcuts;
 
   if (savedLocale === 'en-US' || savedLocale === 'zh-CN') {
     setLocale(savedLocale);
@@ -380,6 +424,7 @@ async function hydrateSettings(): Promise<void> {
   appSettings.replaceRuntimeSettings({
     terminal: terminalConfig,
     ai: aiConfig,
+    shortcuts: shortcutConfig,
   });
   if (Array.isArray(workbench?.connections)) {
     connections.value = normalizeConnectionList(workbench.connections);
@@ -484,8 +529,6 @@ function updateDraft<Key extends keyof ConnectionDraft>(
     const method = value as ConnectionMethod;
     if (method === 'local') {
       nextDraft.port = 0;
-      nextDraft.host = 'localhost';
-      nextDraft.user = nextDraft.user || 'local';
     } else if (method === 'serial') {
       nextDraft.port = 0;
     } else if (method === 'telnet' && (!nextDraft.port || nextDraft.port === 22)) {
@@ -495,6 +538,42 @@ function updateDraft<Key extends keyof ConnectionDraft>(
     }
   }
   draft.value = nextDraft;
+}
+
+function navigateConnectionFormTabs(event: KeyboardEvent, currentTabId: ConnectionFormTabId): void {
+  const navigationKeys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+  if (!navigationKeys.includes(event.key)) {
+    return;
+  }
+
+  const tabs = formTabs.value;
+  const currentIndex = tabs.findIndex((tab) => tab.id === currentTabId);
+  if (currentIndex < 0) {
+    return;
+  }
+
+  let nextIndex = currentIndex;
+  switch (event.key) {
+    case 'ArrowLeft':
+      nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+      break;
+    case 'ArrowRight':
+      nextIndex = (currentIndex + 1) % tabs.length;
+      break;
+    case 'Home':
+      nextIndex = 0;
+      break;
+    case 'End':
+      nextIndex = tabs.length - 1;
+      break;
+  }
+
+  event.preventDefault();
+  activeFormTab.value = tabs[nextIndex].id;
+  const tabButtons = (
+    event.currentTarget as HTMLButtonElement
+  ).parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  tabButtons?.item(nextIndex).focus();
 }
 
 function saveDraft(): void {
@@ -621,22 +700,28 @@ function forgetPassword(): void {
 }
 
 function resetTerminalColors(): void {
+  const tone = terminalPaletteTone.value;
   configTheme.value = {
-    tone: configTheme.value.tone,
-    palette: { ...presetTheme.palette },
+    palettes: {
+      ...configTheme.value.palettes,
+      [tone]: { ...defaultTheme.palettes[tone] },
+    },
   };
 }
 
-function updateThemePaletteColor(colorKey: keyof ThemeConfigFile['palette'], value: string): void {
+function updateThemePaletteColor(colorKey: keyof TerminalColorPalette, value: string): void {
   const normalized = normalizeHexColor(value);
   if (!normalized) {
     return;
   }
+  const tone = terminalPaletteTone.value;
   configTheme.value = {
-    tone: configTheme.value.tone,
-    palette: {
-      ...configTheme.value.palette,
-      [colorKey]: normalized,
+    palettes: {
+      ...configTheme.value.palettes,
+      [tone]: {
+        ...configTheme.value.palettes[tone],
+        [colorKey]: normalized,
+      },
     },
   };
 }
@@ -661,6 +746,75 @@ function updateTerminalSetting<Key extends keyof TerminalSettings>(
 
 function resetTerminalSettings(): void {
   appSettings.updateTerminalSettings(defaultTerminalSettings);
+}
+
+function shortcutBindingFor(shortcutDefinition: AppShortcutDefinition): ShortcutBinding | null {
+  return shortcutDefinition.editable
+    ? resolveShortcutBinding(shortcutDefinition.id as AppCommand, shortcutSettings.value)
+    : shortcutDefinition.defaultBinding;
+}
+
+function shortcutKeysFor(shortcutDefinition: AppShortcutDefinition): string[] {
+  const binding = shortcutBindingFor(shortcutDefinition);
+  return binding === null ? [] : formatShortcutKeys(binding, shortcutPlatform);
+}
+
+function beginShortcutRecording(shortcutDefinition: AppShortcutDefinition): void {
+  if (!shortcutDefinition.editable) {
+    return;
+  }
+  recordingShortcutId.value = shortcutDefinition.id as AppCommand;
+  shortcutError.value = '';
+}
+
+function recordShortcut(event: KeyboardEvent): void {
+  const shortcutId = recordingShortcutId.value;
+  if (shortcutId === null) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (event.key === 'Escape') {
+    recordingShortcutId.value = null;
+    shortcutError.value = '';
+    return;
+  }
+  const binding = captureShortcutBinding(event, shortcutPlatform);
+  if (binding === null) {
+    shortcutError.value = labels.value.shortcutInvalid;
+    return;
+  }
+  const conflictId = findShortcutConflict(
+    shortcutId,
+    binding,
+    shortcutSettings.value,
+    shortcutPlatform,
+  );
+  if (conflictId !== null) {
+    shortcutError.value = labels.value.shortcutConflict.replace(
+      '{action}',
+      labels.value.hotkeyActions[conflictId],
+    );
+    return;
+  }
+  appSettings.updateShortcutSetting(shortcutId, binding);
+  recordingShortcutId.value = null;
+  shortcutError.value = '';
+}
+
+function removeShortcut(shortcutDefinition: AppShortcutDefinition): void {
+  if (!shortcutDefinition.editable) {
+    return;
+  }
+  appSettings.updateShortcutSetting(shortcutDefinition.id as AppCommand, null);
+  recordingShortcutId.value = null;
+  shortcutError.value = '';
+}
+
+function resetShortcutSettings(): void {
+  appSettings.resetShortcutSettings();
+  recordingShortcutId.value = null;
+  shortcutError.value = '';
 }
 
 function updateAiSetting<Key extends keyof AiSettings>(key: Key, value: AiSettings[Key]): void {
@@ -689,6 +843,7 @@ function applySettingsEditor(): void {
     appSettings.replaceRuntimeSettings({
       terminal: parsed.terminal,
       ai: parsed.ai,
+      shortcuts: parsed.shortcuts,
     });
     connections.value = normalizeConnectionList(parsed.workbench.connections);
     recentConnectionIds.value = parsed.workbench.recentConnectionIds.filter((connectionId) =>
@@ -784,7 +939,7 @@ function normalizeDraft(rawDraft: ConnectionDraft): ConnectionDraft {
 }
 
 function isDraftValid(candidate: ConnectionDraft): boolean {
-  if (!candidate.name.trim() || !candidate.group.trim()) {
+  if (!candidate.name.trim()) {
     return false;
   }
   if (candidate.method === 'local') {
@@ -875,14 +1030,12 @@ function buildSettingsEditorValue(): string {
       locale: locale.value,
       theme: {
         mode: themeMode.value,
-        config: {
-          tone: configTheme.value.tone,
-          palette: configTheme.value.palette,
-        },
+        config: configTheme.value,
       },
       window: windowAppearance.value,
       terminal: terminalSettings.value,
       ai: aiSettings.value,
+      shortcuts: shortcutSettings.value,
       workbench: {
         recentConnectionIds: recentConnectionIds.value,
         connections: redactConnectionPasswords(connections.value),
@@ -899,6 +1052,7 @@ function parseSettingsEditorValue(source: string): {
   window: WindowAppearanceConfig;
   terminal: TerminalSettings;
   ai: AiSettings;
+  shortcuts: ShortcutSettings;
   workbench: { connections: WorkbenchConnection[]; recentConnectionIds: string[] };
 } {
   const parsed = JSON.parse(source) as Record<string, unknown>;
@@ -931,6 +1085,7 @@ function parseSettingsEditorValue(source: string): {
       (parsed.terminal as Partial<TerminalSettings> | undefined) ?? terminalSettings.value,
     ),
     ai: sanitizeAiSettings((parsed.ai as Partial<AiSettings> | undefined) ?? aiSettings.value),
+    shortcuts: sanitizeShortcutSettings(parsed.shortcuts ?? shortcutSettings.value),
     workbench: {
       connections: normalizeConnectionList(workbench.connections),
       recentConnectionIds: workbench.recentConnectionIds.filter(
@@ -971,6 +1126,7 @@ function persistAll(): void {
       window: windowAppearance.value,
       terminal: terminalSettings.value,
       ai: aiSettings.value,
+      shortcuts: shortcutSettings.value,
       workbench: {
         connections: redactConnectionPasswords(connections.value),
         recentConnectionIds: recentConnectionIds.value,
@@ -1057,15 +1213,35 @@ function loadWindowAppearance(): WindowAppearanceConfig {
 }
 
 function normalizeThemeConfig(config: ThemeConfigFile): ThemeConfigFile {
+  const legacyConfig = config as ThemeConfigFile & {
+    tone?: ThemeTone;
+    palette?: Partial<TerminalColorPalette>;
+  };
+  const legacyTone = legacyConfig.tone === 'light' ? 'light' : 'dark';
+  const legacyPalette = legacyConfig.palette;
+
   return {
-    tone: config?.tone === 'light' ? 'light' : 'dark',
-    palette: {
-      terminalForeground:
-        normalizeHexColor(config?.palette?.terminalForeground) ??
-        defaultTheme.palette.terminalForeground,
-      terminalMuted:
-        normalizeHexColor(config?.palette?.terminalMuted) ?? defaultTheme.palette.terminalMuted,
+    palettes: {
+      dark: normalizeTerminalPalette(
+        config?.palettes?.dark ?? (legacyTone === 'dark' ? legacyPalette : undefined),
+        defaultTheme.palettes.dark,
+      ),
+      light: normalizeTerminalPalette(
+        config?.palettes?.light ?? (legacyTone === 'light' ? legacyPalette : undefined),
+        defaultTheme.palettes.light,
+      ),
     },
+  };
+}
+
+function normalizeTerminalPalette(
+  palette: Partial<TerminalColorPalette> | undefined,
+  fallback: TerminalColorPalette,
+): TerminalColorPalette {
+  return {
+    terminalForeground:
+      normalizeHexColor(palette?.terminalForeground) ?? fallback.terminalForeground,
+    terminalMuted: normalizeHexColor(palette?.terminalMuted) ?? fallback.terminalMuted,
   };
 }
 
@@ -1140,20 +1316,18 @@ function applyCssTheme(): void {
     '--app-overlay-blur',
     `${Math.max(8, windowAppearance.value.transparency.blur)}px`,
   );
-  document.documentElement.style.setProperty(
-    '--theme-terminal-fg',
-    configTheme.value.palette.terminalForeground,
-  );
-  document.documentElement.style.setProperty(
-    '--theme-terminal-muted',
-    configTheme.value.palette.terminalMuted,
-  );
+  const activeTerminalPalette = configTheme.value.palettes[resolvedTone];
+  rootStyle.setProperty('--theme-terminal-fg', activeTerminalPalette.terminalForeground);
+  rootStyle.setProperty('--theme-terminal-muted', activeTerminalPalette.terminalMuted);
   document.documentElement.dataset.themeMode = themeMode.value;
   document.documentElement.dataset.themeTone = resolvedTone;
   const opacity = windowAppearance.value.transparency.enabled
     ? windowAppearance.value.transparency.opacity / 100
     : 1;
   void settingsClient.setWindowOpacity(opacity).catch(() => undefined);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(TERMINAL_THEME_CHANGED_EVENT));
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -1237,17 +1411,21 @@ const enLabels = {
   deleteConnection: 'Delete',
   emptyConnections: 'No connections found.',
   appearanceCardTitle: 'Appearance',
+  appearanceCardDescription: 'Choose how FleurTerm surfaces and terminal content are displayed.',
   themeOptions: {
-    system: { label: 'System' },
-    dark: { label: 'Dark' },
-    light: { label: 'Light' },
+    system: { label: 'System', description: 'Match macOS or Windows' },
+    dark: { label: 'Dark', description: 'Black and neutral gray surfaces' },
+    light: { label: 'Light', description: 'Bright surfaces with dark text' },
   },
   terminalColorsTitle: 'Terminal colors',
+  terminalColorsDescription: 'Dark and light modes keep separate readable text colors.',
+  terminalPaletteToneLabel: 'Palette to edit',
   terminalColorPreviewTitle: 'Preview',
   terminalForegroundLabel: 'Foreground',
   terminalMutedLabel: 'Muted',
   terminalColorsReset: 'Reset colors',
   windowTransparencyTitle: 'Window transparency',
+  windowTransparencyDescription: 'Control native window opacity and background blur.',
   windowTransparencyEnabledLabel: 'Enable transparency',
   windowTransparencyOpacityLabel: 'Opacity',
   windowTransparencyBlurLabel: 'Blur',
@@ -1269,12 +1447,32 @@ const enLabels = {
   terminalCursorDescription: 'Blink the terminal cursor while focused.',
   terminalReset: 'Reset terminal',
   hotkeysSectionTitle: 'Hotkeys',
-  hotkeysNewTerminal: 'New terminal',
-  hotkeysCloseTab: 'Close tab',
-  hotkeysSplitHorizontal: 'Split horizontally',
-  hotkeysSplitVertical: 'Split vertically',
-  hotkeysSettings: 'Open settings',
-  hotkeysReadOnlyHint: 'Shortcut editing is not enabled in this build.',
+  hotkeysDescription: 'Click a shortcut to record a new key combination.',
+  hotkeysPlatformHint: 'Changes take effect immediately.',
+  shortcutAdd: 'Add shortcut',
+  shortcutRecording: 'Press a shortcut…',
+  shortcutRemove: 'Remove shortcut',
+  shortcutReset: 'Restore defaults',
+  shortcutSystem: 'System shortcut',
+  shortcutInvalid: 'Use Command, Control, or Option with another key.',
+  shortcutConflict: 'This shortcut is already assigned to {action}.',
+  hotkeyGroups: {
+    workspace: 'Workspace',
+    terminal: 'Terminal',
+    editing: 'Editing',
+  },
+  hotkeyActions: {
+    'new-terminal': 'New terminal',
+    'close-tab': 'Close current tab',
+    'next-tab': 'Next tab',
+    'previous-tab': 'Previous tab',
+    'open-settings': 'Open settings',
+    'toggle-ai': 'Toggle AI assistant',
+    'clear-terminal': 'Clear terminal',
+    copy: 'Copy',
+    paste: 'Paste',
+    'select-all': 'Select all',
+  },
   aiSectionTitle: 'AI',
   aiProviderTitle: 'Provider',
   aiProviderDescription: 'Choose which assistant backend the side panel should use.',
@@ -1333,7 +1531,9 @@ const enLabels = {
   },
   dialog: {
     connectionLabel: 'Connection',
+    connectionCreateSummary: 'Create a new remote terminal profile.',
     connectionEditSummary: 'Create or update a terminal connection profile.',
+    unnamedConnection: 'Unnamed connection',
     connectionCancel: 'Cancel',
     connectionSave: 'Save',
     connectionDelete: 'Delete',
@@ -1341,9 +1541,15 @@ const enLabels = {
     connectionGroup: 'Group',
     connectionIcon: 'Icon',
     connectionMethod: 'Method',
+    connectionMethodTitle: 'Connection method',
+    connectionMethodDescription: 'Choose a protocol to show only the fields it needs.',
+    connectionGeneralNote:
+      'Authentication, passwords, and private keys are managed on the Authentication page.',
     connectionHost: 'Host',
+    connectionHostPlaceholder: 'localhost',
     connectionPort: 'Port',
     connectionUser: 'User',
+    connectionUserPlaceholder: 'local',
     connectionCwd: 'Working directory',
     connectionShell: 'Shell',
     connectionSerialPath: 'Serial path',
@@ -1360,18 +1566,28 @@ const enLabels = {
     connectionPrivateKeys: 'Private keys',
     privateKeyPlaceholder: 'Path to private key',
     addPrivateKey: 'Add key',
+    noAuthenticationOptions: 'This connection type does not require authentication.',
+    authenticationDescription:
+      'Try SSH Agent and private keys first, or save a password for this connection.',
+    authenticationSecurityNote:
+      'Passwords are encrypted with a key bound to this device and are not stored in the connection profile.',
     connectionForwardedPorts: 'Forwarded ports',
     forwardedPortsHint: 'One forwarded port rule per line.',
+    portsDescription: 'Keep port forwarding and proxy rules together for this connection.',
     noPortsOptions: 'This connection type has no port forwarding options.',
     connectionFingerprint: 'Fingerprint',
-    noAdvancedOptions: 'This connection type has no advanced options.',
     connectionLoginScripts: 'Login scripts',
     loginScriptsHint: 'Commands to run after the connection opens.',
+    advancedDescription: 'Keep infrequently used connection options out of the basic form.',
+    requiredFieldsHint: 'Only name, host, and user are required.',
+    connectionPreview: 'Connection preview',
+    connectionStatus: 'Status',
+    connectionNotTested: 'Not tested',
     tabs: {
-      general: 'General',
-      ports: 'Ports',
+      general: 'Basic information',
+      authentication: 'Authentication',
+      ports: 'Tunnels & proxy',
       advanced: 'Advanced',
-      loginScripts: 'Login Scripts',
     },
     authOptions: {
       auto: 'Auto',
@@ -1414,17 +1630,21 @@ const zhLabels: typeof enLabels = {
   deleteConnection: '删除',
   emptyConnections: '没有找到连接。',
   appearanceCardTitle: '外观',
+  appearanceCardDescription: '设置 FleurTerm 界面与终端内容的显示方式。',
   themeOptions: {
-    system: { label: '跟随系统' },
-    dark: { label: '深色' },
-    light: { label: '浅色' },
+    system: { label: '跟随系统', description: '跟随 macOS 或 Windows' },
+    dark: { label: '深色', description: '纯黑与中性灰界面' },
+    light: { label: '浅色', description: '明亮界面与深色文字' },
   },
   terminalColorsTitle: '终端颜色',
+  terminalColorsDescription: '深色和浅色模式分别保存清晰可读的文字颜色。',
+  terminalPaletteToneLabel: '正在编辑的配色',
   terminalColorPreviewTitle: '预览',
   terminalForegroundLabel: '前景色',
   terminalMutedLabel: '弱化色',
   terminalColorsReset: '重置颜色',
   windowTransparencyTitle: '窗口透明度',
+  windowTransparencyDescription: '控制原生窗口的不透明度与背景模糊。',
   windowTransparencyEnabledLabel: '启用透明效果',
   windowTransparencyOpacityLabel: '不透明度',
   windowTransparencyBlurLabel: '模糊',
@@ -1442,12 +1662,32 @@ const zhLabels: typeof enLabels = {
   terminalCursorTitle: '光标闪烁',
   terminalCursorDescription: '终端聚焦时显示闪烁光标。',
   hotkeysSectionTitle: '快捷键',
-  hotkeysNewTerminal: '新建终端',
-  hotkeysCloseTab: '关闭标签',
-  hotkeysSplitHorizontal: '横向分屏',
-  hotkeysSplitVertical: '纵向分屏',
-  hotkeysSettings: '打开设置',
-  hotkeysReadOnlyHint: '当前版本暂不启用快捷键编辑。',
+  hotkeysDescription: '点击快捷键即可录制新的组合键。',
+  hotkeysPlatformHint: '修改后立即生效。',
+  shortcutAdd: '添加快捷键',
+  shortcutRecording: '请按下快捷键…',
+  shortcutRemove: '删除快捷键',
+  shortcutReset: '恢复默认',
+  shortcutSystem: '系统快捷键',
+  shortcutInvalid: '请组合使用 Command、Control 或 Option 与其他按键。',
+  shortcutConflict: '该快捷键已经分配给“{action}”。',
+  hotkeyGroups: {
+    workspace: '工作区',
+    terminal: '终端',
+    editing: '编辑',
+  },
+  hotkeyActions: {
+    'new-terminal': '新建终端',
+    'close-tab': '关闭当前标签',
+    'next-tab': '下一个标签',
+    'previous-tab': '上一个标签',
+    'open-settings': '打开设置',
+    'toggle-ai': '切换 AI 助手',
+    'clear-terminal': '清空终端',
+    copy: '复制',
+    paste: '粘贴',
+    'select-all': '全选',
+  },
   aiSectionTitle: 'AI',
   aiProviderTitle: '服务提供方',
   aiProviderDescription: '选择右侧 AI 面板使用的助手服务。',
@@ -1503,7 +1743,9 @@ const zhLabels: typeof enLabels = {
   },
   dialog: {
     connectionLabel: '连接',
+    connectionCreateSummary: '创建一个新的远程终端配置。',
     connectionEditSummary: '创建或更新终端连接配置。',
+    unnamedConnection: '未命名连接',
     connectionCancel: '取消',
     connectionSave: '保存',
     connectionDelete: '删除',
@@ -1511,9 +1753,14 @@ const zhLabels: typeof enLabels = {
     connectionGroup: '分组',
     connectionIcon: '图标',
     connectionMethod: '方式',
+    connectionMethodTitle: '连接方式',
+    connectionMethodDescription: '选择协议后，只展示当前协议需要的字段。',
+    connectionGeneralNote: '认证方式、密码和私钥在身份认证页面中单独管理。',
     connectionHost: '主机',
+    connectionHostPlaceholder: 'localhost',
     connectionPort: '端口',
     connectionUser: '用户',
+    connectionUserPlaceholder: 'local',
     connectionCwd: '工作目录',
     connectionShell: 'Shell',
     connectionSerialPath: '串口路径',
@@ -1529,14 +1776,27 @@ const zhLabels: typeof enLabels = {
     connectionPrivateKeys: '私钥',
     privateKeyPlaceholder: '私钥路径',
     addPrivateKey: '添加私钥',
+    noAuthenticationOptions: '此连接类型不需要身份认证。',
+    authenticationDescription: '优先尝试 SSH Agent 和私钥，也可以保存此连接的密码。',
+    authenticationSecurityNote: '密码使用当前设备绑定密钥加密保存，不写入连接配置文件。',
     connectionForwardedPorts: '端口转发',
     forwardedPortsHint: '每行一条端口转发规则。',
+    portsDescription: '端口转发和代理规则集中在这里管理。',
     noPortsOptions: '此连接类型没有端口转发选项。',
     connectionFingerprint: '指纹',
-    noAdvancedOptions: '此连接类型没有高级选项。',
     connectionLoginScripts: '登录脚本',
     loginScriptsHint: '连接打开后执行的命令。',
-    tabs: { general: '通用', ports: '端口', advanced: '高级', loginScripts: '登录脚本' },
+    advancedDescription: '将低频连接设置收纳在这里，避免基本信息过载。',
+    requiredFieldsHint: '必填项仅保留名称、主机和用户名。',
+    connectionPreview: '连接预览',
+    connectionStatus: '状态',
+    connectionNotTested: '未测试',
+    tabs: {
+      general: '基本信息',
+      authentication: '身份认证',
+      ports: '隧道与代理',
+      advanced: '高级',
+    },
     authOptions: {
       auto: '自动',
       password: '密码',
@@ -1918,35 +2178,107 @@ const zhLabels: typeof enLabels = {
             </section>
 
             <section v-else-if="selectedSectionId === 'hotkeys'" class="settings-section">
-              <div class="settings-form-list">
-                <div class="settings-form-line settings-form-line-stacked">
-                  <div class="settings-form-copy">
+              <div class="settings-hotkeys-layout">
+                <header class="settings-hotkeys-intro">
+                  <div>
                     <strong>{{ labels.hotkeysSectionTitle }}</strong>
-                    <span>{{ labels.hotkeysReadOnlyHint }}</span>
+                    <span>{{ labels.hotkeysDescription }}</span>
                   </div>
+                  <div class="settings-hotkeys-header-actions">
+                    <span class="settings-hotkeys-platform-note">
+                      {{ labels.hotkeysPlatformHint }}
+                    </span>
+                    <button
+                      class="settings-shortcut-reset"
+                      type="button"
+                      @click="resetShortcutSettings"
+                    >
+                      {{ labels.shortcutReset }}
+                    </button>
+                  </div>
+                </header>
+
+                <p v-if="shortcutError" class="settings-shortcut-error" role="alert">
+                  {{ shortcutError }}
+                </p>
+
+                <section
+                  v-for="group in shortcutGroups"
+                  :key="group.id"
+                  class="settings-shortcut-group"
+                >
+                  <h4>{{ group.label }}</h4>
                   <div class="settings-shortcut-list">
-                    <div class="settings-shortcut-row">
-                      <span>{{ labels.hotkeysNewTerminal }}</span>
-                      <kbd>Ctrl T</kbd>
-                    </div>
-                    <div class="settings-shortcut-row">
-                      <span>{{ labels.hotkeysCloseTab }}</span>
-                      <kbd>Ctrl W</kbd>
-                    </div>
-                    <div class="settings-shortcut-row">
-                      <span>{{ labels.hotkeysSplitHorizontal }}</span>
-                      <kbd>Alt Shift H</kbd>
-                    </div>
-                    <div class="settings-shortcut-row">
-                      <span>{{ labels.hotkeysSplitVertical }}</span>
-                      <kbd>Alt Shift V</kbd>
-                    </div>
-                    <div class="settings-shortcut-row">
-                      <span>{{ labels.hotkeysSettings }}</span>
-                      <kbd>Ctrl ,</kbd>
-                    </div>
+                    <article
+                      v-for="shortcutDefinition in group.shortcuts"
+                      :key="shortcutDefinition.id"
+                      class="settings-shortcut-row"
+                      :data-shortcut-id="shortcutDefinition.id"
+                    >
+                      <div class="settings-shortcut-copy">
+                        <strong>{{ labels.hotkeyActions[shortcutDefinition.id] }}</strong>
+                        <code>({{ shortcutDefinition.id }})</code>
+                      </div>
+
+                      <span
+                        v-if="!shortcutDefinition.editable"
+                        class="settings-shortcut-system-binding"
+                      >
+                        <span class="settings-shortcut-key-label">
+                          {{ shortcutKeysFor(shortcutDefinition).join('-') }}
+                        </span>
+                        <small>{{ labels.shortcutSystem }}</small>
+                      </span>
+
+                      <button
+                        v-else-if="recordingShortcutId === shortcutDefinition.id"
+                        class="settings-shortcut-recording"
+                        type="button"
+                        :data-testid="`record-${shortcutDefinition.id}`"
+                        @click="beginShortcutRecording(shortcutDefinition)"
+                      >
+                        {{ labels.shortcutRecording }}
+                      </button>
+
+                      <span
+                        v-else-if="shortcutBindingFor(shortcutDefinition)"
+                        class="settings-shortcut-binding"
+                      >
+                        <button
+                          class="settings-shortcut-binding-value"
+                          type="button"
+                          :data-testid="`record-${shortcutDefinition.id}`"
+                          @click="beginShortcutRecording(shortcutDefinition)"
+                        >
+                          <kbd v-for="key in shortcutKeysFor(shortcutDefinition)" :key="key">
+                            {{ key }}
+                          </kbd>
+                        </button>
+                        <button
+                          class="settings-shortcut-remove"
+                          type="button"
+                          :aria-label="`${labels.shortcutRemove}: ${labels.hotkeyActions[shortcutDefinition.id]}`"
+                          :data-testid="`remove-${shortcutDefinition.id}`"
+                          @click="removeShortcut(shortcutDefinition)"
+                        >
+                          <svg viewBox="0 0 12 12" aria-hidden="true">
+                            <path d="m3 3 6 6m0-6-6 6" />
+                          </svg>
+                        </button>
+                      </span>
+
+                      <button
+                        v-else
+                        class="settings-shortcut-add"
+                        type="button"
+                        :data-testid="`record-${shortcutDefinition.id}`"
+                        @click="beginShortcutRecording(shortcutDefinition)"
+                      >
+                        {{ labels.shortcutAdd }}
+                      </button>
+                    </article>
                   </div>
-                </div>
+                </section>
               </div>
             </section>
 
@@ -2147,35 +2479,67 @@ const zhLabels: typeof enLabels = {
             </section>
 
             <section v-else-if="selectedSectionId === 'appearance'" class="settings-section">
-              <div class="settings-form-list">
-                <div class="settings-form-line settings-form-line-stacked">
-                  <div class="settings-form-copy">
-                    <strong>{{ labels.appearanceCardTitle }}</strong>
-                  </div>
-                  <div
-                    class="settings-theme-inline-group"
-                    role="tablist"
-                    :aria-label="labels.appearanceCardTitle"
-                  >
+              <div class="settings-appearance-layout">
+                <article class="settings-appearance-card settings-theme-card-section">
+                  <header class="settings-appearance-card-header">
+                    <div>
+                      <strong>{{ labels.appearanceCardTitle }}</strong>
+                      <span>{{ labels.appearanceCardDescription }}</span>
+                    </div>
+                  </header>
+                  <div class="settings-theme-card-grid" :aria-label="labels.appearanceCardTitle">
                     <button
                       v-for="mode in themeModes"
                       :key="mode"
-                      class="settings-theme-inline-button"
-                      :class="{ 'is-active': themeMode === mode }"
+                      class="settings-theme-card"
+                      :class="[`is-${mode}`, { 'is-active': themeMode === mode }]"
+                      :data-theme-mode="mode"
                       type="button"
                       :aria-pressed="themeMode === mode"
                       @click="themeMode = mode"
                     >
-                      {{ labels.themeOptions[mode].label }}
+                      <span class="settings-theme-card-preview" aria-hidden="true">
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <span class="settings-theme-card-copy">
+                        <strong>{{ labels.themeOptions[mode].label }}</strong>
+                        <small>{{ labels.themeOptions[mode].description }}</small>
+                      </span>
+                      <span class="settings-theme-card-check" aria-hidden="true" />
                     </button>
                   </div>
-                </div>
+                </article>
 
-                <div class="settings-form-line settings-form-line-stacked">
-                  <div class="settings-form-copy">
-                    <strong>{{ labels.terminalColorsTitle }}</strong>
-                  </div>
-                  <div class="settings-terminal-colors-card">
+                <article class="settings-appearance-card settings-terminal-appearance-card">
+                  <header
+                    class="settings-appearance-card-header settings-appearance-card-header-row"
+                  >
+                    <div>
+                      <strong>{{ labels.terminalColorsTitle }}</strong>
+                      <span>{{ labels.terminalColorsDescription }}</span>
+                    </div>
+                    <div
+                      class="settings-palette-tone-switch"
+                      role="tablist"
+                      :aria-label="labels.terminalPaletteToneLabel"
+                    >
+                      <button
+                        v-for="tone in ['dark', 'light'] as ThemeTone[]"
+                        :key="tone"
+                        :data-palette-tone="tone"
+                        :class="{ 'is-active': terminalPaletteTone === tone }"
+                        type="button"
+                        :aria-pressed="terminalPaletteTone === tone"
+                        @click="terminalPaletteTone = tone"
+                      >
+                        {{ labels.themeOptions[tone].label }}
+                      </button>
+                    </div>
+                  </header>
+
+                  <div class="settings-terminal-colors-card" :style="terminalPreviewStyle">
                     <div class="settings-terminal-color-preview">
                       <span class="settings-terminal-color-preview-title">
                         {{ labels.terminalColorPreviewTitle }}
@@ -2187,22 +2551,22 @@ const zhLabels: typeof enLabels = {
                         <span class="settings-terminal-color-preview-line is-muted">
                           vite building client environment...
                         </span>
-                        <span class="settings-terminal-color-preview-line is-main">
-                          build completed in 572ms
+                        <span class="settings-terminal-color-preview-line is-success">
+                          ✓ build completed in 572ms
                         </span>
                       </div>
                     </div>
 
                     <div class="settings-terminal-color-fields">
-                      <div class="settings-terminal-color-field">
+                      <label class="settings-terminal-color-field">
                         <span>{{ labels.terminalForegroundLabel }}</span>
-                        <div
-                          class="settings-terminal-color-picker"
-                          :style="{ backgroundColor: configTheme.palette.terminalForeground }"
-                        >
+                        <div class="settings-terminal-color-control">
+                          <i :style="{ backgroundColor: terminalPalette.terminalForeground }" />
+                          <code>{{ terminalPalette.terminalForeground }}</code>
                           <input
+                            data-testid="terminal-foreground-color"
                             type="color"
-                            :value="configTheme.palette.terminalForeground"
+                            :value="terminalPalette.terminalForeground"
                             :aria-label="labels.terminalForegroundLabel"
                             @input="
                               updateThemePaletteColor(
@@ -2212,17 +2576,17 @@ const zhLabels: typeof enLabels = {
                             "
                           />
                         </div>
-                      </div>
+                      </label>
 
-                      <div class="settings-terminal-color-field">
+                      <label class="settings-terminal-color-field">
                         <span>{{ labels.terminalMutedLabel }}</span>
-                        <div
-                          class="settings-terminal-color-picker"
-                          :style="{ backgroundColor: configTheme.palette.terminalMuted }"
-                        >
+                        <div class="settings-terminal-color-control">
+                          <i :style="{ backgroundColor: terminalPalette.terminalMuted }" />
+                          <code>{{ terminalPalette.terminalMuted }}</code>
                           <input
+                            data-testid="terminal-muted-color"
                             type="color"
-                            :value="configTheme.palette.terminalMuted"
+                            :value="terminalPalette.terminalMuted"
                             :aria-label="labels.terminalMutedLabel"
                             @input="
                               updateThemePaletteColor(
@@ -2232,24 +2596,26 @@ const zhLabels: typeof enLabels = {
                             "
                           />
                         </div>
-                      </div>
+                      </label>
+
+                      <button
+                        class="settings-reset-button settings-terminal-colors-reset"
+                        type="button"
+                        @click="resetTerminalColors"
+                      >
+                        {{ labels.terminalColorsReset }}
+                      </button>
                     </div>
                   </div>
-                  <div class="settings-control settings-config-actions">
-                    <button
-                      class="settings-reset-button"
-                      type="button"
-                      @click="resetTerminalColors"
-                    >
-                      {{ labels.terminalColorsReset }}
-                    </button>
-                  </div>
-                </div>
+                </article>
 
-                <div class="settings-form-line settings-form-line-stacked">
-                  <div class="settings-form-copy">
-                    <strong>{{ labels.windowTransparencyTitle }}</strong>
-                  </div>
+                <article class="settings-appearance-card settings-transparency-section">
+                  <header class="settings-appearance-card-header">
+                    <div>
+                      <strong>{{ labels.windowTransparencyTitle }}</strong>
+                      <span>{{ labels.windowTransparencyDescription }}</span>
+                    </div>
+                  </header>
                   <div class="settings-transparency-card">
                     <div class="settings-toggle-row">
                       <div class="settings-toggle-copy">
@@ -2323,7 +2689,7 @@ const zhLabels: typeof enLabels = {
                       </label>
                     </div>
                   </div>
-                </div>
+                </article>
               </div>
             </section>
 
@@ -2393,131 +2759,192 @@ const zhLabels: typeof enLabels = {
       :open="showDialog"
       :aria-label="labels.dialog.connectionLabel"
       panel-class="connection-dialog-form"
-      width="680px"
+      width="860px"
       @close="closeDialog"
     >
       <header class="connection-dialog-header">
-        <div class="connection-dialog-copy">
-          <span class="connection-dialog-eyebrow">{{ labels.addConnection }}</span>
-          <p>{{ labels.dialog.connectionEditSummary }}</p>
+        <div class="connection-dialog-title">
+          <span class="connection-dialog-title-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M5 6h14v4H5V6Zm0 8h14v4H5v-4Zm3-6h.01M8 16h.01" />
+            </svg>
+          </span>
+          <div class="connection-dialog-copy">
+            <strong>{{
+              dialogIntent === 'edit' ? labels.editConnection : labels.addConnection
+            }}</strong>
+            <p>
+              {{
+                dialogIntent === 'edit'
+                  ? labels.dialog.connectionEditSummary
+                  : labels.dialog.connectionCreateSummary
+              }}
+            </p>
+          </div>
         </div>
-        <div class="connection-dialog-actions">
-          <button
-            class="connection-dialog-close"
-            type="button"
-            :aria-label="labels.dialog.connectionCancel"
-            @click="closeDialog"
-          >
-            <span />
-          </button>
-        </div>
+        <button
+          class="connection-dialog-close"
+          type="button"
+          :aria-label="labels.dialog.connectionCancel"
+          @click="closeDialog"
+        >
+          <span />
+        </button>
       </header>
 
+      <nav
+        class="connection-editor-tabs"
+        :aria-label="labels.dialog.connectionLabel"
+        role="tablist"
+      >
+        <button
+          v-for="tab in formTabs"
+          :id="`connection-tab-${tab.id}`"
+          :key="tab.id"
+          class="connection-editor-tab"
+          :class="{ 'is-active': activeFormTab === tab.id }"
+          :data-form-tab="tab.id"
+          :aria-controls="`connection-panel-${tab.id}`"
+          :aria-selected="activeFormTab === tab.id"
+          :tabindex="activeFormTab === tab.id ? 0 : -1"
+          type="button"
+          role="tab"
+          @click="activeFormTab = tab.id"
+          @keydown="navigateConnectionFormTabs($event, tab.id)"
+        >
+          {{ tab.label }}
+        </button>
+      </nav>
+
       <div class="connection-dialog-form-body">
-        <div class="connection-editor-shell">
-          <aside class="connection-editor-sidebar">
-            <div class="connection-editor-preview connection-editor-preview-hero">
-              <div class="connection-editor-preview-headline">
-                <span class="connection-editor-method-badge">{{ methodLabel(draft.method) }}</span>
-              </div>
-              <strong>{{ draftIdentity }}</strong>
-              <span>{{ draftEndpoint }}</span>
-              <code>{{ draft.icon.trim() || 'fas fa-desktop' }}</code>
-            </div>
-
-            <div class="connection-editor-side-stack">
-              <label class="connection-field">
-                <span>{{ labels.dialog.connectionName }}</span>
-                <div class="connection-field-control connection-field-control-rich">
-                  <input v-model="draft.name" data-testid="connection-name" />
-                </div>
-              </label>
-
-              <label class="connection-field">
-                <span>{{ labels.dialog.connectionGroup }}</span>
-                <div class="connection-field-control connection-field-control-rich">
-                  <input v-model="draft.group" list="connection-group-options" />
-                </div>
-              </label>
-
-              <label class="connection-field">
-                <span>{{ labels.dialog.connectionIcon }}</span>
-                <div class="connection-field-control connection-field-control-rich">
-                  <input v-model="draft.icon" />
-                </div>
-              </label>
-            </div>
-          </aside>
-
-          <section class="connection-editor-main">
-            <nav class="connection-editor-tabs" :aria-label="labels.dialog.connectionLabel">
-              <button
-                v-for="tab in formTabs"
-                :key="tab.id"
-                class="connection-editor-tab"
-                :class="{ 'is-active': activeFormTab === tab.id }"
-                type="button"
-                @click="activeFormTab = tab.id"
-              >
-                {{ tab.label }}
-              </button>
-            </nav>
-
-            <div class="connection-editor-panel">
+        <div class="connection-dialog-layout">
+          <section class="connection-dialog-main">
+            <div
+              :id="`connection-panel-${activeFormTab}`"
+              class="connection-editor-panel"
+              :aria-labelledby="`connection-tab-${activeFormTab}`"
+              role="tabpanel"
+            >
               <div v-if="activeFormTab === 'general'" class="connection-editor-stack">
+                <div class="connection-panel-heading">
+                  <strong>{{ labels.dialog.connectionMethodTitle }}</strong>
+                  <span>{{ labels.dialog.connectionMethodDescription }}</span>
+                </div>
+
+                <div
+                  class="connection-dialog-protocols"
+                  :aria-label="labels.dialog.connectionMethod"
+                >
+                  <button
+                    v-for="method in connectionMethods"
+                    :key="method"
+                    class="connection-protocol-option"
+                    :class="{ 'is-active': draft.method === method }"
+                    :data-connection-method="method"
+                    :aria-pressed="draft.method === method"
+                    type="button"
+                    @click="updateDraft('method', method)"
+                  >
+                    <svg v-if="method === 'ssh'" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m5 7 5 5-5 5m7 0h7" />
+                    </svg>
+                    <svg v-else-if="method === 'telnet'" viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="5" cy="12" r="2" />
+                      <circle cx="19" cy="6" r="2" />
+                      <circle cx="19" cy="18" r="2" />
+                      <path d="m7 12 10-5m-10 5 10 5" />
+                    </svg>
+                    <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="4" y="5" width="16" height="11" rx="1.5" />
+                      <path d="M2.5 19h19" />
+                    </svg>
+                    <span>{{ methodLabel(method) }}</span>
+                  </button>
+                </div>
+
                 <div class="connection-form">
-                  <label class="connection-field connection-field-full">
-                    <span>{{ labels.dialog.connectionMethod }}</span>
-                    <AppSelect
-                      :model-value="draft.method"
-                      :options="connectionMethodOptions"
-                      :aria-label="labels.dialog.connectionMethod"
-                      test-id="connection-method"
-                      @update:model-value="updateDraft('method', $event as ConnectionMethod)"
-                    />
+                  <label class="connection-field">
+                    <span>{{ labels.dialog.connectionName }}</span>
+                    <div class="connection-field-control connection-field-control-rich">
+                      <input
+                        v-model="draft.name"
+                        v-bind="connectionTextInputAttributes"
+                        data-testid="connection-name"
+                      />
+                    </div>
                   </label>
 
-                  <template v-if="draft.method === 'local'">
-                    <label class="connection-field connection-field-full">
-                      <span>{{ labels.dialog.connectionCwd }}</span>
-                      <div class="connection-field-control connection-field-control-rich">
-                        <input v-model="draft.cwd" />
-                      </div>
-                    </label>
-                    <label class="connection-field connection-field-full">
-                      <span>{{ labels.dialog.connectionShell }}</span>
-                      <div class="connection-field-control connection-field-control-rich">
-                        <input v-model="draft.shell" />
-                      </div>
-                    </label>
-                  </template>
+                  <label class="connection-field">
+                    <span>{{ labels.dialog.connectionGroup }}</span>
+                    <div class="connection-field-control connection-field-control-rich">
+                      <input
+                        v-model="draft.group"
+                        v-bind="connectionTextInputAttributes"
+                        data-testid="connection-group"
+                      />
+                    </div>
+                  </label>
+                </div>
 
-                  <template v-else-if="draft.method === 'serial'">
-                    <label class="connection-field connection-field-full">
-                      <span>{{ labels.dialog.connectionSerialPath }}</span>
-                      <div class="connection-field-control connection-field-control-rich">
-                        <input v-model="draft.serialPath" />
-                      </div>
-                    </label>
-                    <label class="connection-field">
-                      <span>{{ labels.dialog.connectionBaudRate }}</span>
-                      <div class="connection-field-control connection-field-control-rich">
-                        <input v-model.number="draft.baudRate" type="number" />
-                      </div>
-                    </label>
-                    <label class="connection-field connection-field-full">
-                      <span>{{ labels.dialog.connectionShell }}</span>
-                      <div class="connection-field-control connection-field-control-rich">
-                        <input v-model="draft.shell" />
-                      </div>
-                    </label>
-                  </template>
+                <div v-if="draft.method === 'local'" class="connection-form">
+                  <label class="connection-field connection-field-full">
+                    <span>{{ labels.dialog.connectionCwd }}</span>
+                    <div class="connection-field-control connection-field-control-rich">
+                      <input
+                        v-model="draft.cwd"
+                        v-bind="connectionTextInputAttributes"
+                        data-testid="connection-cwd"
+                      />
+                    </div>
+                  </label>
+                  <label class="connection-field connection-field-full">
+                    <span>{{ labels.dialog.connectionShell }}</span>
+                    <div class="connection-field-control connection-field-control-rich">
+                      <input
+                        v-model="draft.shell"
+                        v-bind="connectionTextInputAttributes"
+                        data-testid="connection-shell"
+                      />
+                    </div>
+                  </label>
+                </div>
 
-                  <template v-else>
+                <div v-else-if="draft.method === 'serial'" class="connection-form">
+                  <label class="connection-field connection-field-full">
+                    <span>{{ labels.dialog.connectionSerialPath }}</span>
+                    <div class="connection-field-control connection-field-control-rich">
+                      <input v-model="draft.serialPath" v-bind="connectionTextInputAttributes" />
+                    </div>
+                  </label>
+                  <label class="connection-field">
+                    <span>{{ labels.dialog.connectionBaudRate }}</span>
+                    <div class="connection-field-control connection-field-control-rich">
+                      <input v-model.number="draft.baudRate" type="number" />
+                    </div>
+                  </label>
+                  <label class="connection-field connection-field-full">
+                    <span>{{ labels.dialog.connectionShell }}</span>
+                    <div class="connection-field-control connection-field-control-rich">
+                      <input
+                        v-model="draft.shell"
+                        v-bind="connectionTextInputAttributes"
+                        data-testid="connection-shell"
+                      />
+                    </div>
+                  </label>
+                </div>
+
+                <template v-else>
+                  <div class="connection-form connection-host-fields">
                     <label class="connection-field">
                       <span>{{ labels.dialog.connectionHost }}</span>
                       <div class="connection-field-control connection-field-control-rich">
-                        <input v-model="draft.host" data-testid="connection-host" />
+                        <input
+                          v-model="draft.host"
+                          v-bind="connectionTextInputAttributes"
+                          :placeholder="labels.dialog.connectionHostPlaceholder"
+                          data-testid="connection-host"
+                        />
                       </div>
                     </label>
                     <label class="connection-field">
@@ -2530,13 +2957,35 @@ const zhLabels: typeof enLabels = {
                         />
                       </div>
                     </label>
-                    <label class="connection-field">
+                  </div>
+                  <div class="connection-form">
+                    <label class="connection-field connection-field-full">
                       <span>{{ labels.dialog.connectionUser }}</span>
                       <div class="connection-field-control connection-field-control-rich">
-                        <input v-model="draft.user" data-testid="connection-user" />
+                        <input
+                          v-model="draft.user"
+                          v-bind="connectionTextInputAttributes"
+                          :placeholder="labels.dialog.connectionUserPlaceholder"
+                          data-testid="connection-user"
+                        />
                       </div>
                     </label>
-                  </template>
+                  </div>
+                </template>
+
+                <div class="connection-panel-note">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 11v5m0-8h.01" />
+                  </svg>
+                  <span>{{ labels.dialog.connectionGeneralNote }}</span>
+                </div>
+              </div>
+
+              <div v-else-if="activeFormTab === 'authentication'" class="connection-editor-stack">
+                <div class="connection-panel-heading">
+                  <strong>{{ labels.dialog.connectionAuthMethod }}</strong>
+                  <span>{{ labels.dialog.authenticationDescription }}</span>
                 </div>
 
                 <template v-if="supportsAuth">
@@ -2549,6 +2998,7 @@ const zhLabels: typeof enLabels = {
                           :key="authMethod"
                           class="connection-auth-option"
                           :class="{ 'is-active': draft.authMethod === authMethod }"
+                          :aria-pressed="draft.authMethod === authMethod"
                           type="button"
                           @click="draft.authMethod = authMethod"
                         >
@@ -2624,6 +3074,7 @@ const zhLabels: typeof enLabels = {
                         <div class="connection-field-control connection-field-control-rich">
                           <input
                             v-model="privateKeyInput"
+                            v-bind="connectionTextInputAttributes"
                             :placeholder="labels.dialog.privateKeyPlaceholder"
                           />
                         </div>
@@ -2637,100 +3088,161 @@ const zhLabels: typeof enLabels = {
                       </div>
                     </label>
                   </div>
+
+                  <div class="connection-panel-note connection-panel-note-security">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z" />
+                      <path d="m9 12 2 2 4-4" />
+                    </svg>
+                    <span>{{ labels.dialog.authenticationSecurityNote }}</span>
+                  </div>
                 </template>
+                <div v-else class="connection-empty-state connection-editor-empty">
+                  {{ labels.dialog.noAuthenticationOptions }}
+                </div>
               </div>
 
-              <div v-else-if="activeFormTab === 'ports'" class="connection-form">
-                <label v-if="supportsPorts" class="connection-field connection-field-full">
-                  <span>{{ labels.dialog.connectionForwardedPorts }}</span>
-                  <small class="connection-field-hint">{{
-                    labels.dialog.forwardedPortsHint
-                  }}</small>
-                  <div class="connection-field-control">
-                    <textarea
-                      rows="6"
-                      :value="draft.forwardedPorts.join('\n')"
-                      @input="
-                        updateDraft(
-                          'forwardedPorts',
-                          ($event.target as HTMLTextAreaElement).value
-                            .split('\n')
-                            .map((item) => item.trim())
-                            .filter(Boolean),
-                        )
-                      "
-                    />
-                  </div>
-                </label>
+              <div v-else-if="activeFormTab === 'ports'" class="connection-editor-stack">
+                <div class="connection-panel-heading">
+                  <strong>{{ labels.dialog.tabs.ports }}</strong>
+                  <span>{{ labels.dialog.portsDescription }}</span>
+                </div>
+
+                <div v-if="supportsPorts" class="connection-form">
+                  <label class="connection-field connection-field-full">
+                    <span>{{ labels.dialog.connectionForwardedPorts }}</span>
+                    <small class="connection-field-hint">{{
+                      labels.dialog.forwardedPortsHint
+                    }}</small>
+                    <div class="connection-field-control">
+                      <textarea
+                        v-bind="connectionTextInputAttributes"
+                        rows="6"
+                        :value="draft.forwardedPorts.join('\n')"
+                        @input="
+                          updateDraft(
+                            'forwardedPorts',
+                            ($event.target as HTMLTextAreaElement).value
+                              .split('\n')
+                              .map((item) => item.trim())
+                              .filter(Boolean),
+                          )
+                        "
+                      />
+                    </div>
+                  </label>
+                </div>
                 <div v-else class="connection-empty-state connection-editor-empty">
                   {{ labels.dialog.noPortsOptions }}
                 </div>
               </div>
 
-              <div v-else-if="activeFormTab === 'advanced'" class="connection-form">
-                <label v-if="supportsAdvanced" class="connection-field connection-field-full">
-                  <span>{{ labels.dialog.connectionFingerprint }}</span>
-                  <div class="connection-field-control">
-                    <textarea v-model="draft.fingerprint" rows="6" />
-                  </div>
-                </label>
-                <div v-else class="connection-empty-state connection-editor-empty">
-                  {{ labels.dialog.noAdvancedOptions }}
+              <div v-else class="connection-editor-stack">
+                <div class="connection-panel-heading">
+                  <strong>{{ labels.dialog.tabs.advanced }}</strong>
+                  <span>{{ labels.dialog.advancedDescription }}</span>
                 </div>
-              </div>
 
-              <div v-else class="connection-form">
-                <label class="connection-field connection-field-full">
-                  <span>{{ labels.dialog.connectionLoginScripts }}</span>
-                  <small class="connection-field-hint">{{ labels.dialog.loginScriptsHint }}</small>
-                  <div class="connection-field-control">
-                    <textarea v-model="draft.loginScripts" rows="8" />
-                  </div>
-                </label>
-              </div>
+                <div class="connection-form">
+                  <label class="connection-field connection-field-full">
+                    <span>{{ labels.dialog.connectionIcon }}</span>
+                    <div class="connection-field-control connection-field-control-rich">
+                      <input v-model="draft.icon" v-bind="connectionTextInputAttributes" />
+                    </div>
+                  </label>
 
-              <p v-if="credentialPersistenceError" class="connection-credential-error" role="alert">
-                {{ credentialPersistenceError }}
-              </p>
+                  <label v-if="supportsAdvanced" class="connection-field connection-field-full">
+                    <span>{{ labels.dialog.connectionFingerprint }}</span>
+                    <div class="connection-field-control">
+                      <textarea
+                        v-model="draft.fingerprint"
+                        v-bind="connectionTextInputAttributes"
+                        rows="4"
+                      />
+                    </div>
+                  </label>
 
-              <div class="connection-form-actions">
-                <button
-                  class="connection-dialog-secondary-button"
-                  type="button"
-                  @click="closeDialog"
-                >
-                  {{ labels.dialog.connectionCancel }}
-                </button>
-                <button
-                  v-if="
-                    dialogIntent === 'edit' &&
-                    editingConnection &&
-                    editingConnection.id !== 'local-shell'
-                  "
-                  class="connection-dialog-danger-button"
-                  type="button"
-                  @click="deleteConnection(editingConnection.id)"
-                >
-                  {{ labels.dialog.connectionDelete }}
-                </button>
-                <button
-                  class="connection-dialog-primary-button"
-                  data-testid="save-connection"
-                  type="button"
-                  :disabled="!isDraftValid(draft)"
-                  @click="saveDraft"
-                >
-                  {{ labels.dialog.connectionSave }}
-                </button>
+                  <label class="connection-field connection-field-full">
+                    <span>{{ labels.dialog.connectionLoginScripts }}</span>
+                    <small class="connection-field-hint">{{
+                      labels.dialog.loginScriptsHint
+                    }}</small>
+                    <div class="connection-field-control">
+                      <textarea
+                        v-model="draft.loginScripts"
+                        v-bind="connectionTextInputAttributes"
+                        rows="6"
+                      />
+                    </div>
+                  </label>
+                </div>
               </div>
             </div>
           </section>
+
+          <aside class="connection-dialog-summary" :aria-label="labels.dialog.connectionPreview">
+            <div class="connection-summary-profile">
+              <span class="connection-summary-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="m5 7 5 5-5 5m7 0h7" />
+                </svg>
+              </span>
+              <div class="connection-summary-copy">
+                <strong>{{ draftIdentity }}</strong>
+                <code>{{ draftEndpoint }}</code>
+              </div>
+              <span class="connection-editor-method-badge">{{ methodLabel(draft.method) }}</span>
+            </div>
+
+            <dl class="connection-summary-list">
+              <div class="connection-summary-item">
+                <dt>{{ labels.dialog.connectionAuthMethod }}</dt>
+                <dd>{{ labels.dialog.authOptions[draft.authMethod] }}</dd>
+              </div>
+              <div class="connection-summary-item">
+                <dt>{{ labels.dialog.connectionGroup }}</dt>
+                <dd>{{ draft.group.trim() || 'default' }}</dd>
+              </div>
+              <div class="connection-summary-item">
+                <dt>{{ labels.dialog.connectionStatus }}</dt>
+                <dd>{{ labels.dialog.connectionNotTested }}</dd>
+              </div>
+            </dl>
+          </aside>
         </div>
       </div>
 
-      <datalist id="connection-group-options">
-        <option v-for="group in connectionGroups" :key="group" :value="group" />
-      </datalist>
+      <p v-if="credentialPersistenceError" class="connection-credential-error" role="alert">
+        {{ credentialPersistenceError }}
+      </p>
+
+      <footer class="connection-form-actions connection-dialog-footer">
+        <span class="connection-dialog-footer-hint">{{ labels.dialog.requiredFieldsHint }}</span>
+        <div class="connection-dialog-footer-actions">
+          <button class="connection-dialog-secondary-button" type="button" @click="closeDialog">
+            {{ labels.dialog.connectionCancel }}
+          </button>
+          <button
+            v-if="
+              dialogIntent === 'edit' && editingConnection && editingConnection.id !== 'local-shell'
+            "
+            class="connection-dialog-danger-button"
+            type="button"
+            @click="deleteConnection(editingConnection.id)"
+          >
+            {{ labels.dialog.connectionDelete }}
+          </button>
+          <button
+            class="connection-dialog-primary-button"
+            data-testid="save-connection"
+            type="button"
+            :disabled="!isDraftValid(draft)"
+            @click="saveDraft"
+          >
+            {{ labels.dialog.connectionSave }}
+          </button>
+        </div>
+      </footer>
     </AppDialog>
 
     <AppDialog

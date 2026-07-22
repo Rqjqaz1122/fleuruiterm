@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
-import { draggedTab, finishTabDrag } from '@/composables/tabDrag';
-import { resolvePaneDropPosition } from '@/domain/tabDrag';
-import type { PaneDropPosition, SplitDirection } from '@/domain/workspace';
 import { t } from '@/i18n/locale';
 import { SessionClient } from '@/services/sessionClient';
+import { terminalEditingActions } from '@/services/terminalEditingActions';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { TerminalAdapter } from '@/terminal/terminalAdapter';
+import {
+  createTerminalTheme,
+  TERMINAL_THEME_CHANGED_EVENT,
+  type TerminalThemeTone,
+} from '@/terminal/terminalTheme';
 
 const props = defineProps<{
   tabId: string;
@@ -17,11 +20,9 @@ const props = defineProps<{
   focused: boolean;
 }>();
 
-const emit = defineEmits<{
-  split: [paneId: string, direction: SplitDirection];
+defineEmits<{
   close: [paneId: string];
   focus: [paneId: string];
-  dropTab: [sourceTabId: string, targetPaneId: string, position: PaneDropPosition];
 }>();
 
 const store = useWorkspaceStore();
@@ -38,9 +39,9 @@ const terminalError = ref<string | null>(null);
 const visibleTerminalError = computed(() =>
   terminalError.value === null ? null : t('error.terminalBridge'),
 );
-const tabDropPosition = ref<PaneDropPosition | null>(null);
 let adapter: TerminalAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
+let unregisterEditingActions: (() => void) | null = null;
 let disposed = false;
 let terminalViewport: HTMLElement | null = null;
 let scrollbarUpdateFrame: number | null = null;
@@ -52,13 +53,19 @@ let scrollbarDragState: {
   maxThumbTravel: number;
 } | null = null;
 
-function cssVar(styles: CSSStyleDeclaration, name: string, fallback: string): string {
-  const value = styles.getPropertyValue(name).trim();
-  return value.length > 0 ? value : fallback;
-}
-
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
+}
+
+function currentTerminalTheme() {
+  const styles = window.getComputedStyle(document.documentElement);
+  const tone: TerminalThemeTone =
+    document.documentElement.dataset.themeTone === 'light' ? 'light' : 'dark';
+  return createTerminalTheme(styles, tone);
+}
+
+function updateOpenTerminalTheme(): void {
+  adapter?.updateTheme(currentTerminalTheme());
 }
 
 function handleViewportScroll(): void {
@@ -175,42 +182,6 @@ function stopTerminalScrollbarDrag(): void {
   window.removeEventListener('pointerup', stopTerminalScrollbarDrag);
 }
 
-function onTerminalDragOver(event: DragEvent): void {
-  if (draggedTab.value?.kind !== 'terminal' || draggedTab.value.id === props.tabId) {
-    return;
-  }
-  event.preventDefault();
-  const terminalPane = event.currentTarget as HTMLElement;
-  tabDropPosition.value = resolvePaneDropPosition(
-    terminalPane.getBoundingClientRect(),
-    event.clientX,
-    event.clientY,
-  );
-  if (event.dataTransfer !== null) {
-    event.dataTransfer.dropEffect = 'move';
-  }
-}
-
-function onTerminalDragLeave(event: DragEvent): void {
-  const terminalPane = event.currentTarget as HTMLElement;
-  const nextTarget = event.relatedTarget;
-  if (!(nextTarget instanceof Node) || !terminalPane.contains(nextTarget)) {
-    tabDropPosition.value = null;
-  }
-}
-
-function onTerminalDrop(event: DragEvent): void {
-  const sourceTab = draggedTab.value;
-  const position = tabDropPosition.value;
-  if (sourceTab?.kind !== 'terminal' || sourceTab.id === props.tabId || position === null) {
-    return;
-  }
-  event.preventDefault();
-  emit('dropTab', sourceTab.id, props.paneId, position);
-  tabDropPosition.value = null;
-  finishTabDrag();
-}
-
 onMounted(async () => {
   const element = terminalElement.value;
   if (element === null) {
@@ -224,11 +195,6 @@ onMounted(async () => {
     return;
   }
   const sessionClient = new SessionClient();
-  const styles = window.getComputedStyle(document.documentElement);
-  const terminalBackground = cssVar(styles, '--color-terminal', '#121212');
-  const foreground = cssVar(styles, '--color-text', '#eef3f8');
-  const muted = cssVar(styles, '--color-text-muted', 'rgb(255 255 255 / 50%)');
-  const accent = cssVar(styles, '--color-accent', '#4fadff');
   const monoFont = terminalSettings.value.fontFamily;
 
   adapter = new TerminalAdapter({
@@ -243,29 +209,7 @@ onMounted(async () => {
         fontSize: terminalSettings.value.fontSize,
         lineHeight: terminalSettings.value.lineHeight,
         scrollback: terminalSettings.value.scrollback,
-        theme: {
-          background: terminalBackground,
-          foreground,
-          cursor: accent,
-          cursorAccent: terminalBackground,
-          selectionBackground: 'rgba(79, 173, 255, 0.28)',
-          black: '#000000',
-          red: '#d9534f',
-          green: '#5cb85c',
-          yellow: '#f0ad4e',
-          blue: '#4fadff',
-          magenta: '#b68cff',
-          cyan: '#5bc0de',
-          white: foreground,
-          brightBlack: muted,
-          brightRed: '#ff6b66',
-          brightGreen: '#7bd87b',
-          brightYellow: '#ffd166',
-          brightBlue: '#78c3ff',
-          brightMagenta: '#d0a3ff',
-          brightCyan: '#7de3f3',
-          brightWhite: '#ffffff',
-        },
+        theme: currentTerminalTheme(),
       }),
     createFitAddon: () => new FitAddon(),
     createResizeObserver: (callback) => new ResizeObserver(callback),
@@ -278,6 +222,12 @@ onMounted(async () => {
     },
   });
   adapter.open(element);
+  unregisterEditingActions = terminalEditingActions.register(props.paneId, {
+    getSelection: () => adapter?.getSelection() ?? '',
+    paste: (text) => adapter?.paste(text),
+    selectAll: () => adapter?.selectAll(),
+  });
+  window.addEventListener(TERMINAL_THEME_CHANGED_EVENT, updateOpenTerminalTheme);
   scrollbarResizeObserver = new ResizeObserver(scheduleTerminalScrollbarUpdate);
   scrollbarResizeObserver.observe(element);
   scheduleTerminalScrollbarUpdate();
@@ -291,7 +241,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   disposed = true;
   unsubscribe?.();
+  unregisterEditingActions?.();
+  unregisterEditingActions = null;
   adapter?.dispose();
+  window.removeEventListener(TERMINAL_THEME_CHANGED_EVENT, updateOpenTerminalTheme);
   terminalViewport?.removeEventListener('scroll', handleViewportScroll);
   terminalViewport = null;
   scrollbarResizeObserver?.disconnect();
@@ -306,36 +259,14 @@ onBeforeUnmount(() => {
 <template>
   <section
     class="terminal-pane"
-    :class="[{ focused }, tabDropPosition ? `tab-drop-${tabDropPosition}` : null]"
+    :class="{ focused }"
     :aria-label="`${t('pane.terminal')} ${paneId}`"
     @pointerdown="$emit('focus', paneId)"
     @focusin="$emit('focus', paneId)"
-    @dragover="onTerminalDragOver"
-    @dragleave="onTerminalDragLeave"
-    @drop="onTerminalDrop"
   >
-    <div v-if="tabDropPosition" class="tab-drop-overlay" aria-hidden="true" />
     <div class="pane-toolbar">
       <span class="pane-title">{{ t('pane.local') }} · {{ sessionId.slice(0, 8) }}</span>
       <div class="pane-actions">
-        <button
-          class="icon-button"
-          data-testid="split-horizontal"
-          type="button"
-          :aria-label="t('pane.splitHorizontal')"
-          @click="$emit('split', paneId, 'horizontal')"
-        >
-          ▭
-        </button>
-        <button
-          class="icon-button"
-          data-testid="split-vertical"
-          type="button"
-          :aria-label="t('pane.splitVertical')"
-          @click="$emit('split', paneId, 'vertical')"
-        >
-          ▯
-        </button>
         <button
           class="icon-button"
           type="button"

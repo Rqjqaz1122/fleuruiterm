@@ -10,6 +10,28 @@ import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 import App from './App.vue';
 
+const desktopMenuMock = vi.hoisted(() => ({
+  commandHandler: null as ((command: string) => void) | null,
+  listen: vi.fn(async (handler: (command: string) => void) => {
+    desktopMenuMock.commandHandler = handler;
+    return vi.fn();
+  }),
+}));
+const terminalEditingMock = vi.hoisted(() => ({
+  execute: vi.fn(async () => undefined),
+}));
+
+vi.mock('@/services/desktopMenuClient', () => ({
+  desktopMenuClient: {
+    available: false,
+    listen: desktopMenuMock.listen,
+  },
+}));
+
+vi.mock('@/services/terminalEditingActions', () => ({
+  terminalEditingActions: terminalEditingMock,
+}));
+
 enableAutoUnmount(afterEach);
 
 describe('FleurTerm app shell', () => {
@@ -17,6 +39,10 @@ describe('FleurTerm app shell', () => {
     setActivePinia(createPinia());
     setLocale('en-US');
     localStorage.clear();
+    desktopMenuMock.commandHandler = null;
+    desktopMenuMock.listen.mockClear();
+    terminalEditingMock.execute.mockClear();
+    useAppSettingsStore().resetShortcutSettings();
   });
 
   it('checks for application updates when the app starts', async () => {
@@ -117,7 +143,7 @@ describe('FleurTerm app shell', () => {
     );
   });
 
-  it('renders active tabs and delegates vertical split', async () => {
+  it('does not expose split controls in the terminal workspace', () => {
     const store = useWorkspaceStore();
     store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
     store.snapshots = {
@@ -128,23 +154,99 @@ describe('FleurTerm app shell', () => {
         shell: '/bin/zsh',
       },
     };
-    store.splitPaneById = vi.fn(async () => undefined);
     const wrapper = mount(App, {
       global: {
         stubs: {
           TerminalPane: {
-            emits: ['split'],
-            template:
-              "<button data-testid=\"split-vertical\" @click=\"$emit('split', 'pane-1', 'vertical')\">Split</button>",
+            template: '<div class="terminal-stub" />',
           },
         },
       },
     });
 
     expect(wrapper.get('[role="tab"]').text()).toContain('Terminal 1');
-    await wrapper.get('[data-testid="split-vertical"]').trigger('click');
+    expect(wrapper.find('[data-testid="split-horizontal"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="split-vertical"]').exists()).toBe(false);
+  });
 
-    expect(store.splitPaneById).toHaveBeenCalledWith('pane-1', 'vertical');
+  it('executes common application keyboard shortcuts', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.openTab = vi.fn(async () => undefined);
+    store.closeTab = vi.fn(async () => undefined);
+    store.writeToFocusedSession = vi.fn(async () => undefined);
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    await wrapper.vm.$nextTick();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }));
+    await vi.waitFor(() => expect(store.writeToFocusedSession).toHaveBeenCalledWith('\x0c'));
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('#settings-panel').attributes('aria-hidden')).toBe('false');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', metaKey: true }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('#settings-panel').exists()).toBe(false);
+  });
+
+  it('uses a customized keyboard shortcut immediately', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    useAppSettingsStore().updateShortcutSetting('new-terminal', {
+      key: 'j',
+      modifier: 'primary',
+      shift: true,
+    });
+    mount(App);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', metaKey: true, shiftKey: true }));
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+    await Promise.resolve();
+    expect(store.openTab).toHaveBeenCalledOnce();
+  });
+
+  it('executes a customized editing shortcut in the focused terminal', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    useAppSettingsStore().updateShortcutSetting('copy', {
+      key: 'y',
+      modifier: 'primary',
+      shift: true,
+    });
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y', metaKey: true, shiftKey: true }));
+
+    await vi.waitFor(() =>
+      expect(terminalEditingMock.execute).toHaveBeenCalledWith('pane-1', 'copy'),
+    );
+  });
+
+  it('executes native menu commands through the same application actions', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App);
+
+    await vi.waitFor(() => expect(desktopMenuMock.listen).toHaveBeenCalledOnce());
+    desktopMenuMock.commandHandler?.('new-terminal');
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+
+    desktopMenuMock.commandHandler?.('toggle-ai');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('.ai-panel').exists()).toBe(true);
+
+    desktopMenuMock.commandHandler?.('open-settings');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('#settings-panel').attributes('aria-hidden')).toBe('false');
   });
 
   it('shows a visible error without removing the workspace action', () => {
@@ -214,13 +316,9 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-section="connections"]').trigger('click');
     await wrapper.get('[data-testid="add-connection"]').trigger('click');
     await wrapper.get('[data-testid="connection-name"]').setValue('Project');
-    await wrapper.get('[data-testid="connection-method"]').trigger('click');
-    await wrapper.get('[data-value="local"]').trigger('click');
-    await wrapper
-      .findAll('.connection-field input')
-      .at(3)
-      ?.setValue('D:\\IT\\Projects\\fleuruiterm');
-    await wrapper.findAll('.connection-field input').at(4)?.setValue('wsl.exe');
+    await wrapper.get('[data-connection-method="local"]').trigger('click');
+    await wrapper.get('[data-testid="connection-cwd"]').setValue('D:\\IT\\Projects\\fleuruiterm');
+    await wrapper.get('[data-testid="connection-shell"]').setValue('wsl.exe');
     await wrapper.get('[data-testid="save-connection"]').trigger('click');
     await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
 
@@ -242,8 +340,7 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-section="connections"]').trigger('click');
     await wrapper.get('[data-testid="add-connection"]').trigger('click');
     await wrapper.get('[data-testid="connection-name"]').setValue('Router');
-    await wrapper.get('[data-testid="connection-method"]').trigger('click');
-    await wrapper.get('[data-value="telnet"]').trigger('click');
+    await wrapper.get('[data-connection-method="telnet"]').trigger('click');
     await wrapper.get('[data-testid="connection-host"]').setValue('10.0.0.1');
     await wrapper.get('[data-testid="connection-user"]').setValue('admin');
     await wrapper.get('[data-testid="connection-port"]').setValue(2323);
@@ -270,10 +367,7 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-testid="connection-name"]').setValue('Tunnel');
     await wrapper.get('[data-testid="connection-host"]').setValue('server.example.com');
     await wrapper.get('[data-testid="connection-user"]').setValue('deploy');
-    await wrapper
-      .findAll('.connection-editor-tab')
-      .find((tab) => tab.text() === 'Ports')
-      ?.trigger('click');
+    await wrapper.get('[data-form-tab="ports"]').trigger('click');
     await wrapper.get('textarea').setValue('8080:localhost:80\n-R 9000:localhost:9000');
     await wrapper.get('[data-testid="save-connection"]').trigger('click');
     await wrapper.findAll('.settings-connection-main').at(-1)?.trigger('click');
@@ -306,6 +400,7 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-testid="connection-name"]').setValue('Password Host');
     await wrapper.get('[data-testid="connection-host"]').setValue('server.example.com');
     await wrapper.get('[data-testid="connection-user"]').setValue('deploy');
+    await wrapper.get('[data-form-tab="authentication"]').trigger('click');
     await wrapper.findAll('.connection-auth-option').at(1)?.trigger('click');
     await wrapper
       .find('.connection-auth-card .connection-dialog-secondary-button')
@@ -342,7 +437,7 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-section="connections"]').trigger('click');
     await wrapper.get('[data-testid="add-connection"]').trigger('click');
 
-    expect(wrapper.get('[data-testid="connection-method"]').text()).not.toContain('Serial');
+    expect(wrapper.get('.connection-dialog-protocols').text()).not.toContain('Serial');
   });
 
   it('keeps inactive terminal tabs mounted for bounded background consumption', () => {
@@ -385,33 +480,6 @@ describe('FleurTerm app shell', () => {
       'Terminal 1',
     ]);
     expect(store.workspace.tabs.map((tab) => tab.id)).toEqual(['tab-2', 'tab-1']);
-  });
-
-  it('merges a dragged terminal tab into a target pane', async () => {
-    const store = useWorkspaceStore();
-    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
-    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
-    const wrapper = mount(App, {
-      global: {
-        stubs: {
-          TerminalPane: true,
-          WorkspacePane: {
-            name: 'WorkspacePane',
-            emits: ['dropTab'],
-            template:
-              "<button data-testid=\"drop-tab\" @click=\"$emit('dropTab', 'tab-1', 'pane-2', 'left')\">Drop</button>",
-          },
-        },
-      },
-    });
-
-    await wrapper.get('[data-testid="drop-tab"]').trigger('click');
-
-    expect(store.workspace.tabs).toHaveLength(1);
-    expect(store.workspace.tabs[0]?.root).toMatchObject({
-      kind: 'split',
-      direction: 'vertical',
-    });
   });
 
   it('updates the full application shell when the language changes', async () => {

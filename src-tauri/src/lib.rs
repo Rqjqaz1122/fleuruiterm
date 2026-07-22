@@ -12,7 +12,10 @@ use ipc::session_commands::{
 use serde::Serialize;
 use serde_json::Value;
 use std::{collections::HashMap, fs, io::ErrorKind, sync::Mutex};
-use tauri::Manager;
+use tauri::{
+    Emitter, Manager, Runtime,
+    menu::{AboutMetadataBuilder, Menu, MenuBuilder, MenuItem, SubmenuBuilder},
+};
 use zeroize::Zeroize;
 
 const APP_SETTINGS_FILE_NAME: &str = "settings.json";
@@ -20,6 +23,14 @@ const CREDENTIAL_VAULT_FILE_NAME: &str = "credentials.vault";
 const CREDENTIAL_INSTALLATION_KEY_FILE_NAME: &str = "credentials.key";
 const MIN_WINDOW_OPACITY: f64 = 0.58;
 const MAX_WINDOW_OPACITY: f64 = 1.0;
+const MENU_ACTION_EVENT: &str = "fleurterm://menu-action";
+const MENU_NEW_TERMINAL: &str = "new-terminal";
+const MENU_CLOSE_TAB: &str = "close-tab";
+const MENU_NEXT_TAB: &str = "next-tab";
+const MENU_PREVIOUS_TAB: &str = "previous-tab";
+const MENU_OPEN_SETTINGS: &str = "open-settings";
+const MENU_TOGGLE_AI: &str = "toggle-ai";
+const MENU_CLEAR_TERMINAL: &str = "clear-terminal";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,6 +214,110 @@ fn device_identifier_for_vault(identifier_result: Result<String, CredentialVault
     }
 }
 
+fn build_application_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let about_metadata = AboutMetadataBuilder::new()
+        .name(Some("FleurTerm"))
+        .version(Some(app.package_info().version.to_string()))
+        .comments(Some("FleurUI terminal workspace"))
+        .website(Some("https://github.com/Rqjqaz1122/fleuruiterm"))
+        .website_label(Some("FleurTerm on GitHub"))
+        .build();
+
+    let settings_item =
+        MenuItem::with_id(app, MENU_OPEN_SETTINGS, "Settings…", true, None::<&str>)?;
+    let new_terminal_item =
+        MenuItem::with_id(app, MENU_NEW_TERMINAL, "New Terminal", true, None::<&str>)?;
+    let close_tab_item = MenuItem::with_id(app, MENU_CLOSE_TAB, "Close Tab", true, None::<&str>)?;
+    let next_tab_item = MenuItem::with_id(app, MENU_NEXT_TAB, "Next Tab", true, None::<&str>)?;
+    let previous_tab_item =
+        MenuItem::with_id(app, MENU_PREVIOUS_TAB, "Previous Tab", true, None::<&str>)?;
+    let toggle_ai_item = MenuItem::with_id(
+        app,
+        MENU_TOGGLE_AI,
+        "Toggle AI Assistant",
+        true,
+        None::<&str>,
+    )?;
+    let clear_terminal_item = MenuItem::with_id(
+        app,
+        MENU_CLEAR_TERMINAL,
+        "Clear Terminal",
+        true,
+        None::<&str>,
+    )?;
+
+    let application_menu = SubmenuBuilder::new(app, "FleurTerm")
+        .about(Some(about_metadata.clone()))
+        .separator()
+        .item(&settings_item)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+    let file_menu = SubmenuBuilder::new(app, "File")
+        .item(&new_terminal_item)
+        .separator()
+        .item(&close_tab_item)
+        .build()?;
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .separator()
+        .select_all()
+        .build()?;
+    let view_menu = SubmenuBuilder::new(app, "View")
+        .item(&clear_terminal_item)
+        .item(&toggle_ai_item)
+        .separator()
+        .fullscreen()
+        .build()?;
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .item(&next_tab_item)
+        .item(&previous_tab_item)
+        .separator()
+        .bring_all_to_front()
+        .build()?;
+    let help_menu = SubmenuBuilder::new(app, "Help")
+        .about_with_text("About FleurTerm", Some(about_metadata))
+        .build()?;
+
+    MenuBuilder::new(app)
+        .items(&[
+            &application_menu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+            &help_menu,
+        ])
+        .build()
+}
+
+fn menu_command(menu_item_id: &str) -> Option<&'static str> {
+    match menu_item_id {
+        MENU_NEW_TERMINAL => Some(MENU_NEW_TERMINAL),
+        MENU_CLOSE_TAB => Some(MENU_CLOSE_TAB),
+        MENU_NEXT_TAB => Some(MENU_NEXT_TAB),
+        MENU_PREVIOUS_TAB => Some(MENU_PREVIOUS_TAB),
+        MENU_OPEN_SETTINGS => Some(MENU_OPEN_SETTINGS),
+        MENU_TOGGLE_AI => Some(MENU_TOGGLE_AI),
+        MENU_CLEAR_TERMINAL => Some(MENU_CLEAR_TERMINAL),
+        _ => None,
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn apply_window_opacity(window: tauri::Window, opacity: f64) -> Result<(), String> {
     use objc2_app_kit::NSWindow;
@@ -262,6 +377,14 @@ pub fn run() {
     let application = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .menu(build_application_menu)
+        .on_menu_event(|app, event| {
+            if let Some(command) = menu_command(event.id().as_ref()) {
+                if let Err(error) = app.emit(MENU_ACTION_EVENT, command) {
+                    tracing::error!(%error, command, "failed to dispatch application menu action");
+                }
+            }
+        })
         .manage(AppState::new())
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
@@ -309,8 +432,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        credential_vault::CredentialVaultError, device_identifier_for_vault,
-        normalize_window_opacity,
+        MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL, credential_vault::CredentialVaultError,
+        device_identifier_for_vault, menu_command, normalize_window_opacity,
     };
 
     #[test]
@@ -326,5 +449,12 @@ mod tests {
             device_identifier_for_vault(Err(CredentialVaultError::DeviceIdentifierUnavailable));
 
         assert!(identifier.is_empty());
+    }
+
+    #[test]
+    fn application_menu_ids_map_to_frontend_commands() {
+        assert_eq!(menu_command(MENU_NEW_TERMINAL), Some("new-terminal"));
+        assert_eq!(menu_command(MENU_CLEAR_TERMINAL), Some("clear-terminal"));
+        assert_eq!(menu_command("copy"), None);
     }
 }

@@ -1,4 +1,5 @@
 import type { TerminalChunk } from '@/domain/session';
+import type { TerminalTheme } from '@/terminal/terminalTheme';
 
 export interface DisposablePort {
   dispose(): void;
@@ -12,10 +13,14 @@ export interface TerminalPort extends DisposablePort {
   readonly cols: number;
   readonly rows: number;
   readonly buffer: { readonly active: TerminalBufferPort };
+  readonly options: { theme?: TerminalTheme };
   open(element: HTMLElement): void;
   write(data: Uint8Array, callback?: () => void): void;
   loadAddon(addon: FitAddonPort): void;
   onData(handler: (input: string) => void): DisposablePort;
+  getSelection(): string;
+  paste(text: string): void;
+  selectAll(): void;
   scrollToBottom(): void;
   scrollToLine(line: number): void;
 }
@@ -135,6 +140,25 @@ export class TerminalAdapter {
         reject(error instanceof Error ? error : new Error('Terminal output write failed'));
       }
     });
+  }
+
+  updateTheme(theme: TerminalTheme): void {
+    if (this.disposed) {
+      return;
+    }
+    this.terminal.options.theme = theme;
+  }
+
+  getSelection(): string {
+    return this.terminal.getSelection();
+  }
+
+  paste(text: string): void {
+    this.terminal.paste(text);
+  }
+
+  selectAll(): void {
+    this.terminal.selectAll();
   }
 
   dispose(): void {

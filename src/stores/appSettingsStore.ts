@@ -1,5 +1,12 @@
 import { computed, ref } from 'vue';
 
+import {
+  sanitizeShortcutSettings,
+  type AppCommand,
+  type ShortcutBinding,
+  type ShortcutSettings,
+} from '@/services/appShortcuts';
+
 export type SupportedAppLocale = 'en-US' | 'zh-CN';
 export type AiProvider = 'none' | 'openai' | 'anthropic' | 'local' | 'custom';
 export type AiCommandPolicy = 'ask' | 'suggest' | 'auto' | 'fullAccess';
@@ -56,10 +63,9 @@ export const defaultAiSettings: AiSettings = {
   commandPolicy: 'ask',
 };
 
-export function defaultsForAiProvider(provider: AiProvider): Pick<
-  AiSettings,
-  'baseUrl' | 'tokenHeaderName' | 'tokenPrefix'
-> {
+export function defaultsForAiProvider(
+  provider: AiProvider,
+): Pick<AiSettings, 'baseUrl' | 'tokenHeaderName' | 'tokenPrefix'> {
   return {
     baseUrl: defaultBaseUrlForProvider(provider),
     tokenHeaderName: defaultTokenHeaderNameForProvider(provider),
@@ -74,15 +80,19 @@ const languageOptions = computed<LanguageOption[]>(() => [
 
 const terminalSettings = ref<TerminalSettings>(loadTerminalSettings());
 const aiSettings = ref<AiSettings>(loadAiSettings());
+const shortcutSettings = ref<ShortcutSettings>(loadShortcutSettings());
 
 export function useAppSettingsStore() {
   return {
     aiSettings,
     languageOptions,
+    shortcutSettings,
     terminalSettings,
+    resetShortcutSettings,
     serializeRuntimeSettings,
     replaceRuntimeSettings,
     updateAiSettings,
+    updateShortcutSetting,
     updateTerminalSettings,
   };
 }
@@ -145,19 +155,46 @@ function updateAiSettings(patch: Partial<AiSettings>): void {
   persistRuntimeSettings();
 }
 
-function replaceRuntimeSettings(settings: {
-  terminal?: Partial<TerminalSettings>;
-  ai?: Partial<AiSettings>;
-}): void {
-  terminalSettings.value = sanitizeTerminalSettings(settings.terminal ?? terminalSettings.value);
-  aiSettings.value = sanitizeAiSettings(settings.ai ?? aiSettings.value);
+function updateShortcutSetting(shortcutId: AppCommand, binding: ShortcutBinding | null): void {
+  shortcutSettings.value = {
+    ...shortcutSettings.value,
+    [shortcutId]: binding === null ? null : { ...binding },
+  };
   persistRuntimeSettings();
 }
 
-function serializeRuntimeSettings(): { terminal: TerminalSettings; ai: AiSettings } {
+function resetShortcutSettings(): void {
+  shortcutSettings.value = {};
+  persistRuntimeSettings();
+}
+
+function replaceRuntimeSettings(settings: {
+  terminal?: Partial<TerminalSettings>;
+  ai?: Partial<AiSettings>;
+  shortcuts?: unknown;
+}): void {
+  terminalSettings.value = sanitizeTerminalSettings(settings.terminal ?? terminalSettings.value);
+  aiSettings.value = sanitizeAiSettings(settings.ai ?? aiSettings.value);
+  if (Object.prototype.hasOwnProperty.call(settings, 'shortcuts')) {
+    shortcutSettings.value = sanitizeShortcutSettings(settings.shortcuts);
+  }
+  persistRuntimeSettings();
+}
+
+function serializeRuntimeSettings(): {
+  terminal: TerminalSettings;
+  ai: AiSettings;
+  shortcuts: ShortcutSettings;
+} {
   return {
     terminal: { ...terminalSettings.value },
     ai: { ...aiSettings.value },
+    shortcuts: Object.fromEntries(
+      Object.entries(shortcutSettings.value).map(([shortcutId, binding]) => [
+        shortcutId,
+        binding === null ? null : { ...binding },
+      ]),
+    ),
   };
 }
 
@@ -169,9 +206,14 @@ function loadAiSettings(): AiSettings {
   return sanitizeAiSettings(readRuntimeSettings().ai);
 }
 
+function loadShortcutSettings(): ShortcutSettings {
+  return sanitizeShortcutSettings(readRuntimeSettings().shortcuts);
+}
+
 function readRuntimeSettings(): {
   terminal?: Partial<TerminalSettings>;
   ai?: Partial<AiSettings>;
+  shortcuts?: unknown;
 } {
   if (typeof localStorage === 'undefined') {
     return {};
@@ -182,6 +224,7 @@ function readRuntimeSettings(): {
       ? (JSON.parse(stored) as {
           terminal?: Partial<TerminalSettings>;
           ai?: Partial<AiSettings>;
+          shortcuts?: unknown;
         })
       : {};
   } catch {

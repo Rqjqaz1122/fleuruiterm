@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import TerminalPane from '@/components/TerminalPane.vue';
-import type { PaneDropPosition, SplitDirection, TerminalNode } from '@/domain/workspace';
+import type { TerminalNode } from '@/domain/workspace';
 
 defineOptions({ name: 'WorkspacePane' });
 
@@ -11,10 +11,8 @@ defineProps<{
 }>();
 
 defineEmits<{
-  split: [paneId: string, direction: SplitDirection];
   close: [paneId: string];
   focus: [paneId: string];
-  dropTab: [sourceTabId: string, targetPaneId: string, position: PaneDropPosition];
 }>();
 </script>
 
@@ -26,13 +24,8 @@ defineEmits<{
       :tab-id="tabId"
       :node="child"
       :focused-pane-id="focusedPaneId"
-      @split="(paneId, direction) => $emit('split', paneId, direction)"
       @close="$emit('close', $event)"
       @focus="$emit('focus', $event)"
-      @drop-tab="
-        (sourceTabId, targetPaneId, position) =>
-          $emit('dropTab', sourceTabId, targetPaneId, position)
-      "
     />
   </div>
   <TerminalPane
@@ -41,11 +34,7 @@ defineEmits<{
     :pane-id="node.id"
     :session-id="node.sessionId"
     :focused="node.id === focusedPaneId"
-    @split="(paneId, direction) => $emit('split', paneId, direction)"
     @close="$emit('close', $event)"
     @focus="$emit('focus', $event)"
-    @drop-tab="
-      (sourceTabId, targetPaneId, position) => $emit('dropTab', sourceTabId, targetPaneId, position)
-    "
   />
 </template>

@@ -11,6 +11,7 @@ import {
 class FakeTerminal implements TerminalPort {
   cols = 80;
   rows = 24;
+  options: { theme?: Record<string, string> } = {};
   readonly buffer = {
     active: {
       baseY: 0,
@@ -25,6 +26,9 @@ class FakeTerminal implements TerminalPort {
   scrollToLine = vi.fn((line: number) => {
     this.buffer.active.viewportY = line;
   });
+  getSelection = vi.fn(() => 'selected terminal text');
+  paste = vi.fn();
+  selectAll = vi.fn();
   private readonly writeCallbacks: Array<() => void> = [];
   write = vi.fn((_data: Uint8Array, callback?: () => void) => {
     if (callback !== undefined) {
@@ -290,6 +294,33 @@ describe('TerminalAdapter', () => {
     expect(observer.disconnect).toHaveBeenCalledTimes(1);
     expect(fitAddon.dispose).toHaveBeenCalledTimes(1);
     expect(terminal.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('updates the theme of an already open terminal', () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+    const theme = {
+      background: '#ffffff',
+      foreground: '#1f2937',
+      brightWhite: '#111827',
+    };
+
+    adapter.open(document.createElement('div'));
+    adapter.updateTheme(theme);
+
+    expect(terminal.options.theme).toEqual(theme);
+  });
+
+  it('exposes terminal editing operations for configurable shortcuts', () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+
+    expect(adapter.getSelection()).toBe('selected terminal text');
+    adapter.paste('clipboard text');
+    adapter.selectAll();
+
+    expect(terminal.paste).toHaveBeenCalledWith('clipboard text');
+    expect(terminal.selectAll).toHaveBeenCalledOnce();
   });
 });
 
