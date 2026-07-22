@@ -31,7 +31,12 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
-    "shortDescription": "FleurUI native local terminal"
+    "shortDescription": "FleurUI native local terminal",
+    "windows": {
+      "wix": {
+        "version": "0.0.1"
+      }
+    }
   },
   "plugins": {
     "updater": {
