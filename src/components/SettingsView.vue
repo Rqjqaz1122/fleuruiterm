@@ -201,7 +201,7 @@ const labels = computed(() => (selectedLocale.value === 'zh-CN' ? zhLabels : enL
 const shortcutPlatform: ShortcutPlatform =
   detectDesktopPlatform() === 'macos' ? 'macos' : 'default';
 const shortcutGroups = computed(() =>
-  (['workspace', 'terminal', 'editing'] as const).map((group) => ({
+  (['workspace', 'terminal'] as const).map((group) => ({
     id: group,
     label: labels.value.hotkeyGroups[group],
     shortcuts: APP_SHORTCUTS.filter((shortcutDefinition) => shortcutDefinition.group === group),
@@ -1485,7 +1485,6 @@ const enLabels = {
   hotkeyGroups: {
     workspace: 'Workspace',
     terminal: 'Terminal',
-    editing: 'Editing',
   },
   hotkeyActions: {
     'new-terminal': 'New terminal',
@@ -1495,9 +1494,6 @@ const enLabels = {
     'open-settings': 'Open settings',
     'toggle-ai': 'Toggle AI assistant',
     'clear-terminal': 'Clear terminal',
-    copy: 'Copy',
-    paste: 'Paste',
-    'select-all': 'Select all',
   },
   aiSectionTitle: 'AI',
   aiProviderTitle: 'Provider',
@@ -1706,7 +1702,6 @@ const zhLabels: typeof enLabels = {
   hotkeyGroups: {
     workspace: '工作区',
     terminal: '终端',
-    editing: '编辑',
   },
   hotkeyActions: {
     'new-terminal': '新建终端',
@@ -1716,9 +1711,6 @@ const zhLabels: typeof enLabels = {
     'open-settings': '打开设置',
     'toggle-ai': '切换 AI 助手',
     'clear-terminal': '清空终端',
-    copy: '复制',
-    paste: '粘贴',
-    'select-all': '全选',
   },
   aiSectionTitle: 'AI',
   aiProviderTitle: '服务提供方',

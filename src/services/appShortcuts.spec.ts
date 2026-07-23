@@ -12,6 +12,13 @@ import {
 } from './appShortcuts';
 
 describe('application shortcuts', () => {
+  it('does not expose terminal editing shortcuts', () => {
+    expect(APP_SHORTCUTS.map((shortcut) => shortcut.id)).not.toEqual(
+      expect.arrayContaining(['copy', 'paste', 'select-all']),
+    );
+    expect(APP_SHORTCUTS.map((shortcut) => shortcut.group)).not.toContain('editing');
+  });
+
   it('captures a platform-aware shortcut from a keyboard event', () => {
     const binding = captureShortcutBinding(
       new KeyboardEvent('keydown', { key: 'j', metaKey: true, shiftKey: true }),

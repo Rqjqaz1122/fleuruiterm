@@ -57,11 +57,15 @@ describe('SettingsView', () => {
 
     await wrapper.get('[data-section="hotkeys"]').trigger('click');
     expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('New terminal');
-    expect(wrapper.findAll('.settings-shortcut-row').length).toBeGreaterThanOrEqual(8);
+    expect(wrapper.findAll('.settings-shortcut-row')).toHaveLength(7);
     expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Open settings');
     expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Clear terminal');
+    expect(wrapper.get('[data-testid="settings-panel"]').text()).not.toContain('Editing');
+    expect(wrapper.find('[data-shortcut-id="copy"]').exists()).toBe(false);
+    expect(wrapper.find('[data-shortcut-id="paste"]').exists()).toBe(false);
+    expect(wrapper.find('[data-shortcut-id="select-all"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="settings-panel"]').text()).not.toContain('Split');
-    expect(wrapper.findAll('button[data-testid^="record-"]')).toHaveLength(10);
+    expect(wrapper.findAll('button[data-testid^="record-"]')).toHaveLength(7);
     expect(wrapper.get('[data-testid="settings-panel"]').text()).not.toContain('System shortcut');
 
     await wrapper.get('[data-section="ai"]').trigger('click');

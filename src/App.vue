@@ -28,10 +28,6 @@ import {
   type SavedConnectionSummary,
 } from '@/services/connectionProfiles';
 import { settingsClient } from '@/services/settingsClient';
-import {
-  terminalEditingActions,
-  type TerminalEditingCommand,
-} from '@/services/terminalEditingActions';
 import { setLocale } from '@/i18n/locale';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useAppUpdateStore } from '@/stores/appUpdateStore';
@@ -243,9 +239,6 @@ function handleApplicationKeyDown(event: KeyboardEvent): void {
   if (command === null) {
     return;
   }
-  if (isTerminalEditingCommand(command) && isTextEditingTarget(event.target)) {
-    return;
-  }
   event.preventDefault();
   void executeAppCommand(command);
 }
@@ -277,29 +270,7 @@ async function executeAppCommand(command: AppCommand): Promise<void> {
         await runAction(() => store.writeToFocusedSession('\x0c'));
       }
       return;
-    case 'copy':
-    case 'paste':
-    case 'select-all':
-      if (!settingsActive.value && workspace.value.focusedPaneId !== null) {
-        await terminalEditingActions.execute(workspace.value.focusedPaneId, command);
-      }
-      return;
   }
-}
-
-function isTerminalEditingCommand(command: AppCommand): command is TerminalEditingCommand {
-  return command === 'copy' || command === 'paste' || command === 'select-all';
-}
-
-function isTextEditingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target.isContentEditable
-  );
 }
 
 function activateRelativeAppTab(offset: -1 | 1): void {

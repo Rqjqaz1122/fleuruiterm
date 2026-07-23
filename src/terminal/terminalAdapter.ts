@@ -149,18 +149,6 @@ export class TerminalAdapter {
     this.terminal.options.theme = theme;
   }
 
-  getSelection(): string {
-    return this.terminal.getSelection();
-  }
-
-  paste(text: string): void {
-    this.terminal.paste(text);
-  }
-
-  selectAll(): void {
-    this.terminal.selectAll();
-  }
-
   dispose(): void {
     if (this.disposed) {
       return;

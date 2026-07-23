@@ -310,18 +310,6 @@ describe('TerminalAdapter', () => {
 
     expect(terminal.options.theme).toEqual(theme);
   });
-
-  it('exposes terminal editing operations for configurable shortcuts', () => {
-    const terminal = new FakeTerminal();
-    const adapter = createAdapter(terminal, createSessionClient());
-
-    expect(adapter.getSelection()).toBe('selected terminal text');
-    adapter.paste('clipboard text');
-    adapter.selectAll();
-
-    expect(terminal.paste).toHaveBeenCalledWith('clipboard text');
-    expect(terminal.selectAll).toHaveBeenCalledOnce();
-  });
 });
 
 function createSessionClient() {

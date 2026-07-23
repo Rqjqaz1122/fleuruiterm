@@ -18,19 +18,11 @@ const desktopMenuMock = vi.hoisted(() => ({
     return vi.fn();
   }),
 }));
-const terminalEditingMock = vi.hoisted(() => ({
-  execute: vi.fn(async () => undefined),
-}));
-
 vi.mock('@/services/desktopMenuClient', () => ({
   desktopMenuClient: {
     available: false,
     listen: desktopMenuMock.listen,
   },
-}));
-
-vi.mock('@/services/terminalEditingActions', () => ({
-  terminalEditingActions: terminalEditingMock,
 }));
 
 enableAutoUnmount(afterEach);
@@ -42,7 +34,6 @@ describe('FleurTerm app shell', () => {
     localStorage.clear();
     desktopMenuMock.commandHandler = null;
     desktopMenuMock.listen.mockClear();
-    terminalEditingMock.execute.mockClear();
     useAppSettingsStore().resetShortcutSettings();
   });
 
@@ -215,21 +206,17 @@ describe('FleurTerm app shell', () => {
     expect(store.openTab).toHaveBeenCalledOnce();
   });
 
-  it('executes a customized editing shortcut in the focused terminal', async () => {
+  it('does not intercept terminal editing keyboard shortcuts', async () => {
     const store = useWorkspaceStore();
     store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
-    useAppSettingsStore().updateShortcutSetting('copy', {
-      key: 'y',
-      modifier: 'primary',
-      shift: true,
-    });
     mount(App, { global: { stubs: { TerminalPane: true } } });
 
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y', metaKey: true, shiftKey: true }));
-
-    await vi.waitFor(() =>
-      expect(terminalEditingMock.execute).toHaveBeenCalledWith('pane-1', 'copy'),
+    const events = ['c', 'v', 'a'].map(
+      (key) => new KeyboardEvent('keydown', { key, metaKey: true, cancelable: true }),
     );
+    events.forEach((event) => window.dispatchEvent(event));
+
+    expect(events.every((event) => !event.defaultPrevented)).toBe(true);
   });
 
   it('executes native menu commands through the same application actions', async () => {

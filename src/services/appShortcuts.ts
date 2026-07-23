@@ -5,13 +5,10 @@ export type AppCommand =
   | 'previous-tab'
   | 'open-settings'
   | 'toggle-ai'
-  | 'clear-terminal'
-  | 'copy'
-  | 'paste'
-  | 'select-all';
+  | 'clear-terminal';
 
 export type ShortcutId = AppCommand;
-export type ShortcutGroup = 'workspace' | 'terminal' | 'editing';
+export type ShortcutGroup = 'workspace' | 'terminal';
 export type ShortcutPlatform = 'macos' | 'default';
 export type ShortcutModifier = 'primary' | 'control' | 'alt';
 
@@ -38,9 +35,6 @@ export const APP_SHORTCUTS: readonly AppShortcutDefinition[] = [
   applicationShortcut('open-settings', 'workspace', ','),
   applicationShortcut('toggle-ai', 'workspace', 'a', 'primary', true),
   applicationShortcut('clear-terminal', 'terminal', 'k'),
-  applicationShortcut('copy', 'editing', 'c'),
-  applicationShortcut('paste', 'editing', 'v'),
-  applicationShortcut('select-all', 'editing', 'a'),
 ];
 
 const EDITABLE_SHORTCUT_IDS = new Set<AppCommand>(

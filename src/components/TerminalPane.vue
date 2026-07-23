@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import { t } from '@/i18n/locale';
 import { SessionClient } from '@/services/sessionClient';
-import { terminalEditingActions } from '@/services/terminalEditingActions';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 import { TerminalAdapter } from '@/terminal/terminalAdapter';
@@ -41,7 +40,6 @@ const visibleTerminalError = computed(() =>
 );
 let adapter: TerminalAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
-let unregisterEditingActions: (() => void) | null = null;
 let disposed = false;
 let terminalViewport: HTMLElement | null = null;
 let scrollbarUpdateFrame: number | null = null;
@@ -222,11 +220,6 @@ onMounted(async () => {
     },
   });
   adapter.open(element);
-  unregisterEditingActions = terminalEditingActions.register(props.paneId, {
-    getSelection: () => adapter?.getSelection() ?? '',
-    paste: (text) => adapter?.paste(text),
-    selectAll: () => adapter?.selectAll(),
-  });
   window.addEventListener(TERMINAL_THEME_CHANGED_EVENT, updateOpenTerminalTheme);
   scrollbarResizeObserver = new ResizeObserver(scheduleTerminalScrollbarUpdate);
   scrollbarResizeObserver.observe(element);
@@ -241,8 +234,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   disposed = true;
   unsubscribe?.();
-  unregisterEditingActions?.();
-  unregisterEditingActions = null;
   adapter?.dispose();
   window.removeEventListener(TERMINAL_THEME_CHANGED_EVENT, updateOpenTerminalTheme);
   terminalViewport?.removeEventListener('scroll', handleViewportScroll);
