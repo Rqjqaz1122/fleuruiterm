@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { enableAutoUnmount, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +13,8 @@ import {
 } from '@/stores/appSettingsStore';
 
 import SettingsView from './SettingsView.vue';
+
+const globalStyles = readFileSync('src/styles/global.css', 'utf8');
 
 enableAutoUnmount(afterEach);
 
@@ -121,6 +125,31 @@ describe('SettingsView', () => {
     expect(wrapper.get('.settings-value-pill').text()).toBe('简体中文');
     expect(wrapper.get('.settings-nav').text()).toContain('通用');
     expect(wrapper.get('.settings-sidebar-copy').text()).toContain('设置');
+  });
+
+  it('shows complete Chinese labels in terminal settings', async () => {
+    setLocale('zh-CN');
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+    const terminalSettingsText = wrapper.get('[data-testid="settings-panel"]').text();
+
+    expect(terminalSettingsText).toContain('行高');
+    expect(terminalSettingsText).toContain('新打开终端的垂直行距。');
+    expect(terminalSettingsText).toContain('重置终端');
+    expect(terminalSettingsText).not.toContain('Line height');
+    expect(terminalSettingsText).not.toContain('Reset terminal');
+  });
+
+  it('prevents selecting settings copy while keeping editable text selectable', () => {
+    const settingsViewRule = /\.settings-tab\.settings-view\s*\{([^}]*)\}/.exec(globalStyles)?.[1];
+    const editableTextRule =
+      /\.settings-tab\.settings-view input,\s*\.settings-tab\.settings-view textarea,\s*\.settings-tab\.settings-view \[contenteditable='true'\]\s*\{([^}]*)\}/.exec(
+        globalStyles,
+      )?.[1];
+
+    expect(settingsViewRule).toContain('user-select: none');
+    expect(editableTextRule).toContain('user-select: text');
   });
 
   it('shows one software update card in the general section', async () => {
