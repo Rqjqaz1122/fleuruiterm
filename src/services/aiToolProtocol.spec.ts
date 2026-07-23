@@ -43,4 +43,16 @@ describe('AI tool protocol', () => {
       }),
     ]);
   });
+
+  it('parses an action that opens a saved connection', () => {
+    const response = parseAssistantToolResponse(
+      '<fleurterm-action>{"type":"connection.open","target":"10.7.121.72"}</fleurterm-action>',
+    );
+
+    expect(response.appActions).toEqual([
+      expect.objectContaining({
+        action: { type: 'connection.open', target: '10.7.121.72' },
+      }),
+    ]);
+  });
 });

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addTab, createWorkspace } from '@/domain/workspace';
 import { setLocale } from '@/i18n/locale';
+import { settingsClient } from '@/services/settingsClient';
 import { defaultTerminalSettings, useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useAppUpdateStore } from '@/stores/appUpdateStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
@@ -640,6 +641,67 @@ describe('FleurTerm app shell', () => {
 
     expect(store.workspace.activeTabId).toBe('tab-1');
     expect(store.openTab).not.toHaveBeenCalled();
+  });
+
+  it('lets AI open a saved SSH connection by host', async () => {
+    localStorage.setItem(
+      'fleurterm.connections',
+      JSON.stringify([
+        {
+          id: 'root-10-7-121-72',
+          name: 'root@10.7.121.72',
+          group: 'default',
+          method: 'ssh',
+          host: '10.7.121.72',
+          user: 'root',
+          port: 22,
+          authMethod: 'password',
+          hasPassword: true,
+          password: '',
+          privateKeys: [],
+          forwardedPorts: [],
+          loginScripts: '',
+        },
+      ]),
+    );
+    vi.spyOn(settingsClient, 'loadPasswords').mockResolvedValue({
+      'root-10-7-121-72': 'secret',
+    });
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => {
+      store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    });
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          TerminalPane: true,
+          AIPanel: {
+            props: ['runAppAction'],
+            template:
+              '<button data-testid="ai-open-saved" @click="runAppAction({ type: \'connection.open\', target: \'10.7.121.72\' })">Open</button>',
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+    await wrapper.get('[data-testid="ai-open-saved"]').trigger('click');
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+
+    expect(store.openTab).toHaveBeenCalledWith({
+      shell: 'ssh',
+      args: [
+        '-p',
+        '22',
+        '-o',
+        'PreferredAuthentications=password,keyboard-interactive',
+        '-o',
+        'PubkeyAuthentication=no',
+        'root@10.7.121.72',
+      ],
+      password: 'secret',
+      title: 'SSH root@10.7.121.72',
+    });
   });
 });
 

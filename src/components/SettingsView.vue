@@ -19,6 +19,7 @@ import {
   type ShortcutSettings,
 } from '@/services/appShortcuts';
 import { detectDesktopPlatform } from '@/services/desktopPlatform';
+import { CONNECTIONS_STORAGE_KEY } from '@/services/connectionProfiles';
 import { settingsClient } from '@/services/settingsClient';
 import {
   defaultTerminalSettings,
@@ -95,7 +96,6 @@ type ThemeConfigFile = {
   palettes: Record<ThemeTone, TerminalColorPalette>;
 };
 
-const CONNECTIONS_STORAGE_KEY = 'fleurterm.connections';
 const RECENT_CONNECTIONS_STORAGE_KEY = 'fleurterm.recentConnections';
 const THEME_STORAGE_KEY = 'fleurterm.theme';
 const WINDOW_STORAGE_KEY = 'fleurterm.window';

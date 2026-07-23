@@ -4,7 +4,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import AIPanel from '@/components/AIPanel.vue';
 import SettingsView from '@/components/SettingsView.vue';
-import type { WorkbenchConnection } from '@/components/SettingsView.vue';
 import StartPage from '@/components/StartPage.vue';
 import StatusBar from '@/components/StatusBar.vue';
 import TerminalTabs from '@/components/TerminalTabs.vue';
@@ -21,6 +20,14 @@ import type { AiAppAction, AiToolResult } from '@/services/aiToolProtocol';
 import { resolveAppShortcut, type AppCommand } from '@/services/appShortcuts';
 import { desktopMenuClient } from '@/services/desktopMenuClient';
 import { detectDesktopPlatform } from '@/services/desktopPlatform';
+import {
+  findSavedConnectionProfile,
+  loadSavedConnectionProfiles,
+  summarizeSavedConnections,
+  type OpenableConnectionProfile,
+  type SavedConnectionSummary,
+} from '@/services/connectionProfiles';
+import { settingsClient } from '@/services/settingsClient';
 import {
   terminalEditingActions,
   type TerminalEditingCommand,
@@ -136,7 +143,7 @@ async function openTerminal(): Promise<void> {
   });
 }
 
-async function openWorkbenchConnection(connection: WorkbenchConnection): Promise<void> {
+async function openWorkbenchConnection(connection: OpenableConnectionProfile): Promise<void> {
   await runAction(async () => {
     const openOptions = buildConnectionOpenOptions(connection);
     await store.openTab(openOptions);
@@ -146,7 +153,7 @@ async function openWorkbenchConnection(connection: WorkbenchConnection): Promise
   });
 }
 
-function buildConnectionOpenOptions(connection: WorkbenchConnection): {
+function buildConnectionOpenOptions(connection: OpenableConnectionProfile): {
   shell?: string;
   args?: string[];
   cwd?: string;
@@ -355,6 +362,14 @@ async function executeAiAppAction(action: AiAppAction): Promise<void> {
       activateAppTab(targetTab.id);
       return;
     }
+    case 'connection.open': {
+      const connection = findSavedConnectionProfile(loadSavedConnectionProfiles(), action.target);
+      if (connection === null) {
+        throw new Error(`Saved connection "${action.target}" was not found.`);
+      }
+      await openWorkbenchConnection(await loadConnectionPassword(connection));
+      return;
+    }
     case 'terminal.openLocal':
       await store.openTab({
         shell: action.shell,
@@ -386,6 +401,24 @@ async function executeAiAppAction(action: AiAppAction): Promise<void> {
       openSettings();
       return;
   }
+}
+
+async function loadConnectionPassword(
+  connection: OpenableConnectionProfile,
+): Promise<OpenableConnectionProfile> {
+  if (!connection.hasPassword) {
+    return connection;
+  }
+  const passwords = await settingsClient.loadPasswords([connection.id]);
+  const password = passwords[connection.id];
+  if (!password) {
+    throw new Error(`The password for saved connection "${connection.name}" is unavailable.`);
+  }
+  return { ...connection, password };
+}
+
+function listSavedConnections(): SavedConnectionSummary[] {
+  return summarizeSavedConnections(loadSavedConnectionProfiles());
 }
 
 function activateAppTab(tabId: string): void {
@@ -541,6 +574,7 @@ function clampAiPanelWidth(width: number): number {
           :snapshot="activeSnapshot"
           :width="aiPanelWidth"
           :run-app-action="runAiAppAction"
+          :list-saved-connections="listSavedConnections"
           @close="aiPanelOpen = false"
           @resize="resizeAiPanel"
         />

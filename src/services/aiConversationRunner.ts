@@ -14,6 +14,7 @@ import {
   type AiToolResult,
 } from './aiToolProtocol';
 import type { TerminalToolRunner } from './terminalToolRunner';
+import type { SavedConnectionSummary } from './connectionProfiles';
 
 const MAX_EXECUTED_TOOL_CALLS = 6;
 const MAX_MODEL_STEPS = 12;
@@ -21,7 +22,8 @@ const SYSTEM_PROMPT = [
   'You are FleurTerm AI.',
   'Use <terminal-command>...</terminal-command> when terminal interaction is required.',
   'Use <fleurterm-action>{"type":"terminal.activate","target":"tab title or id"}</fleurterm-action> to switch to an existing terminal tab.',
-  'Use terminal.openLocal or terminal.openSsh only when the user explicitly asks to create a new terminal, never as a fallback when terminal.activate reports that a target was not found.',
+  'Use <fleurterm-action>{"type":"connection.open","target":"saved connection id, name, host, or user@host"}</fleurterm-action> when the user asks to open a saved connection. Emit the action instead of merely saying that the connection was requested.',
+  'Use terminal.openLocal or terminal.openSsh only when the user explicitly asks to create a new terminal, never as a fallback when terminal.activate or connection.open reports that a target was not found.',
   'Use <fleurterm-action>{"type":"settings.open"}</fleurterm-action> to open settings.',
   'After a terminal command is denied, do not request the same command again in the current turn. Explain the denial or choose a materially different safe action.',
   'Do not claim an action succeeded until a labeled tool result confirms it.',
@@ -39,6 +41,7 @@ export interface AiConversationRunnerDependencies {
   settings: { aiSettings: Ref<AiSettings> };
   terminalRunner: TerminalToolRunner;
   runAppAction: (action: AiAppAction) => Promise<AiToolResult>;
+  listSavedConnections?: () => SavedConnectionSummary[];
 }
 
 export interface AiConversationRunner {
@@ -84,6 +87,7 @@ async function runConversationTurn(
     dependencies.conversation,
     dependencies.settings.aiSettings.value,
     snapshot,
+    dependencies.listSavedConnections?.() ?? [],
   );
   dependencies.conversation.beginTurn(turnId);
   dependencies.conversation.setActiveAbortController(abortController);
@@ -119,7 +123,7 @@ async function runConversationTurn(
         prepareToolCall(toolCall, turnId, modelStep, index, snapshot),
       );
       dependencies.conversation.updateMessage(assistantMessage.id, {
-        content: parsedResponse.displayContent || responseContent,
+        content: visibleAssistantContent(responseContent, parsedResponse),
         terminalCommands: toolCalls.map(({ id, command }) => ({ id, command })),
         appActions: parsedResponse.appActions,
       });
@@ -132,7 +136,9 @@ async function runConversationTurn(
       );
       appendToolResults(requestMessages, appActionResults);
       const missingTerminalResult = appActionResults.find(
-        (result) => result.command === 'terminal.activate' && result.outcome === 'failed',
+        (result) =>
+          (result.command === 'terminal.activate' || result.command === 'connection.open') &&
+          result.outcome === 'failed',
       );
       if (missingTerminalResult !== undefined) {
         dependencies.conversation.appendAssistantMessage(
@@ -222,8 +228,15 @@ function buildRequestMessages(
   conversation: ConversationStore,
   aiSettings: AiSettings,
   snapshot: SessionSnapshot | null,
+  savedConnections: SavedConnectionSummary[],
 ): AiChatMessage[] {
   const messages: AiChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+  if (savedConnections.length > 0) {
+    messages.push({
+      role: 'system',
+      content: `Available saved connections: ${JSON.stringify(savedConnections)}`,
+    });
+  }
   if (snapshot !== null) {
     messages.push({
       role: 'system',
@@ -312,12 +325,19 @@ async function runAutomaticAppActions(
   const mayRunAllActions = policy === 'auto' || policy === 'fullAccess';
   const results: AiToolResult[] = [];
   for (const action of actions) {
-    if (!mayRunAllActions && action.type !== 'terminal.activate') {
+    if (
+      !mayRunAllActions &&
+      action.type !== 'terminal.activate' &&
+      action.type !== 'connection.open'
+    ) {
       continue;
     }
     const result = await dependencies.runAppAction(action);
     results.push(result);
-    if (action.type === 'terminal.activate' && result.outcome === 'failed') {
+    if (
+      (action.type === 'terminal.activate' || action.type === 'connection.open') &&
+      result.outcome === 'failed'
+    ) {
       break;
     }
   }
@@ -326,6 +346,15 @@ async function runAutomaticAppActions(
 
 function terminalCommandSignature(command: string): string {
   return command.trim().replace(/\s+/g, ' ');
+}
+
+function visibleAssistantContent(
+  responseContent: string,
+  parsedResponse: ReturnType<typeof parseAssistantToolResponse>,
+): string {
+  const containsToolMarkup =
+    parsedResponse.toolCalls.length > 0 || parsedResponse.appActions.length > 0;
+  return containsToolMarkup ? parsedResponse.displayContent : responseContent;
 }
 
 function removeEmptyAssistantMessage(

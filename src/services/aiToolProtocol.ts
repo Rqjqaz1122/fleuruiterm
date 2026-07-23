@@ -30,6 +30,7 @@ export interface AiToolResult {
 export type AiAppAction =
   | { type: 'terminal.write'; input: string }
   | { type: 'terminal.activate'; target: string }
+  | { type: 'connection.open'; target: string }
   | { type: 'terminal.openLocal'; shell?: string; cwd?: string; title?: string }
   | {
       type: 'terminal.openSsh';
@@ -160,6 +161,10 @@ function parseAppAction(source: string): AiAppAction | null {
       case 'terminal.activate':
         return typeof parsed.target === 'string' && parsed.target.trim()
           ? { type: 'terminal.activate', target: parsed.target.trim() }
+          : null;
+      case 'connection.open':
+        return typeof parsed.target === 'string' && parsed.target.trim()
+          ? { type: 'connection.open', target: parsed.target.trim() }
           : null;
       case 'terminal.openLocal':
         return {

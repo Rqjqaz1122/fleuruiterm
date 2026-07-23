@@ -131,6 +131,79 @@ describe('AI conversation runner', () => {
     expect(conversation.messages.value.at(-1)?.content).toBe('Terminal "missing" was not found.');
   });
 
+  it('provides saved connection targets to the model', async () => {
+    const savedConnections = [
+      {
+        id: 'root-10-7-121-72',
+        name: 'root@10.7.121.72',
+        method: 'ssh',
+        host: '10.7.121.72',
+        user: 'root',
+        port: 22,
+      },
+    ];
+    const { runner, sendChat } = createRunner('ask', savedConnections);
+    sendChat.mockResolvedValueOnce('Ready.');
+
+    await runner.send('open 10.7.121.72', snapshot());
+
+    const requestMessages = sendChat.mock.calls[0]?.[1] as AiChatMessage[];
+    expect(requestMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'system',
+          content: expect.stringContaining('root@10.7.121.72'),
+        }),
+      ]),
+    );
+  });
+
+  it('opens a saved connection action automatically in ask mode', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"connection.open","target":"10.7.121.72"}</fleurterm-action>',
+      )
+      .mockResolvedValueOnce('The SSH terminal is open.');
+
+    await runner.send('open 10.7.121.72', snapshot());
+
+    expect(runAppAction).toHaveBeenCalledWith({
+      type: 'connection.open',
+      target: '10.7.121.72',
+    });
+    expect(sendChat).toHaveBeenCalledTimes(2);
+    expect(
+      conversation.messages.value.some((message) => message.content.includes('<fleurterm-action>')),
+    ).toBe(false);
+  });
+
+  it('does not create a new terminal after a saved connection fails to open', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('auto');
+    sendChat.mockResolvedValueOnce(
+      [
+        '<fleurterm-action>{"type":"connection.open","target":"missing"}</fleurterm-action>',
+        '<fleurterm-action>{"type":"terminal.openSsh","host":"missing","user":"root"}</fleurterm-action>',
+      ].join('\n'),
+    );
+    runAppAction.mockResolvedValueOnce({
+      callId: 'app-connection.open',
+      outcome: 'failed',
+      command: 'connection.open',
+      output: '',
+      truncated: false,
+      errorMessage: 'Saved connection "missing" was not found.',
+    });
+
+    await runner.send('open missing', snapshot());
+
+    expect(runAppAction).toHaveBeenCalledOnce();
+    expect(runAppAction).toHaveBeenCalledWith({ type: 'connection.open', target: 'missing' });
+    expect(conversation.messages.value.at(-1)?.content).toBe(
+      'Saved connection "missing" was not found.',
+    );
+  });
+
   it('automatically executes safe commands in auto mode', async () => {
     const { runner, sendChat, terminalRunner } = createRunner('auto');
     sendChat
@@ -226,7 +299,17 @@ describe('AI conversation runner', () => {
   });
 });
 
-function createRunner(commandPolicy: AiCommandPolicy) {
+function createRunner(
+  commandPolicy: AiCommandPolicy,
+  savedConnections: Array<{
+    id: string;
+    name: string;
+    method: string;
+    host: string;
+    user: string;
+    port: number;
+  }> = [],
+) {
   const sendChat = vi.fn();
   const terminalRunner = { execute: vi.fn() };
   const runAppAction = vi.fn(async (action) => ({
@@ -252,6 +335,7 @@ function createRunner(commandPolicy: AiCommandPolicy) {
     },
     terminalRunner,
     runAppAction,
+    listSavedConnections: () => savedConnections,
   });
   return { runner, runAppAction, sendChat, terminalRunner };
 }
