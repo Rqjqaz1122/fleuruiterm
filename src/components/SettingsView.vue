@@ -99,6 +99,16 @@ const CONNECTIONS_STORAGE_KEY = 'fleurterm.connections';
 const RECENT_CONNECTIONS_STORAGE_KEY = 'fleurterm.recentConnections';
 const THEME_STORAGE_KEY = 'fleurterm.theme';
 const WINDOW_STORAGE_KEY = 'fleurterm.window';
+const COMMON_TERMINAL_FONT_OPTIONS = [
+  { value: 'Source Code Pro, monospace', label: 'Source Code Pro' },
+  { value: 'JetBrains Mono, monospace', label: 'JetBrains Mono' },
+  { value: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', label: 'SF Mono' },
+  { value: 'Menlo, Monaco, Consolas, monospace', label: 'Menlo' },
+  { value: 'Monaco, Consolas, monospace', label: 'Monaco' },
+  { value: 'Cascadia Code, Consolas, monospace', label: 'Cascadia Code' },
+  { value: 'Fira Code, monospace', label: 'Fira Code' },
+  { value: 'Consolas, monospace', label: 'Consolas' },
+];
 
 const emit = defineEmits<{
   openConnection: [connection: WorkbenchConnection];
@@ -209,6 +219,20 @@ const languageOptions = computed(() =>
     label: `${option.label} / ${option.nativeLabel}`,
   })),
 );
+const terminalFontOptions = computed(() => {
+  const options = [
+    {
+      value: defaultTerminalSettings.fontFamily,
+      label: labels.value.terminalFontDefault,
+    },
+    ...COMMON_TERMINAL_FONT_OPTIONS,
+    { value: 'monospace', label: labels.value.terminalFontSystem },
+  ];
+  const configuredFont = terminalSettings.value.fontFamily;
+  return options.some((option) => option.value === configuredFont)
+    ? options
+    : [{ value: configuredFont, label: configuredFont }, ...options];
+});
 const sections = computed<SettingsSection[]>(() => [
   {
     id: 'general',
@@ -1432,6 +1456,8 @@ const enLabels = {
   terminalSectionTitle: 'Terminal',
   terminalFontTitle: 'Font',
   terminalFontDescription: 'Monospace stack used by newly opened terminals.',
+  terminalFontDefault: 'FleurTerm default',
+  terminalFontSystem: 'System monospace',
   terminalFontValue: 'Source Code Pro / JetBrains Mono',
   terminalFontSizeTitle: 'Font size',
   terminalFontSizeDescription: 'Text size used by newly opened terminals.',
@@ -1651,6 +1677,8 @@ const zhLabels: typeof enLabels = {
   terminalSectionTitle: '终端',
   terminalFontTitle: '字体',
   terminalFontDescription: '终端使用等宽字体栈渲染。',
+  terminalFontDefault: 'FleurTerm 默认字体',
+  terminalFontSystem: '系统等宽字体',
   terminalFontValue: 'Source Code Pro / JetBrains Mono',
   terminalFontSizeTitle: '字号',
   terminalFontSizeDescription: '当前终端渲染字号。',
@@ -1918,18 +1946,13 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.terminalFontDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <label class="settings-compact-input">
-                      <input
-                        :value="terminalSettings.fontFamily"
-                        :aria-label="labels.terminalFontTitle"
-                        @input="
-                          updateTerminalSetting(
-                            'fontFamily',
-                            ($event.target as HTMLInputElement).value,
-                          )
-                        "
-                      />
-                    </label>
+                    <AppSelect
+                      :model-value="terminalSettings.fontFamily"
+                      :options="terminalFontOptions"
+                      :aria-label="labels.terminalFontTitle"
+                      test-id="settings-terminal-font"
+                      @update:model-value="updateTerminalSetting('fontFamily', $event)"
+                    />
                   </div>
                 </div>
 

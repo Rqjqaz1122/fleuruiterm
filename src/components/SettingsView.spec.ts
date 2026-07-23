@@ -139,6 +139,34 @@ describe('SettingsView', () => {
     expect(terminalSettingsText).toContain('重置终端');
     expect(terminalSettingsText).not.toContain('Line height');
     expect(terminalSettingsText).not.toContain('Reset terminal');
+    await wrapper.get('[data-testid="settings-terminal-font"]').trigger('click');
+    expect(wrapper.get('[role="listbox"]').text()).toContain('系统等宽字体');
+  });
+
+  it('selects the terminal font from common monospace options', async () => {
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+
+    expect(wrapper.find('input[aria-label="Font"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="settings-terminal-font"]').trigger('click');
+    expect(wrapper.get('[role="listbox"]').text()).toContain('JetBrains Mono');
+    await wrapper.get('[data-value="JetBrains Mono, monospace"]').trigger('click');
+
+    expect(useAppSettingsStore().terminalSettings.value.fontFamily).toBe(
+      'JetBrains Mono, monospace',
+    );
+  });
+
+  it('keeps a previously saved custom font visible in the selector', async () => {
+    useAppSettingsStore().updateTerminalSettings({ fontFamily: 'Custom Mono, monospace' });
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+
+    expect(wrapper.get('[data-testid="settings-terminal-font"]').text()).toContain(
+      'Custom Mono, monospace',
+    );
   });
 
   it('prevents selecting settings copy while keeping editable text selectable', () => {
