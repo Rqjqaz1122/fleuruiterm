@@ -153,6 +153,10 @@ function finishTurn(): void {
 function stopTurn(): void {
   activeAbortController.value?.abort();
   activeAbortController.value = null;
+  const completedAt = Date.now();
+  toolCalls.value = toolCalls.value.map((toolCall) =>
+    toolCall.status === 'proposed' ? { ...toolCall, status: 'cancelled', completedAt } : toolCall,
+  );
   cancelPendingToolDecisions();
   activeTurnId.value = null;
   status.value = 'stopped';

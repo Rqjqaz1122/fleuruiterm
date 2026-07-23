@@ -17,10 +17,19 @@ import type { TerminalToolRunner } from './terminalToolRunner';
 
 const MAX_EXECUTED_TOOL_CALLS = 6;
 const MAX_MODEL_STEPS = 12;
-const SYSTEM_PROMPT =
-  'You are FleurTerm AI. Use <terminal-command>...</terminal-command> when terminal interaction is required. Use <fleurterm-action>{"type":"settings.open"}</fleurterm-action> for supported FleurTerm actions. Do not claim an action succeeded until a labeled tool result confirms it.';
+const SYSTEM_PROMPT = [
+  'You are FleurTerm AI.',
+  'Use <terminal-command>...</terminal-command> when terminal interaction is required.',
+  'Use <fleurterm-action>{"type":"terminal.activate","target":"tab title or id"}</fleurterm-action> to switch to an existing terminal tab.',
+  'Use terminal.openLocal or terminal.openSsh only when the user explicitly asks to create a new terminal, never as a fallback when terminal.activate reports that a target was not found.',
+  'Use <fleurterm-action>{"type":"settings.open"}</fleurterm-action> to open settings.',
+  'After a terminal command is denied, do not request the same command again in the current turn. Explain the denial or choose a materially different safe action.',
+  'Do not claim an action succeeded until a labeled tool result confirms it.',
+].join(' ');
 const STEP_LIMIT_MESSAGE =
   'The terminal tool step limit has been reached. Review the current output before starting another request.';
+const REPEATED_DENIED_MESSAGE =
+  'The same terminal command was not requested again because it was denied in this turn.';
 
 type ConversationStore = ReturnType<typeof useAiConversationStore>;
 
@@ -79,11 +88,14 @@ async function runConversationTurn(
   dependencies.conversation.beginTurn(turnId);
   dependencies.conversation.setActiveAbortController(abortController);
   let executedToolCallCount = 0;
+  let pendingAssistantMessageId: string | null = null;
+  const deniedCommandSignatures = new Set<string>();
 
   try {
     for (let modelStep = 0; modelStep < MAX_MODEL_STEPS; modelStep += 1) {
       dependencies.conversation.setStatus(modelStep === 0 ? 'thinking' : 'continuing');
       const assistantMessage = dependencies.conversation.appendAssistantMessage('');
+      pendingAssistantMessageId = assistantMessage.id;
       let streamedContent = '';
       const rawResponse = await dependencies.sendChat(
         dependencies.settings.aiSettings.value,
@@ -111,6 +123,7 @@ async function runConversationTurn(
         terminalCommands: toolCalls.map(({ id, command }) => ({ id, command })),
         appActions: parsedResponse.appActions,
       });
+      pendingAssistantMessageId = null;
       requestMessages.push({ role: 'assistant', content: responseContent });
 
       const appActionResults = await runAutomaticAppActions(
@@ -118,6 +131,15 @@ async function runConversationTurn(
         parsedResponse.appActions.map(({ action }) => action),
       );
       appendToolResults(requestMessages, appActionResults);
+      const missingTerminalResult = appActionResults.find(
+        (result) => result.command === 'terminal.activate' && result.outcome === 'failed',
+      );
+      if (missingTerminalResult !== undefined) {
+        dependencies.conversation.appendAssistantMessage(
+          missingTerminalResult.errorMessage || 'The requested terminal was not found.',
+        );
+        return;
+      }
 
       if (dependencies.settings.aiSettings.value.commandPolicy === 'suggest') {
         return;
@@ -128,7 +150,13 @@ async function runConversationTurn(
       }
 
       const terminalResults: AiToolResult[] = [];
+      let repeatedDeniedCommand = false;
       for (const toolCall of toolCalls) {
+        const commandSignature = terminalCommandSignature(toolCall.command);
+        if (deniedCommandSignatures.has(commandSignature)) {
+          repeatedDeniedCommand = true;
+          continue;
+        }
         if (executedToolCallCount >= MAX_EXECUTED_TOOL_CALLS) {
           dependencies.conversation.appendAssistantMessage(STEP_LIMIT_MESSAGE);
           return;
@@ -139,6 +167,7 @@ async function runConversationTurn(
           return;
         }
         if (approved === 'denied') {
+          deniedCommandSignatures.add(commandSignature);
           terminalResults.push(deniedResult(toolCall));
           continue;
         }
@@ -161,11 +190,16 @@ async function runConversationTurn(
         terminalResults.push(result);
       }
       appendToolResults(requestMessages, terminalResults);
+      if (repeatedDeniedCommand) {
+        dependencies.conversation.appendAssistantMessage(REPEATED_DENIED_MESSAGE);
+        return;
+      }
     }
 
     dependencies.conversation.appendAssistantMessage(STEP_LIMIT_MESSAGE);
   } catch (error) {
     if (abortController.signal.aborted) {
+      removeEmptyAssistantMessage(dependencies.conversation, pendingAssistantMessageId);
       return;
     }
     dependencies.conversation.failMessage(userMessage.id);
@@ -247,6 +281,10 @@ async function approveTerminalToolCall(
     });
     return 'denied';
   }
+  dependencies.conversation.updateToolCall(toolCall.id, {
+    status: 'cancelled',
+    completedAt: Date.now(),
+  });
   return 'cancelled';
 }
 
@@ -271,14 +309,36 @@ async function runAutomaticAppActions(
   actions: AiAppAction[],
 ): Promise<AiToolResult[]> {
   const policy = dependencies.settings.aiSettings.value.commandPolicy;
-  if (policy !== 'auto' && policy !== 'fullAccess') {
-    return [];
-  }
+  const mayRunAllActions = policy === 'auto' || policy === 'fullAccess';
   const results: AiToolResult[] = [];
   for (const action of actions) {
-    results.push(await dependencies.runAppAction(action));
+    if (!mayRunAllActions && action.type !== 'terminal.activate') {
+      continue;
+    }
+    const result = await dependencies.runAppAction(action);
+    results.push(result);
+    if (action.type === 'terminal.activate' && result.outcome === 'failed') {
+      break;
+    }
   }
   return results;
+}
+
+function terminalCommandSignature(command: string): string {
+  return command.trim().replace(/\s+/g, ' ');
+}
+
+function removeEmptyAssistantMessage(
+  conversation: ConversationStore,
+  messageId: string | null,
+): void {
+  if (messageId === null) {
+    return;
+  }
+  const message = conversation.messages.value.find((candidate) => candidate.id === messageId);
+  if (message?.role === 'assistant' && message.content.length === 0) {
+    conversation.removeMessage(messageId);
+  }
 }
 
 function resolveDecision(

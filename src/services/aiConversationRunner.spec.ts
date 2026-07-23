@@ -65,6 +65,72 @@ describe('AI conversation runner', () => {
     );
   });
 
+  it('does not request approval again when the model repeats a denied command', async () => {
+    const { runner, sendChat, terminalRunner } = createRunner('ask');
+    sendChat.mockResolvedValue('<terminal-command>rm -rf dist</terminal-command>');
+
+    const turn = runner.send('clean it', snapshot());
+    await vi.waitFor(() => {
+      expect(conversation.status.value).toBe('awaitingApproval');
+    });
+    runner.deny(conversation.toolCalls.value[0]!.id);
+    await turn;
+
+    expect(terminalRunner.execute).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledTimes(2);
+    expect(conversation.toolCalls.value).toHaveLength(1);
+    expect(conversation.messages.value.at(-1)?.content).toContain('denied');
+  });
+
+  it('allows the model to request a different command after a denial', async () => {
+    const { runner, sendChat, terminalRunner } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce('<terminal-command>rm -rf dist</terminal-command>')
+      .mockResolvedValueOnce('<terminal-command>ls dist</terminal-command>')
+      .mockResolvedValueOnce('The directory still exists.');
+    terminalRunner.execute.mockImplementation(async (call) => completedResult(call, 'file.js'));
+
+    const turn = runner.send('clean it', snapshot());
+    await vi.waitFor(() => {
+      expect(conversation.status.value).toBe('awaitingApproval');
+    });
+    runner.deny(conversation.toolCalls.value[0]!.id);
+    await vi.waitFor(() => {
+      expect(conversation.toolCalls.value).toHaveLength(2);
+    });
+    runner.approve(conversation.toolCalls.value[1]!.id);
+    await turn;
+
+    expect(terminalRunner.execute).toHaveBeenCalledOnce();
+    expect(terminalRunner.execute.mock.calls[0]?.[0].command).toBe('ls dist');
+    expect(sendChat).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops after an existing terminal target is not found', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"terminal.activate","target":"missing"}</fleurterm-action>',
+      )
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"terminal.openLocal","title":"missing"}</fleurterm-action>',
+      );
+    runAppAction.mockResolvedValueOnce({
+      callId: 'app-terminal.activate',
+      outcome: 'failed',
+      command: 'terminal.activate',
+      output: '',
+      truncated: false,
+      errorMessage: 'Terminal "missing" was not found.',
+    });
+
+    await runner.send('open missing terminal', snapshot());
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(runAppAction).toHaveBeenCalledTimes(1);
+    expect(conversation.messages.value.at(-1)?.content).toBe('Terminal "missing" was not found.');
+  });
+
   it('automatically executes safe commands in auto mode', async () => {
     const { runner, sendChat, terminalRunner } = createRunner('auto');
     sendChat
@@ -145,6 +211,7 @@ describe('AI conversation runner', () => {
     await turn;
 
     expect(conversation.status.value).toBe('stopped');
+    expect(conversation.messages.value).toHaveLength(1);
   });
 
   it('limits automatic execution to six tool calls', async () => {
@@ -162,6 +229,13 @@ describe('AI conversation runner', () => {
 function createRunner(commandPolicy: AiCommandPolicy) {
   const sendChat = vi.fn();
   const terminalRunner = { execute: vi.fn() };
+  const runAppAction = vi.fn(async (action) => ({
+    callId: `app-${action.type}`,
+    outcome: 'completed' as const,
+    command: action.type,
+    output: 'submitted',
+    truncated: false,
+  }));
   const runner = createAiConversationRunner({
     sendChat,
     conversation: useAiConversationStore(),
@@ -177,15 +251,9 @@ function createRunner(commandPolicy: AiCommandPolicy) {
       }),
     },
     terminalRunner,
-    runAppAction: vi.fn(async (action) => ({
-      callId: `app-${action.type}`,
-      outcome: 'completed',
-      command: action.type,
-      output: 'submitted',
-      truncated: false,
-    })),
+    runAppAction,
   });
-  return { runner, sendChat, terminalRunner };
+  return { runner, runAppAction, sendChat, terminalRunner };
 }
 
 function snapshot(): SessionSnapshot {

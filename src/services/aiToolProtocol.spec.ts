@@ -31,4 +31,16 @@ describe('AI tool protocol', () => {
     expect(message).toContain('Command: pwd');
     expect(message).toContain('/Users/fleurui');
   });
+
+  it('parses an action that activates an existing terminal without creating one', () => {
+    const response = parseAssistantToolResponse(
+      '<fleurterm-action>{"type":"terminal.activate","target":"production"}</fleurterm-action>',
+    );
+
+    expect(response.appActions).toEqual([
+      expect.objectContaining({
+        action: { type: 'terminal.activate', target: 'production' },
+      }),
+    ]);
+  });
 });

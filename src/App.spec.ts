@@ -612,6 +612,35 @@ describe('FleurTerm app shell', () => {
       title: 'SSH root@example.com',
     });
   });
+
+  it('lets AI activate an existing terminal without creating a new one', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = addTab(
+      createWorkspace('session-a', ids('tab-1', 'pane-1'), 'Production'),
+      'session-b',
+      ids('tab-2', 'pane-2'),
+      'Staging',
+    );
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          TerminalPane: true,
+          AIPanel: {
+            props: ['runAppAction'],
+            template:
+              '<button data-testid="ai-activate-terminal" @click="runAppAction({ type: \'terminal.activate\', target: \'production\' })">Activate</button>',
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+    await wrapper.get('[data-testid="ai-activate-terminal"]').trigger('click');
+
+    expect(store.workspace.activeTabId).toBe('tab-1');
+    expect(store.openTab).not.toHaveBeenCalled();
+  });
 });
 
 function ids(...values: string[]) {

@@ -342,6 +342,19 @@ async function executeAiAppAction(action: AiAppAction): Promise<void> {
           : `${action.input}\r`,
       );
       return;
+    case 'terminal.activate': {
+      const normalizedTarget = action.target.trim().toLocaleLowerCase();
+      const targetTab = workspace.value.tabs.find(
+        (tab) =>
+          tab.id.toLocaleLowerCase() === normalizedTarget ||
+          tab.title.trim().toLocaleLowerCase() === normalizedTarget,
+      );
+      if (targetTab === undefined) {
+        throw new Error(`Terminal "${action.target}" was not found.`);
+      }
+      activateAppTab(targetTab.id);
+      return;
+    }
     case 'terminal.openLocal':
       await store.openTab({
         shell: action.shell,

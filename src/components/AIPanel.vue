@@ -245,6 +245,8 @@ function appActionLabel(action: AiAppAction): string {
   switch (action.type) {
     case 'terminal.write':
       return labels.value.run;
+    case 'terminal.activate':
+      return labels.value.openTerminal;
     case 'terminal.openLocal':
       return labels.value.openTerminal;
     case 'terminal.openSsh':
@@ -381,7 +383,9 @@ const zhAiPanelLabels = {
         >
           <div class="ai-message-content">
             <span
-              v-if="item.message.role === 'assistant' && item.message.content.length === 0"
+              v-if="
+                item.message.role === 'assistant' && item.message.content.length === 0 && turnActive
+              "
               class="ai-message-cursor"
               aria-hidden="true"
             />

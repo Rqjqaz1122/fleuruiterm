@@ -29,6 +29,7 @@ export interface AiToolResult {
 
 export type AiAppAction =
   | { type: 'terminal.write'; input: string }
+  | { type: 'terminal.activate'; target: string }
   | { type: 'terminal.openLocal'; shell?: string; cwd?: string; title?: string }
   | {
       type: 'terminal.openSsh';
@@ -155,6 +156,10 @@ function parseAppAction(source: string): AiAppAction | null {
       case 'terminal.write':
         return typeof parsed.input === 'string'
           ? { type: 'terminal.write', input: parsed.input }
+          : null;
+      case 'terminal.activate':
+        return typeof parsed.target === 'string' && parsed.target.trim()
+          ? { type: 'terminal.activate', target: parsed.target.trim() }
           : null;
       case 'terminal.openLocal':
         return {
