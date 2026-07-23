@@ -1,7 +1,7 @@
 {
   "name": "fleurterm",
   "private": true,
-  "version": "0.0.1-beta",
+  "version": "0.0.2-beta",
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420",
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@xterm/addon-fit": "^0.10.0",

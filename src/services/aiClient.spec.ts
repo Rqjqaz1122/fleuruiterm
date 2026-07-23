@@ -1,8 +1,52 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { sendAiChat } from './aiClient';
 
+const { desktopFetch } = vi.hoisted(() => ({
+  desktopFetch: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/plugin-http', () => ({
+  fetch: desktopFetch,
+}));
+
 describe('sendAiChat', () => {
+  afterEach(() => {
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the native HTTP transport inside the packaged Tauri application', async () => {
+    const browserFetch = vi.fn(async () =>
+      jsonResponse({ choices: [{ message: { content: 'browser response' } }] }),
+    );
+    desktopFetch.mockResolvedValueOnce(
+      jsonResponse({ choices: [{ message: { content: 'desktop response' } }] }),
+    );
+    vi.stubGlobal('fetch', browserFetch);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+
+    const answer = await sendAiChat(
+      {
+        provider: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-test',
+        token: 'token-a',
+        tokenHeaderName: 'Authorization',
+        tokenPrefix: 'Bearer',
+        streamingEnabled: false,
+        contextEnabled: false,
+        includeWorkingDirectory: true,
+        commandPolicy: 'ask',
+      },
+      [{ role: 'user', content: 'hello' }],
+    );
+
+    expect(answer).toBe('desktop response');
+    expect(desktopFetch).toHaveBeenCalledOnce();
+    expect(browserFetch).not.toHaveBeenCalled();
+  });
+
   it('sends OpenAI-compatible requests with bearer authentication', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ choices: [{ message: { content: 'ok' } }] }));
 

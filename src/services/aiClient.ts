@@ -1,3 +1,5 @@
+import { fetch as fetchWithTauri } from '@tauri-apps/plugin-http';
+
 import type { AiSettings } from '@/stores/appSettingsStore';
 
 export interface AiChatMessage {
@@ -24,11 +26,16 @@ export async function sendAiChat(
   options: SendAiChatOptions | typeof fetch = {},
 ): Promise<string> {
   const normalizedOptions = typeof options === 'function' ? { fetcher: options } : options;
-  const fetcher = normalizedOptions.fetcher ?? fetch;
+  const fetcher = normalizedOptions.fetcher ?? resolveDefaultFetcher();
   validateSettings(settings);
   return settings.provider === 'anthropic'
     ? sendAnthropicChat(settings, messages, fetcher, normalizedOptions)
     : sendOpenAiCompatibleChat(settings, messages, fetcher, normalizedOptions);
+}
+
+function resolveDefaultFetcher(): typeof fetch {
+  const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  return isTauriRuntime ? fetchWithTauri : fetch;
 }
 
 function validateSettings(settings: AiSettings): void {
@@ -66,9 +73,10 @@ async function sendOpenAiCompatibleChat(
   if (settings.streamingEnabled) {
     return readAiEventStream(response, options.onDelta, readOpenAiDelta);
   }
-  const payload = (await response.json().catch(() => null)) as
-    | { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }
-    | null;
+  const payload = (await response.json().catch(() => null)) as {
+    choices?: Array<{ message?: { content?: string } }>;
+    error?: { message?: string };
+  } | null;
   if (!response.ok) {
     throw new AiClientError(payload?.error?.message ?? `AI request failed: ${response.status}`);
   }
@@ -112,12 +120,10 @@ async function sendAnthropicChat(
   if (settings.streamingEnabled) {
     return readAiEventStream(response, options.onDelta, readAnthropicDelta);
   }
-  const payload = (await response.json().catch(() => null)) as
-    | {
-        content?: Array<{ type?: string; text?: string }>;
-        error?: { message?: string };
-      }
-    | null;
+  const payload = (await response.json().catch(() => null)) as {
+    content?: Array<{ type?: string; text?: string }>;
+    error?: { message?: string };
+  } | null;
   if (!response.ok) {
     throw new AiClientError(payload?.error?.message ?? `AI request failed: ${response.status}`);
   }

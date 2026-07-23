@@ -63,6 +63,6 @@ jobs:
           releaseName: FleurTerm v__VERSION__
           releaseBody: See the assets below to install or update FleurTerm.
           releaseDraft: false
-          prerelease: true
+          prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
