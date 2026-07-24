@@ -95,6 +95,7 @@ type TerminalColorPalette = {
 type ThemeConfigFile = {
   palettes: Record<ThemeTone, TerminalColorPalette>;
 };
+type AdvancedAiSettings = Omit<AiSettings, 'token'>;
 
 const RECENT_CONNECTIONS_STORAGE_KEY = 'fleurterm.recentConnections';
 const THEME_STORAGE_KEY = 'fleurterm.theme';
@@ -1058,7 +1059,7 @@ function buildSettingsEditorValue(): string {
       },
       window: windowAppearance.value,
       terminal: terminalSettings.value,
-      ai: aiSettings.value,
+      ai: toAdvancedAiSettings(aiSettings.value),
       shortcuts: shortcutSettings.value,
       workbench: {
         recentConnectionIds: recentConnectionIds.value,
@@ -1084,6 +1085,7 @@ function parseSettingsEditorValue(source: string): {
     throw new Error('locale must be en-US or zh-CN');
   }
   const theme = parsed.theme as { mode?: unknown; config?: ThemeConfigFile } | undefined;
+  const advancedAiSettings = (parsed.ai as Partial<AdvancedAiSettings> | undefined) ?? {};
   const workbench = parsed.workbench as
     { connections?: WorkbenchConnection[]; recentConnectionIds?: string[] } | undefined;
   if (theme !== undefined && !isThemeMode(theme.mode)) {
@@ -1108,7 +1110,11 @@ function parseSettingsEditorValue(source: string): {
     terminal: sanitizeTerminalSettings(
       (parsed.terminal as Partial<TerminalSettings> | undefined) ?? terminalSettings.value,
     ),
-    ai: sanitizeAiSettings((parsed.ai as Partial<AiSettings> | undefined) ?? aiSettings.value),
+    ai: sanitizeAiSettings({
+      ...aiSettings.value,
+      ...advancedAiSettings,
+      token: aiSettings.value.token,
+    }),
     shortcuts: sanitizeShortcutSettings(parsed.shortcuts ?? shortcutSettings.value),
     workbench: {
       connections: normalizeConnectionList(workbench.connections),
@@ -1116,6 +1122,20 @@ function parseSettingsEditorValue(source: string): {
         (item): item is string => typeof item === 'string',
       ),
     },
+  };
+}
+
+function toAdvancedAiSettings(settings: AiSettings): AdvancedAiSettings {
+  return {
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    tokenHeaderName: settings.tokenHeaderName,
+    tokenPrefix: settings.tokenPrefix,
+    streamingEnabled: settings.streamingEnabled,
+    contextEnabled: settings.contextEnabled,
+    includeWorkingDirectory: settings.includeWorkingDirectory,
+    commandPolicy: settings.commandPolicy,
   };
 }
 

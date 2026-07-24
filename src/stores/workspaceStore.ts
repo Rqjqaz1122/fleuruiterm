@@ -21,6 +21,7 @@ import {
   type PaneDropPosition,
   type SplitDirection,
   type TabDropPlacement,
+  type TerminalLaunch,
   type TerminalNode,
   type WorkspaceState,
 } from '@/domain/workspace';
@@ -39,6 +40,7 @@ export interface OpenTerminalTabOptions {
   cwd?: string;
   password?: string;
   title?: string;
+  connectionProfileId?: string;
 }
 
 export interface TerminalOutputCursor {
@@ -66,6 +68,7 @@ export type WorkspaceErrorCode =
   | 'CLOSE_TERMINAL_FAILED'
   | 'CLOSE_TAB_FAILED'
   | 'INTERRUPT_TERMINAL_FAILED'
+  | 'PERSIST_WORKSPACE_FAILED'
   | 'WRITE_TERMINAL_FAILED';
 
 export interface WorkspaceSessionClient {
@@ -112,10 +115,11 @@ export function createWorkspaceStore(
     async function openTab(options: OpenTerminalTabOptions = {}): Promise<void> {
       const snapshot = await openSession(options);
       const title = options.title;
+      const launch = createTerminalLaunch(options);
       workspace.value =
         workspace.value.tabs.length === 0
-          ? createWorkspace(snapshot.sessionId, generateId, title)
-          : addTab(workspace.value, snapshot.sessionId, generateId, title);
+          ? createWorkspace(snapshot.sessionId, generateId, title, launch)
+          : addTab(workspace.value, snapshot.sessionId, generateId, title, launch);
     }
 
     async function splitFocused(direction: SplitDirection): Promise<void> {
@@ -640,6 +644,21 @@ function emptyWorkspace(): WorkspaceState {
     activeTabId: null,
     focusedPaneId: null,
     focusedSessionId: null,
+  };
+}
+
+function createTerminalLaunch(options: OpenTerminalTabOptions): TerminalLaunch {
+  if (options.connectionProfileId !== undefined) {
+    return {
+      type: 'savedConnection',
+      connectionProfileId: options.connectionProfileId,
+    };
+  }
+  return {
+    type: 'local',
+    ...(options.shell === undefined ? {} : { shell: options.shell }),
+    ...(options.args === undefined ? {} : { args: [...options.args] }),
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
   };
 }
 

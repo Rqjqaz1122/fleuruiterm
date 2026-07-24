@@ -31,6 +31,8 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
     let checkPromise: Promise<void> | null = null;
     let installPromise: Promise<void> | null = null;
     let startupCheckRequested = false;
+    let beforeRestart: () => Promise<boolean> = async () => true;
+    let restartFailureHandler: () => void = () => undefined;
 
     const availableVersion = computed(() => update.value?.version ?? null);
     const releaseDate = computed(() => update.value?.date ?? null);
@@ -81,6 +83,14 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
       }
     }
 
+    function setBeforeRestart(handler: () => Promise<boolean>): void {
+      beforeRestart = handler;
+    }
+
+    function setRestartFailureHandler(handler: () => void): void {
+      restartFailureHandler = handler;
+    }
+
     async function performCheck(): Promise<void> {
       errorCode.value = null;
       await loadCurrentVersion();
@@ -100,6 +110,7 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
     }
 
     async function performInstall(availableUpdate: AvailableAppUpdate): Promise<void> {
+      let restartPrepared = false;
       errorCode.value = null;
       downloadedBytes.value = 0;
       totalBytes.value = null;
@@ -110,8 +121,15 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
           totalBytes.value = progress.totalBytes;
         });
         status.value = 'installing';
+        if (!(await beforeRestart())) {
+          throw new Error('Application state could not be saved before restart');
+        }
+        restartPrepared = true;
         await client.restart();
       } catch {
+        if (restartPrepared) {
+          restartFailureHandler();
+        }
         errorCode.value = 'INSTALL_FAILED';
         status.value = 'error';
       }
@@ -138,6 +156,8 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
       installUpdate,
       releaseDate,
       releaseNotes,
+      setBeforeRestart,
+      setRestartFailureHandler,
       status,
       totalBytes,
     };

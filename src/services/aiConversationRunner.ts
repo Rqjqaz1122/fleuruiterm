@@ -6,6 +6,7 @@ import { type AiToolDecision, useAiConversationStore } from '@/stores/aiConversa
 
 import { classifyTerminalCommand } from './aiCommandRisk';
 import { sendAiChat, type AiChatMessage } from './aiClient';
+import { permitsTerminalExecution } from './aiTerminalExecutionPolicy';
 import {
   formatToolResultMessage,
   parseAssistantToolResponse,
@@ -21,6 +22,10 @@ const MAX_MODEL_STEPS = 12;
 const SYSTEM_PROMPT = [
   'You are FleurTerm AI.',
   'Use <terminal-command>...</terminal-command> when terminal interaction is required.',
+  'Only request terminal execution when the current user request asks for an action or requires fresh terminal state to complete the task.',
+  'When the user asks what command was executed or asks to explain a command, answer from conversation history without requesting terminal execution.',
+  'When describing an executed command, report the original Command field from the labeled tool result, never an internal shell wrapper or echoed completion marker.',
+  'Markdown code fences are display-only and never execute commands.',
   'Use <fleurterm-action>{"type":"terminal.activate","target":"tab title or id"}</fleurterm-action> to switch to an existing terminal tab.',
   'Use <fleurterm-action>{"type":"connection.open","target":"saved connection id, name, host, or user@host"}</fleurterm-action> when the user asks to open a saved connection. Emit the action instead of merely saying that the connection was requested.',
   'Use terminal.openLocal or terminal.openSsh only when the user explicitly asks to create a new terminal, never as a fallback when terminal.activate or connection.open reports that a target was not found.',
@@ -119,7 +124,8 @@ async function runConversationTurn(
       );
       const responseContent = rawResponse || streamedContent;
       const parsedResponse = parseAssistantToolResponse(responseContent);
-      const toolCalls = parsedResponse.toolCalls.map((toolCall, index) =>
+      const requestedToolCalls = permitsTerminalExecution(prompt) ? parsedResponse.toolCalls : [];
+      const toolCalls = requestedToolCalls.map((toolCall, index) =>
         prepareToolCall(toolCall, turnId, modelStep, index, snapshot),
       );
       dependencies.conversation.updateMessage(assistantMessage.id, {

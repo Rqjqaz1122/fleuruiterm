@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addTab, createWorkspace } from '@/domain/workspace';
 import { setLocale } from '@/i18n/locale';
 import { settingsClient } from '@/services/settingsClient';
+import { workspacePersistenceClient } from '@/services/workspacePersistence';
 import { defaultTerminalSettings, useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useAppUpdateStore } from '@/stores/appUpdateStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
@@ -18,10 +19,33 @@ const desktopMenuMock = vi.hoisted(() => ({
     return vi.fn();
   }),
 }));
+const desktopWindowLifecycleMock = vi.hoisted(() => ({
+  applicationExitRequestHandler: null as (() => Promise<boolean>) | null,
+  closeRequestHandler: null as (() => Promise<boolean>) | null,
+  exitFailureHandler: null as (() => void) | null,
+  listenForApplicationExitRequest: vi.fn(
+    async (handler: () => Promise<boolean>, onFailure: () => void) => {
+      desktopWindowLifecycleMock.applicationExitRequestHandler = handler;
+      desktopWindowLifecycleMock.exitFailureHandler = onFailure;
+      return vi.fn();
+    },
+  ),
+  listenForCloseRequest: vi.fn(async (handler: () => Promise<boolean>, onFailure: () => void) => {
+    desktopWindowLifecycleMock.closeRequestHandler = handler;
+    desktopWindowLifecycleMock.exitFailureHandler = onFailure;
+    return vi.fn();
+  }),
+}));
 vi.mock('@/services/desktopMenuClient', () => ({
   desktopMenuClient: {
     available: false,
     listen: desktopMenuMock.listen,
+  },
+}));
+vi.mock('@/services/desktopWindowLifecycleClient', () => ({
+  desktopWindowLifecycleClient: {
+    listenForApplicationExitRequest: desktopWindowLifecycleMock.listenForApplicationExitRequest,
+    listenForCloseRequest: desktopWindowLifecycleMock.listenForCloseRequest,
   },
 }));
 
@@ -34,7 +58,292 @@ describe('FleurTerm app shell', () => {
     localStorage.clear();
     desktopMenuMock.commandHandler = null;
     desktopMenuMock.listen.mockClear();
+    desktopWindowLifecycleMock.closeRequestHandler = null;
+    desktopWindowLifecycleMock.applicationExitRequestHandler = null;
+    desktopWindowLifecycleMock.exitFailureHandler = null;
+    desktopWindowLifecycleMock.listenForApplicationExitRequest.mockClear();
+    desktopWindowLifecycleMock.listenForCloseRequest.mockClear();
     useAppSettingsStore().resetShortcutSettings();
+    vi.spyOn(workspacePersistenceClient, 'load').mockResolvedValue(null);
+    vi.spyOn(workspacePersistenceClient, 'save').mockResolvedValue();
+  });
+
+  it('restores saved terminal tabs and the previously active connection on startup', async () => {
+    localStorage.setItem(
+      'fleurterm.connections',
+      JSON.stringify([
+        {
+          id: 'production',
+          name: 'Production',
+          method: 'ssh',
+          host: 'server.example.com',
+          user: 'deploy',
+          port: 22,
+          authMethod: 'auto',
+        },
+      ]),
+    );
+    vi.mocked(workspacePersistenceClient.load).mockResolvedValue({
+      version: 1,
+      activeTabId: 'saved-ssh',
+      tabs: [
+        {
+          id: 'saved-local',
+          title: 'Project',
+          launch: { type: 'local', shell: '/bin/zsh', cwd: '/tmp/project' },
+        },
+        {
+          id: 'saved-ssh',
+          title: 'Production terminal',
+          launch: { type: 'savedConnection', connectionProfileId: 'production' },
+        },
+      ],
+    });
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async (options) => {
+      const sessionId = `session-${store.workspace.tabs.length + 1}`;
+      store.workspace =
+        store.workspace.tabs.length === 0
+          ? createWorkspace(sessionId, ids('tab-1', 'pane-1'), options.title)
+          : addTab(store.workspace, sessionId, ids('tab-2', 'pane-2'), options.title);
+    });
+
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledTimes(2));
+    expect(store.openTab).toHaveBeenNthCalledWith(1, {
+      shell: '/bin/zsh',
+      cwd: '/tmp/project',
+      title: 'Project',
+    });
+    expect(store.openTab).toHaveBeenNthCalledWith(2, {
+      shell: 'ssh',
+      args: ['-p', '22', 'deploy@server.example.com'],
+      title: 'Production terminal',
+      connectionProfileId: 'production',
+    });
+    expect(store.workspace.activeTabId).toBe('tab-2');
+    expect(wrapper.get('[data-tab-id="tab-2"] [role="tab"]').attributes('aria-selected')).toBe(
+      'true',
+    );
+  });
+
+  it('continues restoring later tabs when one saved credential is unavailable', async () => {
+    localStorage.setItem(
+      'fleurterm.connections',
+      JSON.stringify([
+        {
+          id: 'protected',
+          name: 'Protected',
+          method: 'ssh',
+          host: 'protected.example.com',
+          user: 'deploy',
+          port: 22,
+          authMethod: 'password',
+          hasPassword: true,
+        },
+      ]),
+    );
+    vi.spyOn(settingsClient, 'loadPasswords').mockResolvedValue({});
+    vi.mocked(workspacePersistenceClient.load).mockResolvedValue({
+      version: 1,
+      activeTabId: 'saved-local',
+      tabs: [
+        {
+          id: 'saved-ssh',
+          title: 'Protected',
+          launch: { type: 'savedConnection', connectionProfileId: 'protected' },
+        },
+        {
+          id: 'saved-local',
+          title: 'Local fallback',
+          launch: { type: 'local', shell: '/bin/zsh' },
+        },
+      ],
+    });
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async (options) => {
+      store.workspace = createWorkspace(
+        'session-local',
+        ids('tab-local', 'pane-local'),
+        options.title,
+      );
+    });
+
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+    expect(store.openTab).toHaveBeenCalledWith({
+      shell: '/bin/zsh',
+      title: 'Local fallback',
+    });
+  });
+
+  it('persists terminal tab changes after workspace restoration is ready', async () => {
+    const store = useWorkspaceStore();
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+    await Promise.resolve();
+
+    store.workspace = createWorkspace('runtime-session', ids('tab-1', 'pane-1'), 'Local project');
+
+    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledOnce());
+    expect(workspacePersistenceClient.save).toHaveBeenCalledWith({
+      version: 1,
+      activeTabId: 'tab-1',
+      tabs: [
+        {
+          id: 'tab-1',
+          title: 'Local project',
+          launch: { type: 'local' },
+        },
+      ],
+    });
+  });
+
+  it('serializes rapid workspace saves without letting an older snapshot win', async () => {
+    const firstSave = deferredPromise<void>();
+    vi.mocked(workspacePersistenceClient.save)
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockResolvedValue(undefined);
+    const store = useWorkspaceStore();
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+    await Promise.resolve();
+
+    store.workspace = createWorkspace('runtime-session-1', ids('tab-1', 'pane-1'), 'First');
+    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledOnce());
+    store.workspace = createWorkspace('runtime-session-2', ids('tab-2', 'pane-2'), 'Second');
+    await Promise.resolve();
+    expect(workspacePersistenceClient.save).toHaveBeenCalledOnce();
+
+    firstSave.resolve(undefined);
+
+    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledTimes(2));
+    expect(workspacePersistenceClient.save).toHaveBeenLastCalledWith({
+      version: 1,
+      activeTabId: 'tab-2',
+      tabs: [
+        {
+          id: 'tab-2',
+          title: 'Second',
+          launch: { type: 'local' },
+        },
+      ],
+    });
+  });
+
+  it('waits for startup restoration before opening a user-requested terminal', async () => {
+    const pendingLoad = deferredPromise<null>();
+    vi.mocked(workspacePersistenceClient.load).mockReturnValue(pendingLoad.promise);
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App);
+
+    await wrapper.get('[data-testid="start-new-terminal"]').trigger('click');
+    expect(store.openTab).not.toHaveBeenCalled();
+
+    pendingLoad.resolve(null);
+
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+  });
+
+  it('flushes the latest workspace snapshot before allowing the window to close', async () => {
+    const store = useWorkspaceStore();
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    store.workspace = createWorkspace('runtime-session', ids('tab-1', 'pane-1'), 'Local project');
+    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledOnce());
+    vi.mocked(workspacePersistenceClient.save).mockClear();
+
+    const closeRequestHandler = desktopWindowLifecycleMock.closeRequestHandler;
+    if (closeRequestHandler === null) {
+      throw new Error('expected a close request handler');
+    }
+    await expect(closeRequestHandler()).resolves.toBe(true);
+
+    expect(workspacePersistenceClient.save).toHaveBeenCalledWith({
+      version: 1,
+      activeTabId: 'tab-1',
+      tabs: [
+        {
+          id: 'tab-1',
+          title: 'Local project',
+          launch: { type: 'local' },
+        },
+      ],
+    });
+  });
+
+  it('registers application-level exit requests for the same workspace flush', async () => {
+    mount(App);
+
+    await vi.waitFor(() =>
+      expect(desktopWindowLifecycleMock.listenForApplicationExitRequest).toHaveBeenCalledOnce(),
+    );
+    expect(desktopWindowLifecycleMock.applicationExitRequestHandler).not.toBeNull();
+  });
+
+  it('keeps the window open and reports a workspace flush failure', async () => {
+    const wrapper = mount(App);
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    vi.mocked(workspacePersistenceClient.save).mockRejectedValueOnce(new Error('disk full'));
+
+    const closeRequestHandler = desktopWindowLifecycleMock.closeRequestHandler;
+    if (closeRequestHandler === null) {
+      throw new Error('expected a close request handler');
+    }
+    await expect(closeRequestHandler()).resolves.toBe(false);
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('Unable to save terminal workspace');
+    expect(wrapper.get('[role="alert"]').text()).not.toContain('disk full');
+  });
+
+  it('freezes terminal mutations while the final workspace save is pending', async () => {
+    const pendingSave = deferredPromise<void>();
+    vi.mocked(workspacePersistenceClient.save).mockReturnValueOnce(pendingSave.promise);
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    const closeRequestHandler = desktopWindowLifecycleMock.closeRequestHandler;
+    if (closeRequestHandler === null) {
+      throw new Error('expected a close request handler');
+    }
+
+    const closeRequest = closeRequestHandler();
+    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledOnce());
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('reorder', 'tab-2', 'tab-1', 'before');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+    await Promise.resolve();
+
+    expect(store.workspace.tabs.map((tab) => tab.id)).toEqual(['tab-1', 'tab-2']);
+    expect(store.openTab).not.toHaveBeenCalled();
+    pendingSave.resolve(undefined);
+    await expect(closeRequest).resolves.toBe(true);
+  });
+
+  it('unfreezes terminal actions when the native close operation fails', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    mount(App);
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+    const closeRequestHandler = desktopWindowLifecycleMock.closeRequestHandler;
+    const exitFailureHandler = desktopWindowLifecycleMock.exitFailureHandler;
+    if (closeRequestHandler === null || exitFailureHandler === null) {
+      throw new Error('expected close lifecycle handlers');
+    }
+    await expect(closeRequestHandler()).resolves.toBe(true);
+
+    exitFailureHandler();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
   });
 
   it('checks for application updates when the app starts', async () => {
@@ -54,7 +363,7 @@ describe('FleurTerm app shell', () => {
 
     await wrapper.get('[data-testid="start-new-terminal"]').trigger('click');
 
-    expect(store.openTab).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
   });
 
   it('opens settings as a singleton application tab', async () => {
@@ -184,8 +493,7 @@ describe('FleurTerm app shell', () => {
     expect(wrapper.get('#settings-panel').attributes('aria-hidden')).toBe('false');
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', metaKey: true }));
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find('#settings-panel').exists()).toBe(false);
+    await vi.waitFor(() => expect(wrapper.find('#settings-panel').exists()).toBe(false));
   });
 
   it('uses a customized keyboard shortcut immediately', async () => {
@@ -263,9 +571,12 @@ describe('FleurTerm app shell', () => {
     const wrapper = mount(App);
 
     await wrapper.get('[data-testid="start-new-terminal"]').trigger('click');
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="retry-action"]').exists()).toBe(true),
+    );
     await wrapper.get('[data-testid="retry-action"]').trigger('click');
 
-    expect(store.openTab).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledTimes(2));
     expect(wrapper.get('[role="alert"]').text()).toContain('Unable to start shell');
   });
 
@@ -290,6 +601,7 @@ describe('FleurTerm app shell', () => {
       shell: 'ssh',
       args: ['-p', '2222', 'deploy@server.example.com'],
       title: 'SSH deploy@server.example.com',
+      connectionProfileId: 'server',
     });
   });
 
@@ -314,6 +626,7 @@ describe('FleurTerm app shell', () => {
       shell: 'wsl.exe',
       cwd: 'D:\\IT\\Projects\\fleuruiterm',
       title: 'Project',
+      connectionProfileId: 'project',
     });
   });
 
@@ -339,6 +652,7 @@ describe('FleurTerm app shell', () => {
       shell: 'telnet',
       args: ['10.0.0.1', '2323'],
       title: 'Telnet 10.0.0.1',
+      connectionProfileId: 'router',
     });
   });
 
@@ -372,6 +686,7 @@ describe('FleurTerm app shell', () => {
         'deploy@server.example.com',
       ],
       title: 'SSH deploy@server.example.com',
+      connectionProfileId: 'tunnel',
     });
   });
 
@@ -413,6 +728,7 @@ describe('FleurTerm app shell', () => {
       ],
       password: 'secret',
       title: 'SSH deploy@server.example.com',
+      connectionProfileId: 'password-host',
     });
   });
 
@@ -457,7 +773,9 @@ describe('FleurTerm app shell', () => {
     });
 
     wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('reorder', 'tab-2', 'tab-1', 'before');
-    await wrapper.vm.$nextTick();
+    await vi.waitFor(() =>
+      expect(store.workspace.tabs.map((tab) => tab.id)).toEqual(['tab-2', 'tab-1']),
+    );
 
     expect(wrapper.findAll('.tab-item').map((tab) => tab.attributes('data-tab-id'))).toEqual([
       'tab-2',
@@ -688,6 +1006,7 @@ describe('FleurTerm app shell', () => {
       ],
       password: 'secret',
       title: 'SSH root@10.7.121.72',
+      connectionProfileId: 'root-10-7-121-72',
     });
   });
 });
@@ -701,5 +1020,21 @@ function ids(...values: string[]) {
     }
     index += 1;
     return value;
+  };
+}
+
+function deferredPromise<T>() {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve(value: T) {
+      if (resolvePromise === undefined) {
+        throw new Error('deferred promise is unavailable');
+      }
+      resolvePromise(value);
+    },
   };
 }

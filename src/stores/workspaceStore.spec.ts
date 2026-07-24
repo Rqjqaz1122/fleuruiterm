@@ -44,6 +44,32 @@ describe('workspace store', () => {
       expect.any(Function),
       expect.any(Function),
     );
+    expect(store.workspace.tabs[0]?.launch).toEqual({
+      type: 'local',
+      shell: 'bash',
+      args: ['-lc', 'pwd'],
+      cwd: '/tmp/project',
+    });
+  });
+
+  it('stores only a saved connection reference for a restorable tab', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+
+    await store.openTab({
+      shell: 'ssh',
+      args: ['deploy@example.com'],
+      password: 'secret',
+      title: 'Production',
+      connectionProfileId: 'production',
+    });
+
+    expect(store.workspace.tabs[0]?.launch).toEqual({
+      type: 'savedConnection',
+      connectionProfileId: 'production',
+    });
+    expect(JSON.stringify(store.workspace.tabs[0])).not.toContain('secret');
   });
 
   it('responds once to a password prompt when a session has a configured password', async () => {
@@ -72,13 +98,7 @@ describe('workspace store', () => {
     expect(client.write).toHaveBeenCalledTimes(1);
     expect(client.write.mock.calls[0]?.[0]).toBe('session-1');
     expect(Array.from(client.write.mock.calls[0]?.[1] ?? [])).toEqual([
-      115,
-      101,
-      99,
-      114,
-      101,
-      116,
-      13,
+      115, 101, 99, 114, 101, 116, 13,
     ]);
   });
 
@@ -160,10 +180,7 @@ describe('workspace store', () => {
 
     await store.writeToFocusedSession('pwd\r');
 
-    expect(client.write).toHaveBeenCalledWith(
-      'session-1',
-      new TextEncoder().encode('pwd\r'),
-    );
+    expect(client.write).toHaveBeenCalledWith('session-1', new TextEncoder().encode('pwd\r'));
   });
 
   it('writes and interrupts the requested session even after focus changes', async () => {
@@ -176,10 +193,7 @@ describe('workspace store', () => {
     await store.writeToSession('session-1', 'pwd\r');
     await store.interruptSession('session-1');
 
-    expect(client.write).toHaveBeenCalledWith(
-      'session-1',
-      new TextEncoder().encode('pwd\r'),
-    );
+    expect(client.write).toHaveBeenCalledWith('session-1', new TextEncoder().encode('pwd\r'));
     expect(client.interrupt).toHaveBeenCalledWith('session-1');
   });
 
@@ -257,7 +271,9 @@ describe('workspace store', () => {
     const useStore = createWorkspaceStore(client);
     const store = useStore();
 
-    await expect(store.writeToFocusedSession('pwd\r')).rejects.toThrow('No active terminal session');
+    await expect(store.writeToFocusedSession('pwd\r')).rejects.toThrow(
+      'No active terminal session',
+    );
 
     expect(store.errorCode).toBe('WRITE_TERMINAL_FAILED');
     expect(store.errorMessage).toBe('No active terminal session');

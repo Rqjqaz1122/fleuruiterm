@@ -44,6 +44,53 @@ describe('AI conversation runner', () => {
     expect(conversation.status.value).toBe('idle');
   });
 
+  it.each([
+    '你当前执行的命令是什么？',
+    '请告诉我刚才执行了什么命令',
+    'What command did you just run?',
+  ])('answers command-review question without another execution: %s', async (prompt) => {
+    const { runner, sendChat, terminalRunner } = createRunner('ask');
+    sendChat.mockResolvedValue(
+      'The command that ran was:\n<terminal-command>ls</terminal-command>',
+    );
+
+    const turn = runner.send(prompt, snapshot());
+    await vi.waitFor(() => {
+      expect(['awaitingApproval', 'idle']).toContain(conversation.status.value);
+    });
+    const settledStatus = conversation.status.value;
+    if (settledStatus === 'awaitingApproval') {
+      runner.stop();
+    }
+    await turn;
+
+    expect(settledStatus).toBe('idle');
+    expect(terminalRunner.execute).not.toHaveBeenCalled();
+    expect(conversation.toolCalls.value).toEqual([]);
+    expect(conversation.messages.value.at(-1)?.content).toContain('```terminal\nls\n```');
+  });
+
+  it('allows an explicit execution request that also asks for an explanation', async () => {
+    const { runner, sendChat, terminalRunner } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce('<terminal-command>ls</terminal-command>')
+      .mockResolvedValueOnce('执行完成。');
+    terminalRunner.execute.mockImplementation(async (call) => completedResult(call, 'file.txt'));
+
+    const turn = runner.send('解释这个命令，然后执行 ls', snapshot());
+    await vi.waitFor(() => {
+      expect(['awaitingApproval', 'idle']).toContain(conversation.status.value);
+    });
+    const executionStatus = conversation.status.value;
+    if (executionStatus === 'awaitingApproval') {
+      runner.approve(conversation.toolCalls.value[0]!.id);
+    }
+    await turn;
+
+    expect(executionStatus).toBe('awaitingApproval');
+    expect(terminalRunner.execute).toHaveBeenCalledOnce();
+  });
+
   it('returns a denied result to the model without executing the command', async () => {
     const { runner, sendChat, terminalRunner } = createRunner('ask');
     sendChat

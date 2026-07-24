@@ -3,6 +3,20 @@ export type TabDropPlacement = 'before' | 'after';
 export type PaneDropPosition = 'top' | 'right' | 'bottom' | 'left';
 export type IdGenerator = () => string;
 
+export interface LocalTerminalLaunch {
+  type: 'local';
+  shell?: string;
+  args?: string[];
+  cwd?: string;
+}
+
+export interface SavedConnectionTerminalLaunch {
+  type: 'savedConnection';
+  connectionProfileId: string;
+}
+
+export type TerminalLaunch = LocalTerminalLaunch | SavedConnectionTerminalLaunch;
+
 export interface TerminalPaneNode {
   kind: 'pane';
   id: string;
@@ -21,6 +35,7 @@ export type TerminalNode = TerminalPaneNode | TerminalSplitNode;
 export interface TerminalTab {
   id: string;
   title: string;
+  launch: TerminalLaunch;
   root: TerminalNode;
 }
 
@@ -44,11 +59,12 @@ export function createWorkspace(
   sessionId: string,
   generateId: IdGenerator = defaultIdGenerator,
   title = 'Local Terminal 1',
+  launch: TerminalLaunch = { type: 'local' },
 ): WorkspaceState {
   const tabId = generateId();
   const pane = createPane(sessionId, generateId);
   return {
-    tabs: [{ id: tabId, title, root: pane }],
+    tabs: [{ id: tabId, title, launch, root: pane }],
     activeTabId: tabId,
     focusedPaneId: pane.id,
     focusedSessionId: pane.sessionId,
@@ -60,12 +76,14 @@ export function addTab(
   sessionId: string,
   generateId: IdGenerator = defaultIdGenerator,
   title = `Local Terminal ${workspace.tabs.length + 1}`,
+  launch: TerminalLaunch = { type: 'local' },
 ): WorkspaceState {
   const tabId = generateId();
   const pane = createPane(sessionId, generateId);
   const tab: TerminalTab = {
     id: tabId,
     title,
+    launch,
     root: pane,
   };
   return {

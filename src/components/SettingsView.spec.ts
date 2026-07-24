@@ -676,6 +676,40 @@ describe('SettingsView', () => {
     expect(panelText).not.toContain('Working directory');
   });
 
+  it('does not expose the AI authentication token in the advanced editor', async () => {
+    const appSettings = useAppSettingsStore();
+    appSettings.updateAiSettings({ token: 'secret-token-value' });
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="advanced"]').trigger('click');
+    const editorValue = (
+      wrapper.get('[data-testid="settings-json-editor"]').element as HTMLTextAreaElement
+    ).value;
+    const editorSettings = JSON.parse(editorValue) as { ai?: Record<string, unknown> };
+
+    expect(editorValue).not.toContain('secret-token-value');
+    expect(editorSettings.ai).not.toHaveProperty('token');
+  });
+
+  it('preserves the AI authentication token when applying advanced settings', async () => {
+    const appSettings = useAppSettingsStore();
+    appSettings.updateAiSettings({ model: 'original-model', token: 'secret-token-value' });
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="advanced"]').trigger('click');
+    const settingsEditor = wrapper.get('[data-testid="settings-json-editor"]');
+    const editorSettings = JSON.parse(
+      (settingsEditor.element as HTMLTextAreaElement).value,
+    ) as Record<string, unknown> & { ai: Record<string, unknown> };
+    editorSettings.ai.model = 'updated-model';
+    editorSettings.ai.token = 'replacement-token';
+    await settingsEditor.setValue(JSON.stringify(editorSettings));
+    await wrapper.get('[data-testid="apply-settings-json"]').trigger('click');
+
+    expect(appSettings.aiSettings.value.model).toBe('updated-model');
+    expect(appSettings.aiSettings.value.token).toBe('secret-token-value');
+  });
+
   it('applies workbench configuration from the advanced editor', async () => {
     const wrapper = mount(SettingsView);
 

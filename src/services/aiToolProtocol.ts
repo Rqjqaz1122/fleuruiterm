@@ -56,22 +56,13 @@ export interface ParsedAssistantToolResponse {
 }
 
 const TERMINAL_COMMAND_TAG_PATTERN = /<terminal-command>([\s\S]*?)<\/terminal-command>/gi;
-const TERMINAL_CODE_BLOCK_PATTERN =
-  /```(?:terminal|shell|bash|sh|powershell|pwsh)\s*\n([\s\S]*?)```/gi;
 const APP_ACTION_TAG_PATTERN = /<fleurterm-action>([\s\S]*?)<\/fleurterm-action>/gi;
 const MAX_TOOL_RESULT_OUTPUT_LENGTH = 12_000;
 
 export function parseAssistantToolResponse(content: string): ParsedAssistantToolResponse {
   const toolCalls: AiTerminalToolCall[] = [];
   const appActions: ParsedAiAppAction[] = [];
-  const withCodeBlockCommands = content.replace(
-    TERMINAL_CODE_BLOCK_PATTERN,
-    (matchedBlock, command) => {
-      appendToolCall(toolCalls, command);
-      return matchedBlock;
-    },
-  );
-  const displayContent = withCodeBlockCommands
+  const displayContent = content
     .replace(TERMINAL_COMMAND_TAG_PATTERN, (_matchedTag, command) => {
       appendToolCall(toolCalls, command);
       return `${commandBlockText(command)}\n`;

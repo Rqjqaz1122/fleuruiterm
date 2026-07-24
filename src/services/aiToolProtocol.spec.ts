@@ -3,6 +3,20 @@ import { describe, expect, it } from 'vitest';
 import { formatToolResultMessage, parseAssistantToolResponse } from './aiToolProtocol';
 
 describe('AI tool protocol', () => {
+  it('keeps explanatory terminal code blocks display-only', () => {
+    const content = [
+      'The command that ran was:',
+      '```terminal',
+      '{ ls; }; __fleurterm_exit=$?; printf \'\\n__FLEURTERM_DONE_xxx:%s\\n\' "$__fleurterm_exit"',
+      '```',
+    ].join('\n');
+
+    const response = parseAssistantToolResponse(content);
+
+    expect(response.displayContent).toBe(content);
+    expect(response.toolCalls).toEqual([]);
+  });
+
   it('creates a stable terminal tool call and removes the raw tag from visible text', () => {
     const response = parseAssistantToolResponse(
       'Checking.\n<terminal-command>pwd</terminal-command>',

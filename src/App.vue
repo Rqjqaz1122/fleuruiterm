@@ -20,6 +20,7 @@ import type { AiAppAction, AiToolResult } from '@/services/aiToolProtocol';
 import { resolveAppShortcut, type AppCommand } from '@/services/appShortcuts';
 import { desktopMenuClient } from '@/services/desktopMenuClient';
 import { detectDesktopPlatform } from '@/services/desktopPlatform';
+import { desktopWindowLifecycleClient } from '@/services/desktopWindowLifecycleClient';
 import {
   findSavedConnectionProfile,
   loadSavedConnectionProfiles,
@@ -28,10 +29,19 @@ import {
   type SavedConnectionSummary,
 } from '@/services/connectionProfiles';
 import { settingsClient } from '@/services/settingsClient';
+import {
+  createPersistedWorkspace,
+  workspacePersistenceClient,
+  type PersistedTerminalTab,
+} from '@/services/workspacePersistence';
 import { setLocale } from '@/i18n/locale';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useAppUpdateStore } from '@/stores/appUpdateStore';
-import { useWorkspaceStore, type WorkspaceErrorCode } from '@/stores/workspaceStore';
+import {
+  useWorkspaceStore,
+  type OpenTerminalTabOptions,
+  type WorkspaceErrorCode,
+} from '@/stores/workspaceStore';
 
 const AI_PANEL_WIDTH_STORAGE_KEY = 'fleurterm.aiPanelWidth';
 const DEFAULT_AI_PANEL_WIDTH = 380;
@@ -55,7 +65,14 @@ const appContentStyle = computed<Record<string, string>>(() => ({
   '--ai-panel-width': `${aiPanelWidth.value}px`,
 }));
 let removeDesktopMenuListener: (() => void) | null = null;
+let removeApplicationExitListener: (() => void) | null = null;
+let removeWindowCloseListener: (() => void) | null = null;
 let appDisposed = false;
+let workspaceClosing = false;
+let workspaceClosePromise: Promise<boolean> | null = null;
+let workspacePersistenceReady = false;
+let workspaceRestorePromise: Promise<void> = Promise.resolve();
+let workspaceSaveQueue = Promise.resolve();
 
 watch(
   () => [
@@ -72,8 +89,18 @@ watch(
   { immediate: true, flush: 'sync' },
 );
 
+watch(workspace, (nextWorkspace) => {
+  if (!workspacePersistenceReady || workspaceClosing) {
+    return;
+  }
+  enqueueWorkspaceSave(createPersistedWorkspace(nextWorkspace));
+});
+
 onMounted(() => {
   void appUpdate.checkAtStartup();
+  workspaceRestorePromise = restoreTerminalWorkspace().finally(() => {
+    workspacePersistenceReady = true;
+  });
   window.addEventListener('keydown', handleApplicationKeyDown);
   void desktopMenuClient
     .listen((command) => void executeAppCommand(command))
@@ -84,6 +111,24 @@ onMounted(() => {
       }
       removeDesktopMenuListener = unlisten;
     });
+  void desktopWindowLifecycleClient
+    .listenForCloseRequest(flushWorkspaceBeforeClose, cancelWorkspaceClose)
+    .then((unlisten) => {
+      if (appDisposed) {
+        unlisten();
+        return;
+      }
+      removeWindowCloseListener = unlisten;
+    });
+  void desktopWindowLifecycleClient
+    .listenForApplicationExitRequest(flushWorkspaceBeforeClose, cancelWorkspaceClose)
+    .then((unlisten) => {
+      if (appDisposed) {
+        unlisten();
+        return;
+      }
+      removeApplicationExitListener = unlisten;
+    });
 });
 
 onBeforeUnmount(() => {
@@ -91,7 +136,14 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleApplicationKeyDown);
   removeDesktopMenuListener?.();
   removeDesktopMenuListener = null;
+  removeApplicationExitListener?.();
+  removeApplicationExitListener = null;
+  removeWindowCloseListener?.();
+  removeWindowCloseListener = null;
 });
+
+appUpdate.setBeforeRestart(flushWorkspaceBeforeClose);
+appUpdate.setRestartFailureHandler(cancelWorkspaceClose);
 
 const appTabs = computed<AppTab[]>(() => {
   const terminalTabs = workspace.value.tabs.map((tab, index) =>
@@ -113,6 +165,7 @@ const errorMessageKeyByCode: Record<WorkspaceErrorCode, TranslationKey> = {
   CLOSE_TERMINAL_FAILED: 'error.closeTerminal',
   CLOSE_TAB_FAILED: 'error.closeTab',
   INTERRUPT_TERMINAL_FAILED: 'error.writeTerminal',
+  PERSIST_WORKSPACE_FAILED: 'error.persistWorkspace',
   WRITE_TERMINAL_FAILED: 'error.writeTerminal',
 };
 const visibleErrorMessage = computed(() => {
@@ -133,6 +186,7 @@ function resolveTerminalSequence(tab: TerminalTab, fallbackSequence: number): nu
 
 async function openTerminal(): Promise<void> {
   await runAction(async () => {
+    await workspaceRestorePromise;
     await store.openTab();
     activeAppTabId.value = store.workspace.activeTabId;
     lastActiveTerminalTabId.value = store.workspace.activeTabId;
@@ -141,20 +195,16 @@ async function openTerminal(): Promise<void> {
 
 async function openWorkbenchConnection(connection: OpenableConnectionProfile): Promise<void> {
   await runAction(async () => {
+    await workspaceRestorePromise;
     const openOptions = buildConnectionOpenOptions(connection);
-    await store.openTab(openOptions);
+    await store.openTab({ ...openOptions, connectionProfileId: connection.id });
     activeAppTabId.value = store.workspace.activeTabId;
     lastActiveTerminalTabId.value = store.workspace.activeTabId;
     settingsTabOpen.value = false;
   });
 }
 
-function buildConnectionOpenOptions(connection: OpenableConnectionProfile): {
-  shell?: string;
-  args?: string[];
-  cwd?: string;
-  title?: string;
-} {
+function buildConnectionOpenOptions(connection: OpenableConnectionProfile): OpenTerminalTabOptions {
   if (connection.method === 'local') {
     return {
       shell: connection.shell || undefined,
@@ -196,8 +246,73 @@ function buildConnectionOpenOptions(connection: OpenableConnectionProfile): {
       target,
       ...(connection.loginScripts.trim() ? [connection.loginScripts.trim()] : []),
     ],
-    password: connection.password || undefined,
+    ...(connection.password ? { password: connection.password } : {}),
     title: `SSH ${target}`,
+  };
+}
+
+async function restoreTerminalWorkspace(): Promise<void> {
+  const persistedWorkspace = await workspacePersistenceClient.load();
+  if (persistedWorkspace === null || persistedWorkspace.tabs.length === 0) {
+    return;
+  }
+
+  const savedConnections = loadSavedConnectionProfiles();
+  let restoredActiveTabId: string | null = null;
+  let restoreFailed = false;
+  for (const persistedTab of persistedWorkspace.tabs) {
+    try {
+      const openOptions = await buildRestoredTabOptions(persistedTab, savedConnections);
+      if (openOptions === null) {
+        restoreFailed = true;
+        continue;
+      }
+      await store.openTab(openOptions);
+      if (persistedTab.id === persistedWorkspace.activeTabId) {
+        restoredActiveTabId = store.workspace.activeTabId;
+      }
+    } catch {
+      restoreFailed = true;
+    }
+  }
+
+  if (restoreFailed && store.workspace.tabs.length === 0) {
+    errorCode.value = 'OPEN_TERMINAL_FAILED';
+    errorMessage.value = 'Unable to restore terminal workspace';
+  }
+
+  const nextActiveTabId = restoredActiveTabId ?? store.workspace.activeTabId;
+  if (nextActiveTabId !== null) {
+    store.activateTab(nextActiveTabId);
+  }
+  activeAppTabId.value = nextActiveTabId;
+  lastActiveTerminalTabId.value = nextActiveTabId;
+}
+
+async function buildRestoredTabOptions(
+  tab: PersistedTerminalTab,
+  savedConnections: OpenableConnectionProfile[],
+): Promise<OpenTerminalTabOptions | null> {
+  if (tab.launch.type === 'local') {
+    return {
+      ...(tab.launch.shell === undefined ? {} : { shell: tab.launch.shell }),
+      ...(tab.launch.args === undefined ? {} : { args: [...tab.launch.args] }),
+      ...(tab.launch.cwd === undefined ? {} : { cwd: tab.launch.cwd }),
+      title: tab.title,
+    };
+  }
+
+  const connection = savedConnections.find(
+    (candidate) => candidate.id === tab.launch.connectionProfileId,
+  );
+  if (connection === undefined) {
+    return null;
+  }
+  const connectionWithPassword = await loadConnectionPassword(connection);
+  return {
+    ...buildConnectionOpenOptions(connectionWithPassword),
+    title: tab.title,
+    connectionProfileId: connection.id,
   };
 }
 
@@ -312,6 +427,10 @@ async function runAiAppAction(action: AiAppAction): Promise<AiToolResult> {
 }
 
 async function executeAiAppAction(action: AiAppAction): Promise<void> {
+  if (workspaceClosing) {
+    throw new Error('Application is closing');
+  }
+  await workspaceRestorePromise;
   switch (action.type) {
     case 'terminal.write':
       await store.writeToFocusedSession(
@@ -393,6 +512,16 @@ function listSavedConnections(): SavedConnectionSummary[] {
 }
 
 function activateAppTab(tabId: string): void {
+  if (workspaceClosing) {
+    return;
+  }
+  if (!workspacePersistenceReady) {
+    void workspaceRestorePromise.then(
+      () => activateAppTab(tabId),
+      () => undefined,
+    );
+    return;
+  }
   if (tabId === SETTINGS_TAB_ID) {
     openSettings();
     return;
@@ -403,6 +532,10 @@ function activateAppTab(tabId: string): void {
 }
 
 async function closeAppTab(tabId: string): Promise<void> {
+  if (workspaceClosing) {
+    return;
+  }
+  await workspaceRestorePromise;
   if (tabId === SETTINGS_TAB_ID) {
     closeSettingsTab();
     return;
@@ -416,6 +549,9 @@ async function closeAppTab(tabId: string): Promise<void> {
 }
 
 function closeSettingsTab(): void {
+  if (workspaceClosing) {
+    return;
+  }
   settingsTabOpen.value = false;
   const fallbackTabId = lastActiveTerminalTabId.value;
   const fallbackExists = workspace.value.tabs.some((tab) => tab.id === fallbackTabId);
@@ -432,6 +568,16 @@ function reorderApplicationTabs(
   targetTabId: string,
   placement: TabDropPlacement,
 ): void {
+  if (workspaceClosing) {
+    return;
+  }
+  if (!workspacePersistenceReady) {
+    void workspaceRestorePromise.then(
+      () => reorderApplicationTabs(sourceTabId, targetTabId, placement),
+      () => undefined,
+    );
+    return;
+  }
   if (sourceTabId === targetTabId) {
     return;
   }
@@ -454,7 +600,77 @@ function reorderApplicationTabs(
 }
 
 async function closePane(paneId: string): Promise<void> {
+  if (workspaceClosing) {
+    return;
+  }
+  await workspaceRestorePromise;
   await runAction(() => store.closePane(paneId));
+}
+
+function focusPane(paneId: string): void {
+  if (!workspaceClosing) {
+    store.focusPane(paneId);
+  }
+}
+
+function enqueueWorkspaceSave(
+  persistedWorkspace: ReturnType<typeof createPersistedWorkspace>,
+): void {
+  workspaceSaveQueue = workspaceSaveQueue
+    .catch(() => undefined)
+    .then(() => workspacePersistenceClient.save(persistedWorkspace));
+  void workspaceSaveQueue.then(clearWorkspacePersistenceError, publishWorkspacePersistenceError);
+}
+
+async function flushWorkspaceBeforeClose(): Promise<boolean> {
+  if (workspaceClosePromise !== null) {
+    return workspaceClosePromise;
+  }
+  workspaceClosing = true;
+  const closePromise = performFinalWorkspaceSave();
+  workspaceClosePromise = closePromise;
+  void closePromise.then((canClose) => {
+    if (!canClose && workspaceClosePromise === closePromise) {
+      workspaceClosing = false;
+      workspaceClosePromise = null;
+    }
+  });
+  return closePromise;
+}
+
+async function performFinalWorkspaceSave(): Promise<boolean> {
+  await workspaceRestorePromise.catch(() => undefined);
+  const finalWorkspace = createPersistedWorkspace(workspace.value);
+  const finalSave = workspaceSaveQueue
+    .catch(() => undefined)
+    .then(() => workspacePersistenceClient.save(finalWorkspace));
+  workspaceSaveQueue = finalSave;
+  try {
+    await finalSave;
+    clearWorkspacePersistenceError();
+    return true;
+  } catch {
+    publishWorkspacePersistenceError();
+    return false;
+  }
+}
+
+function publishWorkspacePersistenceError(): void {
+  errorCode.value = 'PERSIST_WORKSPACE_FAILED';
+  errorMessage.value = 'Unable to save terminal workspace';
+}
+
+function clearWorkspacePersistenceError(): void {
+  if (errorCode.value !== 'PERSIST_WORKSPACE_FAILED') {
+    return;
+  }
+  errorCode.value = null;
+  errorMessage.value = null;
+}
+
+function cancelWorkspaceClose(): void {
+  workspaceClosing = false;
+  workspaceClosePromise = null;
 }
 
 async function retryLastAction(): Promise<void> {
@@ -465,7 +681,7 @@ async function retryLastAction(): Promise<void> {
 }
 
 async function runAction(action: () => Promise<void>): Promise<void> {
-  if (actionPending.value) {
+  if (actionPending.value || workspaceClosing) {
     return;
   }
   actionPending.value = true;
@@ -586,7 +802,7 @@ function clampAiPanelWidth(width: number): number {
             :node="tab.root"
             :focused-pane-id="workspace.focusedPaneId"
             @close="closePane"
-            @focus="store.focusPane"
+            @focus="focusPane"
           />
         </div>
         <StartPage
