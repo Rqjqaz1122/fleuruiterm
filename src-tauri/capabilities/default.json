@@ -12,8 +12,6 @@
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
     "core:window:allow-unmaximize",
-    "dialog:allow-open",
-    "dialog:allow-save",
     {
       "identifier": "http:default",
       "allow": [{ "url": "http://**" }, { "url": "https://**" }]

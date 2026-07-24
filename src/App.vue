@@ -209,7 +209,11 @@ async function openWorkbenchConnection(connection: OpenableConnectionProfile): P
   await runAction(async () => {
     await workspaceRestorePromise;
     const openOptions = buildConnectionOpenOptions(connection);
-    await store.openTab({ ...openOptions, connectionProfileId: connection.id });
+    await store.openTab({
+      ...openOptions,
+      connectionProfileId: connection.id,
+      ...(connection.method === 'ssh' ? { sftpConnectionProfileId: connection.id } : {}),
+    });
     activeAppTabId.value = store.workspace.activeTabId;
     lastActiveTerminalTabId.value = store.workspace.activeTabId;
     settingsTabOpen.value = false;
@@ -350,6 +354,7 @@ async function buildRestoredTabOptions(
     ...buildConnectionOpenOptions(connectionWithPassword),
     title: tab.title,
     connectionProfileId: connection.id,
+    ...(connection.method === 'ssh' ? { sftpConnectionProfileId: connection.id } : {}),
   };
 }
 

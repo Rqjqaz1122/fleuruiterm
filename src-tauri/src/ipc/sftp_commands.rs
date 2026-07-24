@@ -1,23 +1,39 @@
-use std::{path::PathBuf, sync::Mutex};
+use std::sync::Mutex;
 
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 use zeroize::Zeroize;
 
 use crate::{
     credential_vault::CredentialVault,
+    ipc::session_commands::AppState,
+    session::model::SessionId,
     sftp::{
-        ListSftpDirectoryResponse, OpenSftpRequest, OpenSftpResponse, PublicSftpError, SftpError,
-        SftpRegistry, Ssh2SftpConnection, normalize_remote_path,
+        ListSftpDirectoryResponse, OpenSftpResponse, PublicSftpError, SftpError,
+        Ssh2SftpConnection, load_saved_ssh_profile, normalize_remote_path,
     },
 };
 
 #[tauri::command]
 pub async fn sftp_open(
-    request: OpenSftpRequest,
-    registry: State<'_, SftpRegistry>,
+    app: AppHandle,
+    terminal_session_id: SessionId,
+    state: State<'_, AppState>,
     vault: State<'_, Mutex<CredentialVault>>,
 ) -> Result<OpenSftpResponse, PublicSftpError> {
-    request.validate().map_err(PublicSftpError::from)?;
+    let request = state
+        .active_sftp_profile(&terminal_session_id)
+        .await
+        .map_err(PublicSftpError::from)?;
+    let current_profile =
+        load_saved_ssh_profile(&app, &request.connection_id).map_err(PublicSftpError::from)?;
+    if current_profile != request {
+        state
+            .sftp_registry()
+            .close_for_terminal(&terminal_session_id)
+            .map_err(PublicSftpError::from)?;
+        return Err(PublicSftpError::from(SftpError::InvalidRequest));
+    }
     let mut password =
         load_connection_password(&request.connection_id, &vault).map_err(PublicSftpError::from)?;
     let connection_result = tauri::async_runtime::spawn_blocking(move || {
@@ -35,8 +51,9 @@ pub async fn sftp_open(
     .map_err(|_| PublicSftpError::from(SftpError::WorkerFailed))?
     .map_err(PublicSftpError::from)?;
     let (connection, path) = connection_result;
-    let sftp_session_id = registry
-        .insert(Box::new(connection))
+    let sftp_session_id = state
+        .sftp_registry()
+        .insert(terminal_session_id, Box::new(connection))
         .map_err(PublicSftpError::from)?;
     Ok(OpenSftpResponse {
         sftp_session_id,
@@ -48,11 +65,12 @@ pub async fn sftp_open(
 pub async fn sftp_list_directory(
     sftp_session_id: String,
     path: String,
-    registry: State<'_, SftpRegistry>,
+    state: State<'_, AppState>,
 ) -> Result<ListSftpDirectoryResponse, PublicSftpError> {
     let path = normalize_remote_path(&path)
         .map_err(|_| PublicSftpError::from(SftpError::InvalidRemotePath))?;
-    let entries = registry
+    let entries = state
+        .sftp_registry()
         .list_directory(&sftp_session_id, &path)
         .await
         .map_err(PublicSftpError::from)?;
@@ -61,42 +79,79 @@ pub async fn sftp_list_directory(
 
 #[tauri::command]
 pub async fn sftp_upload_files(
+    app: AppHandle,
     sftp_session_id: String,
     remote_directory: String,
-    local_paths: Vec<String>,
-    registry: State<'_, SftpRegistry>,
-) -> Result<(), PublicSftpError> {
-    registry
-        .upload_files(
-            &sftp_session_id,
-            &remote_directory,
-            local_paths.into_iter().map(PathBuf::from).collect(),
-        )
+    state: State<'_, AppState>,
+) -> Result<bool, PublicSftpError> {
+    let selected_paths =
+        tauri::async_runtime::spawn_blocking(move || app.dialog().file().blocking_pick_files())
+            .await
+            .map_err(|_| PublicSftpError::from(SftpError::WorkerFailed))?;
+    let Some(selected_paths) = selected_paths else {
+        return Ok(false);
+    };
+    let local_paths = selected_paths
+        .into_iter()
+        .map(|file_path| file_path.into_path().map_err(|_| SftpError::InvalidRequest))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(PublicSftpError::from)?;
+    state
+        .sftp_registry()
+        .upload_files(&sftp_session_id, &remote_directory, local_paths)
         .await
-        .map_err(PublicSftpError::from)
+        .map_err(PublicSftpError::from)?;
+    Ok(true)
 }
 
 #[tauri::command]
 pub async fn sftp_download_file(
+    app: AppHandle,
     sftp_session_id: String,
     remote_path: String,
-    local_path: String,
-    registry: State<'_, SftpRegistry>,
-) -> Result<(), PublicSftpError> {
-    registry
-        .download_file(&sftp_session_id, &remote_path, PathBuf::from(local_path))
+    suggested_file_name: String,
+    state: State<'_, AppState>,
+) -> Result<bool, PublicSftpError> {
+    validate_suggested_file_name(&suggested_file_name).map_err(PublicSftpError::from)?;
+    let selected_path = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_file_name(suggested_file_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|_| PublicSftpError::from(SftpError::WorkerFailed))?;
+    let Some(selected_path) = selected_path else {
+        return Ok(false);
+    };
+    let local_path = selected_path
+        .into_path()
+        .map_err(|_| PublicSftpError::from(SftpError::InvalidRequest))?;
+    state
+        .sftp_registry()
+        .download_file(&sftp_session_id, &remote_path, local_path)
         .await
-        .map_err(PublicSftpError::from)
+        .map_err(PublicSftpError::from)?;
+    Ok(true)
 }
 
 #[tauri::command]
 pub fn sftp_close(
     sftp_session_id: String,
-    registry: State<'_, SftpRegistry>,
+    state: State<'_, AppState>,
 ) -> Result<(), PublicSftpError> {
-    registry
+    state
+        .sftp_registry()
         .close(&sftp_session_id)
         .map_err(PublicSftpError::from)
+}
+
+fn validate_suggested_file_name(file_name: &str) -> Result<(), SftpError> {
+    let trimmed = file_name.trim();
+    if trimmed.is_empty() || matches!(trimmed, "." | "..") || trimmed.contains(['/', '\\', '\0']) {
+        return Err(SftpError::InvalidRequest);
+    }
+    Ok(())
 }
 
 fn load_connection_password(

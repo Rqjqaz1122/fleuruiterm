@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import SftpPanel from '@/components/SftpPanel.vue';
 import { t } from '@/i18n/locale';
 import {
+  CONNECTION_PROFILES_CHANGED_EVENT,
   loadSavedConnectionProfiles,
   type OpenableConnectionProfile,
 } from '@/services/connectionProfiles';
@@ -41,6 +42,7 @@ const terminalScrollbarThumbStyle = ref<Record<string, string>>({
 });
 const terminalError = ref<string | null>(null);
 const sftpPanelOpen = ref(false);
+const savedConnectionProfiles = ref<OpenableConnectionProfile[]>(loadSavedConnectionProfiles());
 const visibleTerminalError = computed(() =>
   terminalError.value === null ? null : t('error.terminalBridge'),
 );
@@ -53,7 +55,7 @@ const sftpProfile = computed<OpenableConnectionProfile | null>(() => {
     return null;
   }
   return (
-    loadSavedConnectionProfiles().find(
+    savedConnectionProfiles.value.find(
       (profile) => profile.id === connectionProfileId && profile.method === 'ssh',
     ) ?? null
   );
@@ -212,7 +214,13 @@ function stopTerminalScrollbarDrag(): void {
   window.removeEventListener('pointerup', stopTerminalScrollbarDrag);
 }
 
+function handleConnectionProfilesChanged(): void {
+  sftpPanelOpen.value = false;
+  savedConnectionProfiles.value = loadSavedConnectionProfiles();
+}
+
 onMounted(async () => {
+  window.addEventListener(CONNECTION_PROFILES_CHANGED_EVENT, handleConnectionProfilesChanged);
   const element = terminalElement.value;
   if (element === null) {
     return;
@@ -268,6 +276,7 @@ onBeforeUnmount(() => {
   unsubscribe?.();
   adapter?.dispose();
   window.removeEventListener(TERMINAL_THEME_CHANGED_EVENT, updateOpenTerminalTheme);
+  window.removeEventListener(CONNECTION_PROFILES_CHANGED_EVENT, handleConnectionProfilesChanged);
   terminalViewport?.removeEventListener('scroll', handleViewportScroll);
   terminalViewport = null;
   scrollbarResizeObserver?.disconnect();
@@ -337,7 +346,7 @@ onBeforeUnmount(() => {
     </div>
     <SftpPanel
       v-if="sftpPanelOpen && sftpProfile"
-      :profile="sftpProfile"
+      :terminal-session-id="sessionId"
       @close="sftpPanelOpen = false"
     />
   </section>

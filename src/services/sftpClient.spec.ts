@@ -1,26 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { OpenableConnectionProfile } from './connectionProfiles';
 import { SftpClient, SftpClientError } from './sftpClient';
 
 describe('SftpClient', () => {
-  it('opens SFTP without sending the saved password', async () => {
+  it('opens SFTP using only the active terminal capability', async () => {
     const invoke = vi.fn(async () => ({ sftpSessionId: 'sftp-1', path: '/home/root' }));
     const client = new SftpClient(invoke);
 
-    await client.open(profile());
+    await client.open('terminal-1');
 
     expect(invoke).toHaveBeenCalledWith('sftp_open', {
-      request: {
-        connectionId: 'server-1',
-        host: '10.7.121.81',
-        port: 22,
-        user: 'root',
-        authMethod: 'agent',
-        privateKeyPaths: [],
-      },
+      terminalSessionId: 'terminal-1',
     });
-    expect(JSON.stringify(invoke.mock.calls)).not.toContain('secret');
+    expect(JSON.stringify(invoke.mock.calls)).not.toMatch(/host|user|password|privateKey/i);
   });
 
   it('lists a directory through the named SFTP session', async () => {
@@ -54,17 +46,19 @@ describe('SftpClient', () => {
     });
     const client = new SftpClient(invoke);
 
-    await expect(client.open(profile())).rejects.toEqual(
+    await expect(client.open('terminal-1')).rejects.toEqual(
       new SftpClientError('SFTP_AUTHENTICATION_FAILED', 'Unable to authenticate'),
     );
   });
 
-  it('delegates upload download and close commands', async () => {
-    const invoke = vi.fn(async () => undefined);
+  it('delegates native-dialog transfers without exposing local paths', async () => {
+    const invoke = vi.fn(async (command: string) => command !== 'sftp_download_file');
     const client = new SftpClient(invoke);
 
-    await client.uploadFiles('sftp-1', '/tmp', ['/Users/me/report.txt']);
-    await client.downloadFile('sftp-1', '/tmp/report.txt', '/Users/me/report.txt');
+    await expect(client.uploadFiles('sftp-1', '/tmp')).resolves.toBe(true);
+    await expect(client.downloadFile('sftp-1', '/tmp/report.txt', 'report.txt')).resolves.toBe(
+      false,
+    );
     await client.close('sftp-1');
 
     expect(invoke.mock.calls).toEqual([
@@ -73,7 +67,6 @@ describe('SftpClient', () => {
         {
           sftpSessionId: 'sftp-1',
           remoteDirectory: '/tmp',
-          localPaths: ['/Users/me/report.txt'],
         },
       ],
       [
@@ -81,29 +74,10 @@ describe('SftpClient', () => {
         {
           sftpSessionId: 'sftp-1',
           remotePath: '/tmp/report.txt',
-          localPath: '/Users/me/report.txt',
+          suggestedFileName: 'report.txt',
         },
       ],
       ['sftp_close', { sftpSessionId: 'sftp-1' }],
     ]);
   });
 });
-
-function profile(): OpenableConnectionProfile {
-  return {
-    id: 'server-1',
-    name: 'Production',
-    method: 'ssh',
-    host: '10.7.121.81',
-    user: 'root',
-    port: 22,
-    shell: '',
-    cwd: '',
-    authMethod: 'agent',
-    password: 'secret',
-    hasPassword: true,
-    privateKeys: [],
-    loginScripts: '',
-    forwardedPorts: [],
-  };
-}

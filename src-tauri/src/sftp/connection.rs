@@ -1,8 +1,9 @@
 use std::{
-    fs::{File, OpenOptions},
-    io,
+    fs::File,
+    io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -10,7 +11,7 @@ use ssh2::{CheckResult, KeyboardInteractivePrompt, KnownHostFileKind, Prompt, Se
 
 use super::{
     error::SftpError,
-    model::{OpenSftpRequest, SftpAuthMethod, SftpDirectoryEntry, SftpEntryKind},
+    model::{SftpAuthMethod, SftpConnectionProfile, SftpDirectoryEntry, SftpEntryKind},
     path::normalize_remote_path,
     registry::SftpOperations,
 };
@@ -24,7 +25,10 @@ pub struct Ssh2SftpConnection {
 }
 
 impl Ssh2SftpConnection {
-    pub fn connect(request: &OpenSftpRequest, password: Option<&str>) -> Result<Self, SftpError> {
+    pub fn connect(
+        request: &SftpConnectionProfile,
+        password: Option<&str>,
+    ) -> Result<Self, SftpError> {
         request.validate()?;
         let tcp_stream = connect_tcp(&request.host, request.port)?;
         tcp_stream
@@ -59,24 +63,20 @@ impl Ssh2SftpConnection {
 }
 
 impl SftpOperations for Ssh2SftpConnection {
-    fn list_directory(&mut self, path: &str) -> Result<Vec<SftpDirectoryEntry>, SftpError> {
-        self.sftp
-            .readdir(Path::new(path))
-            .map_err(remote_error)?
+    fn list_directory(
+        &mut self,
+        path: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<SftpDirectoryEntry>, SftpError> {
+        ensure_not_cancelled(cancelled)?;
+        let entries = self.sftp.readdir(Path::new(path)).map_err(remote_error)?;
+        ensure_not_cancelled(cancelled)?;
+        Ok(entries
             .into_iter()
-            .map(|(remote_path, metadata)| {
-                let name = remote_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .ok_or_else(|| {
-                        SftpError::RemoteOperationFailed(
-                            "remote entry name is not valid UTF-8".to_owned(),
-                        )
-                    })?
-                    .to_owned();
-                let remote_path = normalize_remote_path(&remote_path.to_string_lossy())
-                    .map_err(|_| SftpError::InvalidRemotePath)?;
-                Ok(SftpDirectoryEntry {
+            .filter_map(|(remote_path, metadata)| {
+                let name = remote_path.file_name()?.to_str()?.to_owned();
+                let remote_path = normalize_remote_path(&remote_path.to_string_lossy()).ok()?;
+                Some(SftpDirectoryEntry {
                     name,
                     path: remote_path,
                     kind: entry_kind(metadata.perm),
@@ -85,37 +85,96 @@ impl SftpOperations for Ssh2SftpConnection {
                     permissions: metadata.perm.map(format_permissions),
                 })
             })
-            .collect()
+            .collect::<Vec<_>>())
     }
 
-    fn upload_file(&mut self, local_path: &Path, remote_path: &str) -> Result<(), SftpError> {
+    fn upload_file(
+        &mut self,
+        local_path: &Path,
+        remote_path: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<(), SftpError> {
+        ensure_not_cancelled(cancelled)?;
         let mut local_file = File::open(local_path).map_err(local_file_error)?;
         let mut remote_file = self
             .sftp
             .create(Path::new(remote_path))
             .map_err(remote_error)?;
-        io::copy(&mut local_file, &mut remote_file).map_err(remote_error)?;
+        copy_upload(&mut local_file, &mut remote_file, cancelled)?;
         remote_file.close().map_err(remote_error)
     }
 
-    fn download_file(&mut self, remote_path: &str, local_path: &Path) -> Result<(), SftpError> {
+    fn download_file(
+        &mut self,
+        remote_path: &str,
+        local_path: &Path,
+        cancelled: &AtomicBool,
+    ) -> Result<(), SftpError> {
+        ensure_not_cancelled(cancelled)?;
         let mut remote_file = self
             .sftp
             .open(Path::new(remote_path))
             .map_err(remote_error)?;
-        let mut local_file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(local_path)
-            .map_err(local_file_error)?;
-        let result = io::copy(&mut remote_file, &mut local_file)
-            .map_err(remote_error)
-            .and_then(|_| local_file.sync_all().map_err(local_file_error));
-        if result.is_err() {
-            let _ = std::fs::remove_file(local_path);
+        persist_download(&mut remote_file, local_path, cancelled)
+    }
+}
+
+fn persist_download(
+    reader: &mut impl Read,
+    local_path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<(), SftpError> {
+    let parent_directory = local_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or(SftpError::InvalidRequest)?;
+    let mut temporary_file =
+        tempfile::NamedTempFile::new_in(parent_directory).map_err(local_file_error)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        ensure_not_cancelled(cancelled)?;
+        let bytes_read = reader.read(&mut buffer).map_err(remote_error)?;
+        if bytes_read == 0 {
+            break;
         }
-        result
+        temporary_file
+            .as_file_mut()
+            .write_all(&buffer[..bytes_read])
+            .map_err(local_file_error)?;
+    }
+    temporary_file
+        .as_file_mut()
+        .sync_all()
+        .map_err(local_file_error)?;
+    temporary_file
+        .persist(local_path)
+        .map(|_| ())
+        .map_err(|error| local_file_error(error.error))
+}
+
+fn copy_upload(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    cancelled: &AtomicBool,
+) -> Result<(), SftpError> {
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        ensure_not_cancelled(cancelled)?;
+        let bytes_read = reader.read(&mut buffer).map_err(local_file_error)?;
+        if bytes_read == 0 {
+            return Ok(());
+        }
+        writer
+            .write_all(&buffer[..bytes_read])
+            .map_err(remote_error)?;
+    }
+}
+
+fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<(), SftpError> {
+    if cancelled.load(Ordering::SeqCst) {
+        Err(SftpError::Cancelled)
+    } else {
+        Ok(())
     }
 }
 
@@ -161,7 +220,7 @@ fn known_hosts_path() -> Option<PathBuf> {
 
 fn authenticate(
     session: &Session,
-    request: &OpenSftpRequest,
+    request: &SftpConnectionProfile,
     password: Option<&str>,
 ) -> Result<(), SftpError> {
     match request.auth_method {
@@ -211,7 +270,11 @@ fn authenticate_with_agent(session: &Session, user: &str) {
     let _ = agent.disconnect();
 }
 
-fn authenticate_with_keys(session: &Session, request: &OpenSftpRequest, passphrase: Option<&str>) {
+fn authenticate_with_keys(
+    session: &Session,
+    request: &SftpConnectionProfile,
+    passphrase: Option<&str>,
+) {
     if session.authenticated() {
         return;
     }
@@ -226,7 +289,7 @@ fn authenticate_with_keys(session: &Session, request: &OpenSftpRequest, passphra
     }
 }
 
-fn candidate_private_key_paths(request: &OpenSftpRequest) -> Vec<PathBuf> {
+fn candidate_private_key_paths(request: &SftpConnectionProfile) -> Vec<PathBuf> {
     let mut paths = request
         .private_key_paths
         .iter()
@@ -283,7 +346,17 @@ impl KeyboardInteractivePrompt for PasswordPrompter<'_> {
         _instructions: &str,
         prompts: &[Prompt<'prompt>],
     ) -> Vec<String> {
-        prompts.iter().map(|_| self.password.to_owned()).collect()
+        let [prompt] = prompts else {
+            return Vec::new();
+        };
+        let normalized_prompt = prompt.text.to_ascii_lowercase();
+        if prompt.echo
+            || (!normalized_prompt.contains("password")
+                && !normalized_prompt.contains("passphrase"))
+        {
+            return Vec::new();
+        }
+        vec![self.password.to_owned()]
     }
 }
 
@@ -333,7 +406,15 @@ fn local_file_error(error: impl std::fmt::Display) -> SftpError {
 
 #[cfg(test)]
 mod tests {
-    use super::{entry_kind, format_permissions};
+    use std::{
+        borrow::Cow,
+        io::{self, Cursor, Read},
+        sync::atomic::AtomicBool,
+    };
+
+    use ssh2::{KeyboardInteractivePrompt, Prompt};
+
+    use super::{PasswordPrompter, entry_kind, format_permissions, persist_download};
     use crate::sftp::model::SftpEntryKind;
 
     #[test]
@@ -347,5 +428,98 @@ mod tests {
         assert_eq!(entry_kind(Some(0o040755)), SftpEntryKind::Directory);
         assert_eq!(entry_kind(Some(0o120777)), SftpEntryKind::Symlink);
         assert_eq!(entry_kind(Some(0o100644)), SftpEntryKind::File);
+    }
+
+    #[test]
+    fn download_replaces_the_destination_only_after_a_complete_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("report.txt");
+        std::fs::write(&destination, b"previous").unwrap();
+
+        persist_download(
+            &mut Cursor::new(b"replacement"),
+            &destination,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(destination).unwrap(), b"replacement");
+    }
+
+    #[test]
+    fn failed_download_preserves_an_existing_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("report.txt");
+        std::fs::write(&destination, b"previous").unwrap();
+
+        assert!(
+            persist_download(&mut FailingReader, &destination, &AtomicBool::new(false),).is_err()
+        );
+
+        assert_eq!(std::fs::read(destination).unwrap(), b"previous");
+    }
+
+    #[test]
+    fn keyboard_interactive_answers_only_one_hidden_password_prompt() {
+        let mut prompter = PasswordPrompter { password: "secret" };
+
+        let password_response = prompter.prompt(
+            "deploy",
+            "",
+            &[Prompt {
+                text: Cow::Borrowed("Password: "),
+                echo: false,
+            }],
+        );
+        let otp_response = prompter.prompt(
+            "deploy",
+            "",
+            &[Prompt {
+                text: Cow::Borrowed("Verification code: "),
+                echo: false,
+            }],
+        );
+
+        assert_eq!(password_response, ["secret"]);
+        assert!(otp_response.is_empty());
+    }
+
+    #[test]
+    fn keyboard_interactive_rejects_echoed_and_multi_prompt_challenges() {
+        let mut prompter = PasswordPrompter { password: "secret" };
+
+        let echoed = prompter.prompt(
+            "deploy",
+            "",
+            &[Prompt {
+                text: Cow::Borrowed("Password: "),
+                echo: true,
+            }],
+        );
+        let multiple = prompter.prompt(
+            "deploy",
+            "",
+            &[
+                Prompt {
+                    text: Cow::Borrowed("Password: "),
+                    echo: false,
+                },
+                Prompt {
+                    text: Cow::Borrowed("OTP: "),
+                    echo: false,
+                },
+            ],
+        );
+
+        assert!(echoed.is_empty());
+        assert!(multiple.is_empty());
+    }
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("injected read failure"))
+        }
     }
 }

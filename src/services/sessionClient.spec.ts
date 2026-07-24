@@ -67,7 +67,14 @@ describe('SessionClient', () => {
     });
 
     await client.openLocal(
-      { shell: 'bash', args: ['-lc', 'pwd'], cwd: '/tmp/project', columns: 80, rows: 24 },
+      {
+        shell: 'ssh',
+        args: ['-p', '22', 'deploy@server.example.com'],
+        cwd: '/tmp/project',
+        columns: 80,
+        rows: 24,
+        connectionProfileId: 'server-a',
+      },
       vi.fn(),
     );
 
@@ -75,11 +82,12 @@ describe('SessionClient', () => {
       'session_open_local',
       expect.objectContaining({
         request: {
-          shell: 'bash',
-          args: ['-lc', 'pwd'],
+          shell: 'ssh',
+          args: ['-p', '22', 'deploy@server.example.com'],
           cwd: '/tmp/project',
           columns: 80,
           rows: 24,
+          connectionProfileId: 'server-a',
         },
       }),
     );

@@ -41,6 +41,7 @@ export interface OpenTerminalTabOptions {
   password?: string;
   title?: string;
   connectionProfileId?: string;
+  sftpConnectionProfileId?: string;
 }
 
 export interface TerminalOutputCursor {
@@ -302,6 +303,7 @@ export function createWorkspaceStore(
             shell: options.shell,
             args: options.args,
             cwd: options.cwd,
+            connectionProfileId: options.sftpConnectionProfileId,
             columns: DEFAULT_TERMINAL_COLUMNS,
             rows: DEFAULT_TERMINAL_ROWS,
           },

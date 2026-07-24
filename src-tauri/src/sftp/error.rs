@@ -23,6 +23,8 @@ pub enum SftpError {
     LocalFileOperationFailed(String),
     #[error("SFTP worker failed")]
     WorkerFailed,
+    #[error("SFTP operation was cancelled")]
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -70,6 +72,10 @@ impl From<SftpError> for PublicSftpError {
             SftpError::WorkerFailed => Self {
                 code: "SFTP_WORKER_FAILED",
                 message: "The SFTP operation could not be completed",
+            },
+            SftpError::Cancelled => Self {
+                code: "SFTP_CANCELLED",
+                message: "The SFTP operation was cancelled",
             },
         }
     }

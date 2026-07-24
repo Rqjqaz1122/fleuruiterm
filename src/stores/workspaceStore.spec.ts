@@ -63,6 +63,7 @@ describe('workspace store', () => {
       password: 'secret',
       title: 'Production',
       connectionProfileId: 'production',
+      sftpConnectionProfileId: 'production',
     });
 
     expect(store.workspace.tabs[0]?.launch).toEqual({
@@ -70,6 +71,29 @@ describe('workspace store', () => {
       connectionProfileId: 'production',
     });
     expect(JSON.stringify(store.workspace.tabs[0])).not.toContain('secret');
+    expect(client.openLocal).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionProfileId: 'production' }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it('does not create an SFTP backend binding for a saved non-SSH connection', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+
+    await store.openTab({
+      shell: 'ssh',
+      args: ['-V'],
+      connectionProfileId: 'legacy-server',
+    });
+
+    expect(client.openLocal).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionProfileId: undefined }),
+      expect.any(Function),
+      expect.any(Function),
+    );
   });
 
   it('tracks the saved connection and state for its runtime session', async () => {

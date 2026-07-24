@@ -36,18 +36,18 @@ The first release excludes folder upload, recursive download, file deletion, ren
 
 The workspace store records which runtime session was opened from which saved connection and exposes that binding with the runtime session state. Eligibility is checked per terminal pane rather than per tab, so a local pane created by splitting an SSH tab cannot incorrectly inherit SFTP access. SFTP UI state is scoped to a terminal pane, so closing the panel or terminal disposes the corresponding SFTP backend session.
 
-The file picker and save dialog use Tauri's dialog plugin. Only selected local paths are sent to Rust; file contents are not copied through JavaScript IPC.
+The file picker and save dialog are opened by Rust through Tauri's dialog plugin. Local paths remain inside the trusted Rust process and are never exposed through renderer IPC.
 
 ### Rust backend
 
-The backend uses the synchronous `ssh2` library inside `spawn_blocking` tasks. A dedicated SFTP registry owns authenticated SFTP connections by opaque SFTP session identifier. The registry is separate from the PTY session registry because the existing SSH terminal is a system `ssh` process and cannot safely share its transport.
+The backend uses the synchronous `ssh2` library inside `spawn_blocking` tasks. When a terminal opens from a saved SSH connection, Rust reloads the authoritative persisted profile, verifies that the terminal command targets that profile, and binds an immutable profile snapshot to the runtime terminal session. A dedicated SFTP registry owns authenticated SFTP connections by opaque SFTP session identifier and terminal owner. The registry is separate from the PTY session registry because the existing SSH terminal is a system `ssh` process and cannot safely share its transport.
 
 The backend provides focused IPC commands:
 
-- `sftp_open`: validate input, resolve the stored credential, authenticate, initialize SFTP, and return an opaque SFTP session identifier plus the initial path.
+- `sftp_open`: accept only an active terminal session identifier, resolve its Rust-owned saved-profile binding and stored credential, authenticate, initialize SFTP, and return an opaque SFTP session identifier plus the initial path.
 - `sftp_list_directory`: return structured entries for a normalized absolute remote path.
-- `sftp_upload_files`: stream selected local files into the current remote directory.
-- `sftp_download_file`: stream one remote file into the selected local destination.
+- `sftp_upload_files`: open the native multi-file picker in Rust and stream selected local files into the current remote directory.
+- `sftp_download_file`: open the native save dialog in Rust and stream one remote file into the selected local destination.
 - `sftp_close`: remove and disconnect the SFTP session.
 
 Blocking filesystem and network work never runs on Tauri's async executor thread.
@@ -66,7 +66,7 @@ Passwords and key contents are never returned in SFTP command results, logged, o
 
 Before authentication, the backend verifies the server host key against the user's OpenSSH `known_hosts` file. A changed or unknown key is rejected. Because SFTP is available only after the system SSH terminal is connected, the user can review and accept a new host key through the normal SSH prompt before opening SFTP; FleurTerm never silently trusts an unknown server.
 
-Remote paths are normalized as POSIX paths. Entry names cannot inject separators into upload destinations. Local upload paths and download destinations must come from the native dialog result and are validated again in Rust. Upload uses truncating file creation only after explicit file selection; download uses the destination explicitly selected by the user.
+Remote paths are normalized as POSIX paths. Entry names cannot inject separators into upload destinations. Local upload paths and download destinations never cross renderer IPC, must come from a Rust-owned native dialog result, and are validated again before transfer. Downloads use a temporary sibling file and replace the selected destination only after a complete synchronized copy.
 
 ## Data Model
 
@@ -110,7 +110,7 @@ The UI supports existing English and Simplified Chinese locales. Controls includ
 
 Opening the panel establishes SFTP and lists the server's home directory. If connection or authentication fails, the panel remains open with a retry action. A failed listing preserves the previous successful entries. A failed upload or download reports the affected operation and allows retry without reconnecting when the SFTP session remains usable.
 
-Closing the SFTP panel, closing its terminal tab, changing that tab to an unavailable state, or exiting the application closes the backend SFTP session. Late async responses are ignored after component disposal.
+Closing the SFTP panel, closing its terminal tab, changing or deleting its saved profile, changing that tab to an unavailable state, or exiting the application closes the backend SFTP session. Closing marks active transfers as cancelled; chunked copies stop before further local or remote writes. Late async responses are ignored after component disposal.
 
 Concurrent directory navigation is serialized and stale responses cannot replace a newer path. Upload and download operations are serialized per SFTP session in the first release to keep destination and error behavior deterministic.
 

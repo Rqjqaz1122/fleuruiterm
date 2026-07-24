@@ -2,16 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import { t, type TranslationKey } from '@/i18n/locale';
-import type { OpenableConnectionProfile } from '@/services/connectionProfiles';
 import { SftpClient, SftpClientError, type SftpDirectoryEntry } from '@/services/sftpClient';
-import { sftpFileDialogs, type SftpFileDialogs } from '@/services/sftpFileDialogs';
 
 type PanelState = 'connecting' | 'ready' | 'failed';
 
 const props = defineProps<{
-  profile: OpenableConnectionProfile;
+  terminalSessionId: string;
   client?: SftpClient;
-  dialogs?: SftpFileDialogs;
 }>();
 
 const emit = defineEmits<{
@@ -19,20 +16,19 @@ const emit = defineEmits<{
 }>();
 
 const client = props.client ?? new SftpClient();
-const dialogs = props.dialogs ?? sftpFileDialogs;
 const panelState = ref<PanelState>('connecting');
 const sftpSessionId = ref<string | null>(null);
 const currentPath = ref('/');
 const entries = ref<SftpDirectoryEntry[]>([]);
 const loadingDirectory = ref(false);
+const transferActive = ref(false);
 const transferMessage = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
 let disposed = false;
 let listingRequest = 0;
 
 const operationBusy = computed(
-  () =>
-    panelState.value === 'connecting' || loadingDirectory.value || transferMessage.value !== null,
+  () => panelState.value === 'connecting' || loadingDirectory.value || transferActive.value,
 );
 const breadcrumbs = computed(() => {
   const segments = currentPath.value.split('/').filter(Boolean);
@@ -58,7 +54,7 @@ async function connect(): Promise<void> {
   errorMessage.value = null;
   await closeBackendSession();
   try {
-    const opened = await client.open(props.profile);
+    const opened = await client.open(props.terminalSessionId);
     if (disposed) {
       await client.close(opened.sftpSessionId);
       return;
@@ -120,20 +116,23 @@ async function uploadFiles(): Promise<void> {
   if (sessionId === null || operationBusy.value) {
     return;
   }
-  const localPaths = await dialogs.selectUploadFiles();
-  if (localPaths.length === 0 || disposed) {
-    return;
-  }
-  transferMessage.value = t('sftp.uploading');
-  errorMessage.value = null;
+  transferActive.value = true;
   try {
-    await client.uploadFiles(sessionId, currentPath.value, localPaths);
+    transferMessage.value = t('sftp.uploading');
+    errorMessage.value = null;
+    const transferred = await client.uploadFiles(sessionId, currentPath.value);
+    if (!transferred || disposed) {
+      return;
+    }
     transferMessage.value = t('sftp.uploadComplete');
     await loadDirectory(currentPath.value);
   } catch (error) {
-    errorMessage.value = visibleError(error);
+    if (!disposed) {
+      errorMessage.value = visibleError(error);
+    }
   } finally {
     transferMessage.value = null;
+    transferActive.value = false;
   }
 }
 
@@ -142,19 +141,22 @@ async function downloadFile(entry: SftpDirectoryEntry): Promise<void> {
   if (sessionId === null || entry.kind !== 'file' || operationBusy.value) {
     return;
   }
-  const localPath = await dialogs.selectDownloadDestination(entry.name);
-  if (localPath === null || disposed) {
-    return;
-  }
-  transferMessage.value = t('sftp.downloading');
-  errorMessage.value = null;
+  transferActive.value = true;
   try {
-    await client.downloadFile(sessionId, entry.path, localPath);
+    transferMessage.value = t('sftp.downloading');
+    errorMessage.value = null;
+    const transferred = await client.downloadFile(sessionId, entry.path, entry.name);
+    if (!transferred || disposed) {
+      return;
+    }
     transferMessage.value = t('sftp.downloadComplete');
   } catch (error) {
-    errorMessage.value = visibleError(error);
+    if (!disposed) {
+      errorMessage.value = visibleError(error);
+    }
   } finally {
     transferMessage.value = null;
+    transferActive.value = false;
   }
 }
 

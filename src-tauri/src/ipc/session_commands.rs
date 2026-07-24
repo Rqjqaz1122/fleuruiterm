@@ -5,23 +5,32 @@ use std::{
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tauri::{State, ipc::Channel};
+use tauri::{AppHandle, State, ipc::Channel};
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, RwLock, Semaphore};
 
-use crate::session::{
-    backend::TerminalOutputSink,
-    error::SessionError,
-    local_pty::LocalPtyBackend,
-    model::{
-        OpenLocalSessionRequest, SessionId, SessionSnapshot, SessionStateChanged, TerminalChunk,
-        TerminalDimensions,
+use crate::{
+    session::{
+        backend::TerminalOutputSink,
+        error::SessionError,
+        local_pty::LocalPtyBackend,
+        model::{
+            OpenLocalSessionRequest, SessionId, SessionSnapshot, SessionStateChanged,
+            TerminalChunk, TerminalDimensions,
+        },
+        registry::SessionRegistry,
+        state::SessionState,
     },
-    registry::SessionRegistry,
+    sftp::{
+        SftpConnectionProfile, SftpError, SftpRegistry, TerminalSftpBindings,
+        load_saved_ssh_profile,
+    },
 };
 
 pub struct AppState {
     registry: Arc<SessionRegistry>,
     output_flows: OutputFlowMap,
+    sftp_bindings: TerminalSftpBindings,
+    sftp_registry: SftpRegistry,
 }
 
 type OutputFlowMap = Arc<RwLock<HashMap<SessionId, Arc<OutputFlowControl>>>>;
@@ -31,6 +40,8 @@ impl AppState {
         Self {
             registry: Arc::new(SessionRegistry::new(Arc::new(LocalPtyBackend::new()))),
             output_flows: Arc::new(RwLock::new(HashMap::new())),
+            sftp_bindings: TerminalSftpBindings::default(),
+            sftp_registry: SftpRegistry::default(),
         }
     }
 
@@ -40,7 +51,67 @@ impl AppState {
             .await
             .map_err(PublicSessionError::from)?;
         self.output_flows.write().await.clear();
+        self.sftp_bindings.clear().map_err(sftp_session_error)?;
+        self.sftp_registry.close_all().map_err(sftp_session_error)?;
         Ok(())
+    }
+
+    pub async fn active_sftp_profile(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<SftpConnectionProfile, SftpError> {
+        let snapshot = self
+            .registry
+            .snapshot(session_id)
+            .await
+            .map_err(|_| SftpError::SessionNotFound)?;
+        if snapshot.state != SessionState::Ready {
+            return Err(SftpError::SessionNotFound);
+        }
+        self.sftp_bindings.profile(session_id)
+    }
+
+    pub fn sftp_registry(&self) -> &SftpRegistry {
+        &self.sftp_registry
+    }
+
+    pub fn reconcile_sftp_bindings(&self, settings: &serde_json::Value) -> Result<(), SftpError> {
+        for session_id in self.sftp_bindings.invalidate_changed_profiles(settings)? {
+            self.sftp_registry.close_for_terminal(&session_id)?;
+        }
+        Ok(())
+    }
+
+    async fn bind_sftp_profile(
+        &self,
+        session_id: SessionId,
+        profile: SftpConnectionProfile,
+    ) -> Result<(), PublicSessionError> {
+        let snapshot = self
+            .registry
+            .snapshot(&session_id)
+            .await
+            .map_err(PublicSessionError::from)?;
+        if snapshot.state != SessionState::Ready {
+            return Err(saved_connection_error());
+        }
+        self.sftp_bindings
+            .insert(session_id.clone(), profile)
+            .map_err(sftp_session_error)?;
+        if self.registry.snapshot(&session_id).await.is_err() {
+            self.close_terminal_sftp(&session_id)?;
+            return Err(saved_connection_error());
+        }
+        Ok(())
+    }
+
+    fn close_terminal_sftp(&self, session_id: &SessionId) -> Result<(), PublicSessionError> {
+        self.sftp_bindings
+            .remove(session_id)
+            .map_err(sftp_session_error)?;
+        self.sftp_registry
+            .close_for_terminal(session_id)
+            .map_err(sftp_session_error)
     }
 }
 
@@ -57,6 +128,7 @@ pub struct OpenLocalSessionInput {
     #[serde(default)]
     args: Vec<String>,
     cwd: Option<String>,
+    connection_profile_id: Option<String>,
     columns: u16,
     rows: u16,
 }
@@ -76,6 +148,8 @@ struct ChannelOutputSink {
 struct ChannelLifecycleSink {
     channel: Channel<SessionStateChanged>,
     output_flows: OutputFlowMap,
+    sftp_bindings: TerminalSftpBindings,
+    sftp_registry: SftpRegistry,
 }
 
 #[async_trait]
@@ -87,6 +161,18 @@ impl crate::session::backend::SessionLifecycleSink for ChannelLifecycleSink {
                 | crate::session::state::SessionState::Failed
         ) {
             self.output_flows.write().await.remove(&event.session_id);
+            self.sftp_bindings.remove(&event.session_id).map_err(|_| {
+                SessionError::BackendFailure {
+                    operation: "remove SFTP terminal binding",
+                    message: "SFTP binding state is unavailable".to_owned(),
+                }
+            })?;
+            self.sftp_registry
+                .close_for_terminal(&event.session_id)
+                .map_err(|_| SessionError::BackendFailure {
+                    operation: "close terminal SFTP sessions",
+                    message: "SFTP registry state is unavailable".to_owned(),
+                })?;
         }
         self.channel
             .send(event)
@@ -196,12 +282,20 @@ impl From<SessionError> for PublicSessionError {
 
 #[tauri::command]
 pub async fn session_open_local(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: OpenLocalSessionInput,
     on_output: Channel<TerminalChunk>,
     on_state: Channel<SessionStateChanged>,
 ) -> Result<SessionSnapshot, PublicSessionError> {
-    open_local_session(&state, request, on_output, on_state).await
+    let sftp_profile = resolve_sftp_profile(&app, &request)?;
+    let snapshot = open_local_session(&state, request, on_output, on_state).await?;
+    if let Some(profile) = sftp_profile {
+        state
+            .bind_sftp_profile(snapshot.session_id.clone(), profile)
+            .await?;
+    }
+    Ok(snapshot)
 }
 
 async fn open_local_session(
@@ -236,6 +330,8 @@ async fn open_local_session(
             Arc::new(ChannelLifecycleSink {
                 channel: on_state,
                 output_flows: Arc::clone(&state.output_flows),
+                sftp_bindings: state.sftp_bindings.clone(),
+                sftp_registry: state.sftp_registry.clone(),
             }),
         )
         .await;
@@ -314,7 +410,36 @@ pub async fn session_close(
         .await
         .map_err(PublicSessionError::from)?;
     state.output_flows.write().await.remove(&session_id);
+    state.close_terminal_sftp(&session_id)?;
     Ok(())
+}
+
+fn resolve_sftp_profile(
+    app: &AppHandle,
+    request: &OpenLocalSessionInput,
+) -> Result<Option<SftpConnectionProfile>, PublicSessionError> {
+    let Some(connection_id) = request.connection_profile_id.as_deref() else {
+        return Ok(None);
+    };
+    let profile = load_saved_ssh_profile(app, connection_id).map_err(sftp_session_error)?;
+    if !profile.matches_terminal_command(request.shell.as_deref(), &request.args) {
+        return Err(saved_connection_error());
+    }
+    Ok(Some(profile))
+}
+
+fn saved_connection_error() -> PublicSessionError {
+    PublicSessionError {
+        code: "SAVED_CONNECTION_UNAVAILABLE",
+        message: "The saved SSH connection is unavailable".to_owned(),
+    }
+}
+
+fn sftp_session_error(_error: SftpError) -> PublicSessionError {
+    PublicSessionError {
+        code: "SFTP_STATE_UNAVAILABLE",
+        message: "The terminal SFTP state is unavailable".to_owned(),
+    }
 }
 
 fn public_message(error: &SessionError) -> &'static str {
@@ -442,6 +567,7 @@ mod tests {
                 shell: Some(test_echo_shell()),
                 args: test_echo_args(),
                 cwd: None,
+                connection_profile_id: None,
                 columns: 80,
                 rows: 24,
             },

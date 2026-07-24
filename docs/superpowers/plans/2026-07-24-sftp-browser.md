@@ -13,6 +13,7 @@
 ### Task 1: Add SFTP and native-dialog dependencies
 
 **Files:**
+
 - Modify: `package.json`
 - Modify: `pnpm-lock.yaml`
 - Modify: `src-tauri/Cargo.toml`
@@ -21,12 +22,13 @@
 - Modify: `src-tauri/src/lib.rs`
 
 - [ ] Add `@tauri-apps/plugin-dialog@^2`, `dirs = "6"`, `ssh2 = { version = "0.9", features = ["vendored-openssl"] }`, and `tauri-plugin-dialog = "2"`.
-- [ ] Register `.plugin(tauri_plugin_dialog::init())` and grant only `dialog:allow-open` and `dialog:allow-save`.
+- [ ] Register `.plugin(tauri_plugin_dialog::init())`; open dialogs only from Rust commands so the renderer receives no dialog filesystem permission.
 - [ ] Run `pnpm version:check` and `cargo check --manifest-path src-tauri/Cargo.toml`; expect both to pass.
 
 ### Task 2: Define the Rust SFTP domain boundary with TDD
 
 **Files:**
+
 - Create: `src-tauri/src/sftp/mod.rs`
 - Create: `src-tauri/src/sftp/model.rs`
 - Create: `src-tauri/src/sftp/path.rs`
@@ -51,20 +53,7 @@ fn normalizes_absolute_remote_paths() {
 ```
 
 - [ ] Run `cargo test --manifest-path src-tauri/Cargo.toml sftp::`; confirm RED because the functions do not exist.
-- [ ] Implement camel-case serialized `OpenSftpRequest`, `OpenSftpResponse`, `ListSftpDirectoryResponse`, `SftpDirectoryEntry`, `SftpAuthMethod`, `SftpEntryKind`, `SftpError`, and `PublicSftpError`.
-
-```rust
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenSftpRequest {
-    pub connection_id: String,
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub auth_method: SftpAuthMethod,
-    pub private_key_paths: Vec<String>,
-}
-```
+- [ ] Implement Rust-owned `SftpConnectionProfile`, camel-case serialized responses, `SftpDirectoryEntry`, `SftpAuthMethod`, `SftpEntryKind`, `SftpError`, and `PublicSftpError`.
 
 - [ ] Implement platform-independent POSIX path helpers and stable directory-first sorting.
 - [ ] Run the targeted Rust tests and `cargo fmt --check`; confirm GREEN.
@@ -72,6 +61,7 @@ pub struct OpenSftpRequest {
 ### Task 3: Implement authenticated SFTP connections and commands with TDD
 
 **Files:**
+
 - Create: `src-tauri/src/sftp/connection.rs`
 - Create: `src-tauri/src/sftp/registry.rs`
 - Create: `src-tauri/src/ipc/sftp_commands.rs`
@@ -111,38 +101,30 @@ pub async fn sftp_close(...) -> Result<(), PublicSftpError>;
 ### Task 4: Add typed frontend SFTP services with TDD
 
 **Files:**
+
 - Create: `src/services/sftpClient.spec.ts`
 - Create: `src/services/sftpClient.ts`
-- Create: `src/services/sftpFileDialogs.spec.ts`
-- Create: `src/services/sftpFileDialogs.ts`
 
-- [ ] Write failing tests for exact IPC command names and camel-case payloads, response validation, structured error mapping, multiple upload selection, cancelled dialogs, and download destinations.
+- [ ] Write failing tests for exact IPC command names and capability-only payloads, response validation, structured error mapping, cancelled native transfers, and download file-name suggestions.
 
 ```typescript
 it('opens SFTP without sending the saved password', async () => {
   invoke.mockResolvedValue({ sftpSessionId: 'sftp-1', path: '/home/root' });
-  await client.open(profile);
+  await client.open('terminal-session-1');
   expect(invoke).toHaveBeenCalledWith('sftp_open', {
-    request: {
-      connectionId: 'server-1',
-      host: '10.7.121.81',
-      port: 22,
-      user: 'root',
-      authMethod: 'agent',
-      privateKeyPaths: [],
-    },
+    terminalSessionId: 'terminal-session-1',
   });
 });
 ```
 
-- [ ] Run `pnpm test src/services/sftpClient.spec.ts src/services/sftpFileDialogs.spec.ts`; confirm RED.
-- [ ] Implement validated `SftpClient` methods for open, list, upload, download, and close. Never include `password` in an IPC request.
-- [ ] Wrap `@tauri-apps/plugin-dialog` `open` and `save` in focused functions returning normalized path results.
+- [ ] Run `pnpm test src/services/sftpClient.spec.ts`; confirm RED.
+- [ ] Implement validated `SftpClient` methods for open, list, upload, download, and close. Never include profiles, passwords, private keys, or local paths in an IPC request.
 - [ ] Run targeted service tests; confirm GREEN.
 
 ### Task 5: Track saved-connection ownership per runtime pane with TDD
 
 **Files:**
+
 - Modify: `src/stores/workspaceStore.spec.ts`
 - Modify: `src/stores/workspaceStore.ts`
 
@@ -161,6 +143,7 @@ expect(store.sessionStateForSession('ssh-session')).toBe('ready');
 ### Task 6: Build the SFTP panel with TDD
 
 **Files:**
+
 - Create: `src/components/SftpPanel.spec.ts`
 - Create: `src/components/SftpPanel.vue`
 - Modify: `src/i18n/locale.spec.ts`
@@ -177,6 +160,7 @@ expect(store.sessionStateForSession('ssh-session')).toBe('ready');
 ### Task 7: Integrate SFTP into eligible terminal panes with TDD
 
 **Files:**
+
 - Create: `src/components/TerminalPane.spec.ts`
 - Modify: `src/components/TerminalPane.vue`
 - Modify: `src/components/WorkspacePane.vue`
@@ -192,6 +176,7 @@ expect(store.sessionStateForSession('ssh-session')).toBe('ready');
 ### Task 8: Complete verification
 
 **Files:**
+
 - Modify only files required to correct verification failures.
 
 - [ ] Run Prettier on modified frontend files and `cargo fmt --manifest-path src-tauri/Cargo.toml`.

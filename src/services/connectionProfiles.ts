@@ -1,4 +1,5 @@
 export const CONNECTIONS_STORAGE_KEY = 'fleurterm.connections';
+export const CONNECTION_PROFILES_CHANGED_EVENT = 'fleurterm:connection-profiles-changed';
 
 export type ConnectionMethod = 'ssh' | 'telnet' | 'serial' | 'local';
 export type ConnectionAuthMethod =
@@ -56,6 +57,12 @@ export function loadSavedConnectionProfiles(): OpenableConnectionProfile[] {
     });
   } catch {
     return [];
+  }
+}
+
+export function notifySavedConnectionProfilesChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(CONNECTION_PROFILES_CHANGED_EVENT));
   }
 }
 

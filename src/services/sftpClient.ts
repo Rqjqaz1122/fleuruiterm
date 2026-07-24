@@ -1,7 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 
-import type { OpenableConnectionProfile } from './connectionProfiles';
-
 export type SftpEntryKind = 'directory' | 'file' | 'symlink';
 
 export interface SftpDirectoryEntry {
@@ -38,36 +36,30 @@ export class SftpClientError extends Error {
 export class SftpClient {
   constructor(private readonly invokeCommand: Invoke = invoke) {}
 
-  async open(profile: OpenableConnectionProfile): Promise<SftpOpenResult> {
-    if (profile.method !== 'ssh') {
-      throw new SftpClientError('SFTP_INVALID_PROFILE', 'SFTP requires a saved SSH connection');
-    }
-    return this.call('sftp_open', {
-      request: {
-        connectionId: profile.id,
-        host: profile.host,
-        port: profile.port || 22,
-        user: profile.user,
-        authMethod: profile.authMethod,
-        privateKeyPaths: [...profile.privateKeys],
-      },
-    }).then(parseOpenResult);
+  async open(terminalSessionId: string): Promise<SftpOpenResult> {
+    return this.call('sftp_open', { terminalSessionId }).then(parseOpenResult);
   }
 
   async listDirectory(sftpSessionId: string, path: string): Promise<SftpDirectoryResult> {
     return this.call('sftp_list_directory', { sftpSessionId, path }).then(parseDirectoryResult);
   }
 
-  async uploadFiles(
-    sftpSessionId: string,
-    remoteDirectory: string,
-    localPaths: string[],
-  ): Promise<void> {
-    await this.call('sftp_upload_files', { sftpSessionId, remoteDirectory, localPaths });
+  async uploadFiles(sftpSessionId: string, remoteDirectory: string): Promise<boolean> {
+    return this.call('sftp_upload_files', { sftpSessionId, remoteDirectory }).then(
+      parseTransferred,
+    );
   }
 
-  async downloadFile(sftpSessionId: string, remotePath: string, localPath: string): Promise<void> {
-    await this.call('sftp_download_file', { sftpSessionId, remotePath, localPath });
+  async downloadFile(
+    sftpSessionId: string,
+    remotePath: string,
+    suggestedFileName: string,
+  ): Promise<boolean> {
+    return this.call('sftp_download_file', {
+      sftpSessionId,
+      remotePath,
+      suggestedFileName,
+    }).then(parseTransferred);
   }
 
   async close(sftpSessionId: string): Promise<void> {
@@ -81,6 +73,13 @@ export class SftpClient {
       throw normalizeClientError(error);
     }
   }
+}
+
+function parseTransferred(value: unknown): boolean {
+  if (typeof value !== 'boolean') {
+    throw new SftpClientError('SFTP_INVALID_RESPONSE', 'The SFTP backend returned invalid data');
+  }
+  return value;
 }
 
 function parseOpenResult(value: unknown): SftpOpenResult {

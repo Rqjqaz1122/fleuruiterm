@@ -1,6 +1,8 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CONNECTION_PROFILES_CHANGED_EVENT } from '@/services/connectionProfiles';
+
 import TerminalPane from './TerminalPane.vue';
 
 const workspace = vi.hoisted(() => ({
@@ -84,6 +86,19 @@ describe('TerminalPane SFTP integration', () => {
     await flushPromises();
     await wrapper.get('[data-testid="sftp-open"]').trigger('click');
     expect(wrapper.find('sftp-panel-stub').exists()).toBe(true);
+  });
+
+  it('closes and removes SFTP when the saved profile is deleted', async () => {
+    const wrapper = mountPane();
+    await flushPromises();
+    await wrapper.get('[data-testid="sftp-open"]').trigger('click');
+    localStorage.setItem('fleurterm.connections', '[]');
+
+    window.dispatchEvent(new Event(CONNECTION_PROFILES_CHANGED_EVENT));
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="sftp-open"]').exists()).toBe(false);
+    expect(wrapper.find('sftp-panel-stub').exists()).toBe(false);
   });
 });
 

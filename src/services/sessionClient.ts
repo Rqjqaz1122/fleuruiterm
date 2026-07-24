@@ -21,6 +21,7 @@ export interface OpenLocalSessionOptions {
   shell?: string;
   args?: string[];
   cwd?: string;
+  connectionProfileId?: string;
   columns: number;
   rows: number;
 }
@@ -78,6 +79,7 @@ export class SessionClient {
         shell: options.shell,
         args: options.args ?? [],
         cwd: options.cwd,
+        connectionProfileId: options.connectionProfileId,
         columns: options.columns,
         rows: options.rows,
       },

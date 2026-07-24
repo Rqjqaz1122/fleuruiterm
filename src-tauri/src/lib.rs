@@ -32,7 +32,7 @@ use tauri::{
 };
 use zeroize::Zeroize;
 
-const APP_SETTINGS_FILE_NAME: &str = "settings.json";
+pub(crate) const APP_SETTINGS_FILE_NAME: &str = "settings.json";
 const TERMINAL_WORKSPACE_FILE_NAME: &str = "workspace.json";
 const CREDENTIAL_VAULT_FILE_NAME: &str = "credentials.vault";
 const CREDENTIAL_INSTALLATION_KEY_FILE_NAME: &str = "credentials.key";
@@ -157,7 +157,11 @@ fn load_app_settings(app: tauri::AppHandle) -> Result<AppSettingsPayload, String
 }
 
 #[tauri::command]
-fn save_app_settings(app: tauri::AppHandle, settings: Value) -> Result<String, String> {
+fn save_app_settings(
+    app: tauri::AppHandle,
+    settings: Value,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
     let directory = app
         .path()
         .app_config_dir()
@@ -169,6 +173,9 @@ fn save_app_settings(app: tauri::AppHandle, settings: Value) -> Result<String, S
         serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    state
+        .reconcile_sftp_bindings(&settings)
+        .map_err(|error| error.to_string())?;
     Ok(path.display().to_string())
 }
 
@@ -539,7 +546,6 @@ pub fn run() {
             }
         })
         .manage(AppState::new())
-        .manage(sftp::SftpRegistry::default())
         .manage(ApplicationExitState::default())
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
@@ -599,10 +605,6 @@ pub fn run() {
         let state = app_handle.state::<AppState>();
         if let Err(error) = tauri::async_runtime::block_on(state.close_all()) {
             tracing::error!(code = error.code, message = %error.message, "failed to close terminal sessions during application exit");
-        }
-        let sftp_registry = app_handle.state::<sftp::SftpRegistry>();
-        if let Err(error) = sftp_registry.close_all() {
-            tracing::error!(%error, "failed to close SFTP sessions during application exit");
         }
     });
 }
