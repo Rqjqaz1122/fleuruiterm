@@ -72,6 +72,45 @@ describe('workspace store', () => {
     expect(JSON.stringify(store.workspace.tabs[0])).not.toContain('secret');
   });
 
+  it('tracks the saved connection and state for its runtime session', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+
+    await store.openTab({
+      shell: 'ssh',
+      args: ['deploy@example.com'],
+      connectionProfileId: 'production',
+    });
+
+    expect(store.connectionProfileIdForSession('session-1')).toBe('production');
+    expect(store.sessionStateForSession('session-1')).toBe('ready');
+  });
+
+  it('does not inherit the SSH profile when a local pane is split from its tab', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1', 'split-1', 'pane-2'));
+    const store = useStore();
+    await store.openTab({ connectionProfileId: 'production' });
+
+    await store.splitFocused('vertical');
+
+    expect(store.connectionProfileIdForSession('session-1')).toBe('production');
+    expect(store.connectionProfileIdForSession('session-2')).toBeNull();
+  });
+
+  it('removes runtime connection ownership when the terminal closes', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab({ connectionProfileId: 'production' });
+
+    await store.closeTab('tab-1');
+
+    expect(store.connectionProfileIdForSession('session-1')).toBeNull();
+    expect(store.sessionStateForSession('session-1')).toBeNull();
+  });
+
   it('responds once to a password prompt when a session has a configured password', async () => {
     const client = createClient();
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));

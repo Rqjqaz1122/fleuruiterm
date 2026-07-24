@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
+import SftpPanel from '@/components/SftpPanel.vue';
 import { t } from '@/i18n/locale';
+import {
+  loadSavedConnectionProfiles,
+  type OpenableConnectionProfile,
+} from '@/services/connectionProfiles';
 import { SessionClient } from '@/services/sessionClient';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
@@ -35,9 +40,30 @@ const terminalScrollbarThumbStyle = ref<Record<string, string>>({
   transform: 'translateY(0px)',
 });
 const terminalError = ref<string | null>(null);
+const sftpPanelOpen = ref(false);
 const visibleTerminalError = computed(() =>
   terminalError.value === null ? null : t('error.terminalBridge'),
 );
+const sftpProfile = computed<OpenableConnectionProfile | null>(() => {
+  if (store.sessionStateForSession(props.sessionId) !== 'ready') {
+    return null;
+  }
+  const connectionProfileId = store.connectionProfileIdForSession(props.sessionId);
+  if (connectionProfileId === null) {
+    return null;
+  }
+  return (
+    loadSavedConnectionProfiles().find(
+      (profile) => profile.id === connectionProfileId && profile.method === 'ssh',
+    ) ?? null
+  );
+});
+const paneTitle = computed(() => {
+  const profile = sftpProfile.value;
+  return profile === null
+    ? `${t('pane.local')} · ${props.sessionId.slice(0, 8)}`
+    : `${profile.user}@${profile.host}:${profile.port || 22}`;
+});
 let adapter: TerminalAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
 let disposed = false;
@@ -50,6 +76,12 @@ let scrollbarDragState: {
   maxScroll: number;
   maxThumbTravel: number;
 } | null = null;
+
+watch(sftpProfile, (profile) => {
+  if (profile === null) {
+    sftpPanelOpen.value = false;
+  }
+});
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
@@ -255,9 +287,25 @@ onBeforeUnmount(() => {
     @pointerdown="$emit('focus', paneId)"
     @focusin="$emit('focus', paneId)"
   >
-    <div class="pane-toolbar">
-      <span class="pane-title">{{ t('pane.local') }} · {{ sessionId.slice(0, 8) }}</span>
+    <div class="pane-toolbar" :class="{ 'sftp-available': sftpProfile !== null }">
+      <span class="pane-title">
+        <span v-if="sftpProfile" class="connection-ready-dot" aria-hidden="true" />
+        {{ paneTitle }}
+      </span>
       <div class="pane-actions">
+        <button
+          v-if="sftpProfile"
+          data-testid="sftp-open"
+          class="sftp-toolbar-action"
+          :class="{ active: sftpPanelOpen }"
+          type="button"
+          :aria-label="t('sftp.open')"
+          @pointerdown.stop
+          @click.stop="sftpPanelOpen = !sftpPanelOpen"
+        >
+          <span aria-hidden="true">▰</span>
+          {{ t('sftp.open') }}
+        </button>
         <button
           class="icon-button"
           type="button"
@@ -287,5 +335,10 @@ onBeforeUnmount(() => {
         />
       </div>
     </div>
+    <SftpPanel
+      v-if="sftpPanelOpen && sftpProfile"
+      :profile="sftpProfile"
+      @close="sftpPanelOpen = false"
+    />
   </section>
 </template>

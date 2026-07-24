@@ -3,11 +3,15 @@ mod credential_vault;
 mod credentials;
 pub mod ipc;
 pub mod session;
+pub mod sftp;
 
 use credential_vault::{CredentialVault, CredentialVaultError, platform_device_identifier};
 use ipc::session_commands::{
     AppState, session_ack_output, session_close, session_interrupt, session_open_local,
     session_resize, session_write,
+};
+use ipc::sftp_commands::{
+    sftp_close, sftp_download_file, sftp_list_directory, sftp_open, sftp_upload_files,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -522,6 +526,7 @@ fn apply_window_opacity(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let application = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -534,6 +539,7 @@ pub fn run() {
             }
         })
         .manage(AppState::new())
+        .manage(sftp::SftpRegistry::default())
         .manage(ApplicationExitState::default())
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
@@ -552,6 +558,11 @@ pub fn run() {
             session_resize,
             session_interrupt,
             session_close,
+            sftp_open,
+            sftp_list_directory,
+            sftp_upload_files,
+            sftp_download_file,
+            sftp_close,
             load_app_settings,
             save_app_settings,
             load_terminal_workspace,
@@ -588,6 +599,10 @@ pub fn run() {
         let state = app_handle.state::<AppState>();
         if let Err(error) = tauri::async_runtime::block_on(state.close_all()) {
             tracing::error!(code = error.code, message = %error.message, "failed to close terminal sessions during application exit");
+        }
+        let sftp_registry = app_handle.state::<sftp::SftpRegistry>();
+        if let Err(error) = sftp_registry.close_all() {
+            tracing::error!(%error, "failed to close SFTP sessions during application exit");
         }
     });
 }
