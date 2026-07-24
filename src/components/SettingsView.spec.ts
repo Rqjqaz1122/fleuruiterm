@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { enableAutoUnmount, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +13,8 @@ import {
 } from '@/stores/appSettingsStore';
 
 import SettingsView from './SettingsView.vue';
+
+const globalStyles = readFileSync('src/styles/global.css', 'utf8');
 
 enableAutoUnmount(afterEach);
 
@@ -53,11 +57,15 @@ describe('SettingsView', () => {
 
     await wrapper.get('[data-section="hotkeys"]').trigger('click');
     expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('New terminal');
-    expect(wrapper.findAll('.settings-shortcut-row').length).toBeGreaterThanOrEqual(8);
+    expect(wrapper.findAll('.settings-shortcut-row')).toHaveLength(7);
     expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Open settings');
     expect(wrapper.get('[data-testid="settings-panel"]').text()).toContain('Clear terminal');
+    expect(wrapper.get('[data-testid="settings-panel"]').text()).not.toContain('Editing');
+    expect(wrapper.find('[data-shortcut-id="copy"]').exists()).toBe(false);
+    expect(wrapper.find('[data-shortcut-id="paste"]').exists()).toBe(false);
+    expect(wrapper.find('[data-shortcut-id="select-all"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="settings-panel"]').text()).not.toContain('Split');
-    expect(wrapper.findAll('button[data-testid^="record-"]')).toHaveLength(10);
+    expect(wrapper.findAll('button[data-testid^="record-"]')).toHaveLength(7);
     expect(wrapper.get('[data-testid="settings-panel"]').text()).not.toContain('System shortcut');
 
     await wrapper.get('[data-section="ai"]').trigger('click');
@@ -121,6 +129,59 @@ describe('SettingsView', () => {
     expect(wrapper.get('.settings-value-pill').text()).toBe('简体中文');
     expect(wrapper.get('.settings-nav').text()).toContain('通用');
     expect(wrapper.get('.settings-sidebar-copy').text()).toContain('设置');
+  });
+
+  it('shows complete Chinese labels in terminal settings', async () => {
+    setLocale('zh-CN');
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+    const terminalSettingsText = wrapper.get('[data-testid="settings-panel"]').text();
+
+    expect(terminalSettingsText).toContain('行高');
+    expect(terminalSettingsText).toContain('新打开终端的垂直行距。');
+    expect(terminalSettingsText).toContain('重置终端');
+    expect(terminalSettingsText).not.toContain('Line height');
+    expect(terminalSettingsText).not.toContain('Reset terminal');
+    await wrapper.get('[data-testid="settings-terminal-font"]').trigger('click');
+    expect(wrapper.get('[role="listbox"]').text()).toContain('系统等宽字体');
+  });
+
+  it('selects the terminal font from common monospace options', async () => {
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+
+    expect(wrapper.find('input[aria-label="Font"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="settings-terminal-font"]').trigger('click');
+    expect(wrapper.get('[role="listbox"]').text()).toContain('JetBrains Mono');
+    await wrapper.get('[data-value="JetBrains Mono, monospace"]').trigger('click');
+
+    expect(useAppSettingsStore().terminalSettings.value.fontFamily).toBe(
+      'JetBrains Mono, monospace',
+    );
+  });
+
+  it('keeps a previously saved custom font visible in the selector', async () => {
+    useAppSettingsStore().updateTerminalSettings({ fontFamily: 'Custom Mono, monospace' });
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+
+    expect(wrapper.get('[data-testid="settings-terminal-font"]').text()).toContain(
+      'Custom Mono, monospace',
+    );
+  });
+
+  it('prevents selecting settings copy while keeping editable text selectable', () => {
+    const settingsViewRule = /\.settings-tab\.settings-view\s*\{([^}]*)\}/.exec(globalStyles)?.[1];
+    const editableTextRule =
+      /\.settings-tab\.settings-view input,\s*\.settings-tab\.settings-view textarea,\s*\.settings-tab\.settings-view \[contenteditable='true'\]\s*\{([^}]*)\}/.exec(
+        globalStyles,
+      )?.[1];
+
+    expect(settingsViewRule).toContain('user-select: none');
+    expect(editableTextRule).toContain('user-select: text');
   });
 
   it('shows one software update card in the general section', async () => {
@@ -613,6 +674,40 @@ describe('SettingsView', () => {
     expect(panelText).not.toContain('Authentication token');
     expect(panelText).not.toContain('Streaming output');
     expect(panelText).not.toContain('Working directory');
+  });
+
+  it('does not expose the AI authentication token in the advanced editor', async () => {
+    const appSettings = useAppSettingsStore();
+    appSettings.updateAiSettings({ token: 'secret-token-value' });
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="advanced"]').trigger('click');
+    const editorValue = (
+      wrapper.get('[data-testid="settings-json-editor"]').element as HTMLTextAreaElement
+    ).value;
+    const editorSettings = JSON.parse(editorValue) as { ai?: Record<string, unknown> };
+
+    expect(editorValue).not.toContain('secret-token-value');
+    expect(editorSettings.ai).not.toHaveProperty('token');
+  });
+
+  it('preserves the AI authentication token when applying advanced settings', async () => {
+    const appSettings = useAppSettingsStore();
+    appSettings.updateAiSettings({ model: 'original-model', token: 'secret-token-value' });
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('[data-section="advanced"]').trigger('click');
+    const settingsEditor = wrapper.get('[data-testid="settings-json-editor"]');
+    const editorSettings = JSON.parse(
+      (settingsEditor.element as HTMLTextAreaElement).value,
+    ) as Record<string, unknown> & { ai: Record<string, unknown> };
+    editorSettings.ai.model = 'updated-model';
+    editorSettings.ai.token = 'replacement-token';
+    await settingsEditor.setValue(JSON.stringify(editorSettings));
+    await wrapper.get('[data-testid="apply-settings-json"]').trigger('click');
+
+    expect(appSettings.aiSettings.value.model).toBe('updated-model');
+    expect(appSettings.aiSettings.value.token).toBe('secret-token-value');
   });
 
   it('applies workbench configuration from the advanced editor', async () => {

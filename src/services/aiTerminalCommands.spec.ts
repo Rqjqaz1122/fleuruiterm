@@ -27,14 +27,11 @@ describe('parseAiAssistantContent', () => {
     );
   });
 
-  it('extracts shell code blocks as terminal command candidates', () => {
+  it('keeps shell code blocks as display-only content', () => {
     const parsed = parseAiAssistantContent('```bash\nls -la\n```');
 
-    expect(parsed.terminalCommands).toEqual([
-      expect.objectContaining({
-        command: 'ls -la',
-      }),
-    ]);
+    expect(parsed.terminalCommands).toEqual([]);
+    expect(parsed.displayContent).toBe('```bash\nls -la\n```');
   });
 
   it('extracts FleurTerm app actions and removes action tags from display text', () => {

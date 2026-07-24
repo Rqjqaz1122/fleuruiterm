@@ -9,9 +9,19 @@ use ipc::session_commands::{
     AppState, session_ack_output, session_close, session_interrupt, session_open_local,
     session_resize, session_write,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fs, io::ErrorKind, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fs,
+    io::ErrorKind,
+    io::Write,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tauri::{
     Emitter, Manager, Runtime,
     menu::{AboutMetadataBuilder, Menu, MenuBuilder, MenuItem, SubmenuBuilder},
@@ -19,11 +29,13 @@ use tauri::{
 use zeroize::Zeroize;
 
 const APP_SETTINGS_FILE_NAME: &str = "settings.json";
+const TERMINAL_WORKSPACE_FILE_NAME: &str = "workspace.json";
 const CREDENTIAL_VAULT_FILE_NAME: &str = "credentials.vault";
 const CREDENTIAL_INSTALLATION_KEY_FILE_NAME: &str = "credentials.key";
 const MIN_WINDOW_OPACITY: f64 = 0.58;
 const MAX_WINDOW_OPACITY: f64 = 1.0;
 const MENU_ACTION_EVENT: &str = "fleurterm://menu-action";
+const APPLICATION_EXIT_REQUESTED_EVENT: &str = "fleurterm://application-exit-requested";
 const MENU_NEW_TERMINAL: &str = "new-terminal";
 const MENU_CLOSE_TAB: &str = "close-tab";
 const MENU_NEXT_TAB: &str = "next-tab";
@@ -39,6 +51,63 @@ struct AppSettingsPayload {
     path: String,
     settings: Option<Value>,
     error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedTerminalWorkspace {
+    version: u8,
+    active_tab_id: Option<String>,
+    tabs: Vec<PersistedTerminalTab>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedTerminalTab {
+    id: String,
+    title: String,
+    launch: PersistedTerminalLaunch,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum PersistedTerminalLaunch {
+    Local {
+        shell: Option<String>,
+        args: Option<Vec<String>>,
+        cwd: Option<String>,
+    },
+    SavedConnection {
+        connection_profile_id: String,
+    },
+}
+
+#[derive(Default)]
+struct ApplicationExitState {
+    approved: AtomicBool,
+}
+
+impl ApplicationExitState {
+    fn approve(&self) {
+        self.approved.store(true, Ordering::SeqCst);
+    }
+
+    fn revoke(&self) {
+        self.approved.store(false, Ordering::SeqCst);
+    }
+
+    fn take_approval(&self) -> bool {
+        self.approved.swap(false, Ordering::SeqCst)
+    }
+}
+
+fn should_intercept_application_exit(approved: bool, exit_code: Option<i32>) -> bool {
+    !approved && exit_code != Some(tauri::RESTART_EXIT_CODE)
 }
 
 #[tauri::command]
@@ -92,6 +161,79 @@ fn save_app_settings(app: tauri::AppHandle, settings: Value) -> Result<String, S
     )
     .map_err(|error| error.to_string())?;
     Ok(path.display().to_string())
+}
+
+#[tauri::command]
+fn load_terminal_workspace(
+    app: tauri::AppHandle,
+) -> Result<Option<PersistedTerminalWorkspace>, String> {
+    let directory = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| error.to_string())?;
+    let path = directory.join(TERMINAL_WORKSPACE_FILE_NAME);
+    match fs::read_to_string(path) {
+        Ok(content) => serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|error| format!("Failed to parse terminal workspace: {error}")),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Failed to read terminal workspace: {error}")),
+    }
+}
+
+#[tauri::command]
+fn save_terminal_workspace(
+    app: tauri::AppHandle,
+    workspace: PersistedTerminalWorkspace,
+) -> Result<String, String> {
+    let directory = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let path = directory.join(TERMINAL_WORKSPACE_FILE_NAME);
+    let mut temporary_file =
+        tempfile::NamedTempFile::new_in(&directory).map_err(|error| error.to_string())?;
+    serde_json::to_writer_pretty(temporary_file.as_file_mut(), &workspace)
+        .map_err(|error| error.to_string())?;
+    temporary_file
+        .as_file_mut()
+        .write_all(b"\n")
+        .map_err(|error| error.to_string())?;
+    temporary_file
+        .as_file_mut()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    temporary_file
+        .persist(&path)
+        .map_err(|error| error.error.to_string())?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+fn approve_application_exit(
+    app: tauri::AppHandle,
+    exit_state: tauri::State<'_, ApplicationExitState>,
+) {
+    exit_state.approve();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        app.state::<ApplicationExitState>().revoke();
+    });
+}
+
+#[tauri::command]
+fn revoke_application_exit(exit_state: tauri::State<'_, ApplicationExitState>) {
+    exit_state.revoke();
+}
+
+#[tauri::command]
+fn complete_application_exit(
+    app: tauri::AppHandle,
+    exit_state: tauri::State<'_, ApplicationExitState>,
+) {
+    exit_state.approve();
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -387,6 +529,7 @@ pub fn run() {
             }
         })
         .manage(AppState::new())
+        .manage(ApplicationExitState::default())
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
             let device_identifier = device_identifier_for_vault(platform_device_identifier());
@@ -406,6 +549,11 @@ pub fn run() {
             session_close,
             load_app_settings,
             save_app_settings,
+            load_terminal_workspace,
+            save_terminal_workspace,
+            approve_application_exit,
+            revoke_application_exit,
+            complete_application_exit,
             load_connection_passwords,
             save_connection_password,
             delete_connection_password,
@@ -415,17 +563,26 @@ pub fn run() {
         .expect("failed to build FleurTerm desktop application");
 
     application.run(|app_handle, event| {
-        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-            if let Ok(mut credential_vault) = app_handle
-                .state::<Mutex<CredentialVault>>()
-                .lock()
-            {
-                credential_vault.lock();
+        let tauri::RunEvent::ExitRequested { code, api, .. } = event else {
+            return;
+        };
+        let exit_state = app_handle.state::<ApplicationExitState>();
+        if should_intercept_application_exit(exit_state.take_approval(), code) {
+            api.prevent_exit();
+            if let Err(error) = app_handle.emit(APPLICATION_EXIT_REQUESTED_EVENT, ()) {
+                tracing::error!(%error, "failed to request terminal workspace flush before exit");
             }
-            let state = app_handle.state::<AppState>();
-            if let Err(error) = tauri::async_runtime::block_on(state.close_all()) {
-                tracing::error!(code = error.code, message = %error.message, "failed to close terminal sessions during application exit");
-            }
+            return;
+        }
+        if let Ok(mut credential_vault) = app_handle
+            .state::<Mutex<CredentialVault>>()
+            .lock()
+        {
+            credential_vault.lock();
+        }
+        let state = app_handle.state::<AppState>();
+        if let Err(error) = tauri::async_runtime::block_on(state.close_all()) {
+            tracing::error!(code = error.code, message = %error.message, "failed to close terminal sessions during application exit");
         }
     });
 }
@@ -433,9 +590,11 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL, credential_vault::CredentialVaultError,
-        device_identifier_for_vault, menu_command, normalize_window_opacity,
+        ApplicationExitState, MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL, PersistedTerminalWorkspace,
+        credential_vault::CredentialVaultError, device_identifier_for_vault, menu_command,
+        normalize_window_opacity, should_intercept_application_exit,
     };
+    use serde_json::json;
 
     #[test]
     fn window_opacity_is_limited_to_the_supported_range() {
@@ -457,5 +616,69 @@ mod tests {
         assert_eq!(menu_command(MENU_NEW_TERMINAL), Some("new-terminal"));
         assert_eq!(menu_command(MENU_CLEAR_TERMINAL), Some("clear-terminal"));
         assert_eq!(menu_command("copy"), None);
+    }
+
+    #[test]
+    fn terminal_workspace_schema_rejects_sensitive_launch_fields() {
+        let workspace = json!({
+            "version": 1,
+            "activeTabId": "tab-1",
+            "tabs": [{
+                "id": "tab-1",
+                "title": "Production",
+                "launch": {
+                    "type": "savedConnection",
+                    "connectionProfileId": "production",
+                    "password": "secret"
+                }
+            }]
+        });
+
+        assert!(serde_json::from_value::<PersistedTerminalWorkspace>(workspace).is_err());
+    }
+
+    #[test]
+    fn terminal_workspace_schema_accepts_saved_connection_references() {
+        let workspace = json!({
+            "version": 1,
+            "activeTabId": "tab-1",
+            "tabs": [{
+                "id": "tab-1",
+                "title": "Production",
+                "launch": {
+                    "type": "savedConnection",
+                    "connectionProfileId": "production"
+                }
+            }]
+        });
+
+        let parsed = serde_json::from_value::<PersistedTerminalWorkspace>(workspace)
+            .expect("saved connection workspace should be valid");
+        let serialized = serde_json::to_value(parsed).expect("workspace should serialize");
+
+        assert_eq!(
+            serialized["tabs"][0]["launch"]["connectionProfileId"],
+            "production"
+        );
+        assert!(serialized["tabs"][0]["launch"].get("password").is_none());
+    }
+
+    #[test]
+    fn application_exit_is_intercepted_until_workspace_flush_is_approved() {
+        assert!(should_intercept_application_exit(false, None));
+        assert!(!should_intercept_application_exit(true, None));
+        assert!(!should_intercept_application_exit(
+            false,
+            Some(tauri::RESTART_EXIT_CODE)
+        ));
+    }
+
+    #[test]
+    fn application_exit_approval_is_consumed_once() {
+        let exit_state = ApplicationExitState::default();
+        exit_state.approve();
+
+        assert!(exit_state.take_approval());
+        assert!(!exit_state.take_approval());
     }
 }

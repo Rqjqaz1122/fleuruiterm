@@ -174,6 +174,27 @@ describe('AIPanel', () => {
     );
   });
 
+  it('hides the streaming cursor and approval dock when the turn is stopped', async () => {
+    const conversation = useAiConversationStore();
+    conversation.appendAssistantMessage('');
+    conversation.appendToolCall(createToolCall());
+    conversation.beginTurn('turn-1');
+    conversation.setStatus('awaitingApproval');
+    const runner = createRunnerStub();
+    vi.mocked(runner.stop).mockImplementation(() => conversation.stopTurn());
+    const wrapper = mount(AIPanel, {
+      props: { snapshot: null },
+      global: { provide: { aiConversationRunner: runner } },
+    });
+
+    expect(wrapper.find('.ai-message-cursor').exists()).toBe(true);
+    expect(wrapper.find('.ai-approval-dock').exists()).toBe(true);
+    await wrapper.get('.ai-panel-send').trigger('click');
+
+    expect(wrapper.find('.ai-message-cursor').exists()).toBe(false);
+    expect(wrapper.find('.ai-approval-dock').exists()).toBe(false);
+  });
+
   it('runs a full-access terminal tool and continues with its output', async () => {
     const workspace = useWorkspaceStore();
     workspace.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));

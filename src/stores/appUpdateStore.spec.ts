@@ -90,6 +90,56 @@ describe('appUpdateStore', () => {
     expect(client.restart).toHaveBeenCalledOnce();
   });
 
+  it('flushes application state before an updater restart', async () => {
+    const update = createUpdate();
+    const client = createClient({ check: vi.fn(async () => update) });
+    const store = createAppUpdateStore(client)();
+    const beforeRestart = vi.fn(async () => true);
+    store.setBeforeRestart(beforeRestart);
+    await store.checkForUpdate();
+
+    await store.installUpdate();
+
+    expect(beforeRestart).toHaveBeenCalledOnce();
+    expect(beforeRestart.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(client.restart).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it('does not restart after the application state flush is rejected', async () => {
+    const update = createUpdate();
+    const client = createClient({ check: vi.fn(async () => update) });
+    const store = createAppUpdateStore(client)();
+    store.setBeforeRestart(async () => false);
+    await store.checkForUpdate();
+
+    await store.installUpdate();
+
+    expect(client.restart).not.toHaveBeenCalled();
+    expect(store.status).toBe('error');
+    expect(store.errorCode).toBe('INSTALL_FAILED');
+  });
+
+  it('notifies the application when relaunch fails after a successful flush', async () => {
+    const update = createUpdate();
+    const client = createClient({
+      check: vi.fn(async () => update),
+      restart: vi.fn(async () => {
+        throw new Error('relaunch failed');
+      }),
+    });
+    const store = createAppUpdateStore(client)();
+    const restartFailureHandler = vi.fn();
+    store.setBeforeRestart(async () => true);
+    store.setRestartFailureHandler(restartFailureHandler);
+    await store.checkForUpdate();
+
+    await store.installUpdate();
+
+    expect(restartFailureHandler).toHaveBeenCalledOnce();
+    expect(store.status).toBe('error');
+  });
+
   it('uses stable error codes for check and install failures', async () => {
     const failingCheckClient = createClient({
       check: vi.fn(async () => {

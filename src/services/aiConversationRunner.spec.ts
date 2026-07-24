@@ -44,6 +44,53 @@ describe('AI conversation runner', () => {
     expect(conversation.status.value).toBe('idle');
   });
 
+  it.each([
+    '你当前执行的命令是什么？',
+    '请告诉我刚才执行了什么命令',
+    'What command did you just run?',
+  ])('answers command-review question without another execution: %s', async (prompt) => {
+    const { runner, sendChat, terminalRunner } = createRunner('ask');
+    sendChat.mockResolvedValue(
+      'The command that ran was:\n<terminal-command>ls</terminal-command>',
+    );
+
+    const turn = runner.send(prompt, snapshot());
+    await vi.waitFor(() => {
+      expect(['awaitingApproval', 'idle']).toContain(conversation.status.value);
+    });
+    const settledStatus = conversation.status.value;
+    if (settledStatus === 'awaitingApproval') {
+      runner.stop();
+    }
+    await turn;
+
+    expect(settledStatus).toBe('idle');
+    expect(terminalRunner.execute).not.toHaveBeenCalled();
+    expect(conversation.toolCalls.value).toEqual([]);
+    expect(conversation.messages.value.at(-1)?.content).toContain('```terminal\nls\n```');
+  });
+
+  it('allows an explicit execution request that also asks for an explanation', async () => {
+    const { runner, sendChat, terminalRunner } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce('<terminal-command>ls</terminal-command>')
+      .mockResolvedValueOnce('执行完成。');
+    terminalRunner.execute.mockImplementation(async (call) => completedResult(call, 'file.txt'));
+
+    const turn = runner.send('解释这个命令，然后执行 ls', snapshot());
+    await vi.waitFor(() => {
+      expect(['awaitingApproval', 'idle']).toContain(conversation.status.value);
+    });
+    const executionStatus = conversation.status.value;
+    if (executionStatus === 'awaitingApproval') {
+      runner.approve(conversation.toolCalls.value[0]!.id);
+    }
+    await turn;
+
+    expect(executionStatus).toBe('awaitingApproval');
+    expect(terminalRunner.execute).toHaveBeenCalledOnce();
+  });
+
   it('returns a denied result to the model without executing the command', async () => {
     const { runner, sendChat, terminalRunner } = createRunner('ask');
     sendChat
@@ -62,6 +109,145 @@ describe('AI conversation runner', () => {
       expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining('denied') }),
       ]),
+    );
+  });
+
+  it('does not request approval again when the model repeats a denied command', async () => {
+    const { runner, sendChat, terminalRunner } = createRunner('ask');
+    sendChat.mockResolvedValue('<terminal-command>rm -rf dist</terminal-command>');
+
+    const turn = runner.send('clean it', snapshot());
+    await vi.waitFor(() => {
+      expect(conversation.status.value).toBe('awaitingApproval');
+    });
+    runner.deny(conversation.toolCalls.value[0]!.id);
+    await turn;
+
+    expect(terminalRunner.execute).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledTimes(2);
+    expect(conversation.toolCalls.value).toHaveLength(1);
+    expect(conversation.messages.value.at(-1)?.content).toContain('denied');
+  });
+
+  it('allows the model to request a different command after a denial', async () => {
+    const { runner, sendChat, terminalRunner } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce('<terminal-command>rm -rf dist</terminal-command>')
+      .mockResolvedValueOnce('<terminal-command>ls dist</terminal-command>')
+      .mockResolvedValueOnce('The directory still exists.');
+    terminalRunner.execute.mockImplementation(async (call) => completedResult(call, 'file.js'));
+
+    const turn = runner.send('clean it', snapshot());
+    await vi.waitFor(() => {
+      expect(conversation.status.value).toBe('awaitingApproval');
+    });
+    runner.deny(conversation.toolCalls.value[0]!.id);
+    await vi.waitFor(() => {
+      expect(conversation.toolCalls.value).toHaveLength(2);
+    });
+    runner.approve(conversation.toolCalls.value[1]!.id);
+    await turn;
+
+    expect(terminalRunner.execute).toHaveBeenCalledOnce();
+    expect(terminalRunner.execute.mock.calls[0]?.[0].command).toBe('ls dist');
+    expect(sendChat).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops after an existing terminal target is not found', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"terminal.activate","target":"missing"}</fleurterm-action>',
+      )
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"terminal.openLocal","title":"missing"}</fleurterm-action>',
+      );
+    runAppAction.mockResolvedValueOnce({
+      callId: 'app-terminal.activate',
+      outcome: 'failed',
+      command: 'terminal.activate',
+      output: '',
+      truncated: false,
+      errorMessage: 'Terminal "missing" was not found.',
+    });
+
+    await runner.send('open missing terminal', snapshot());
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(runAppAction).toHaveBeenCalledTimes(1);
+    expect(conversation.messages.value.at(-1)?.content).toBe('Terminal "missing" was not found.');
+  });
+
+  it('provides saved connection targets to the model', async () => {
+    const savedConnections = [
+      {
+        id: 'root-10-7-121-72',
+        name: 'root@10.7.121.72',
+        method: 'ssh',
+        host: '10.7.121.72',
+        user: 'root',
+        port: 22,
+      },
+    ];
+    const { runner, sendChat } = createRunner('ask', savedConnections);
+    sendChat.mockResolvedValueOnce('Ready.');
+
+    await runner.send('open 10.7.121.72', snapshot());
+
+    const requestMessages = sendChat.mock.calls[0]?.[1] as AiChatMessage[];
+    expect(requestMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'system',
+          content: expect.stringContaining('root@10.7.121.72'),
+        }),
+      ]),
+    );
+  });
+
+  it('opens a saved connection action automatically in ask mode', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"connection.open","target":"10.7.121.72"}</fleurterm-action>',
+      )
+      .mockResolvedValueOnce('The SSH terminal is open.');
+
+    await runner.send('open 10.7.121.72', snapshot());
+
+    expect(runAppAction).toHaveBeenCalledWith({
+      type: 'connection.open',
+      target: '10.7.121.72',
+    });
+    expect(sendChat).toHaveBeenCalledTimes(2);
+    expect(
+      conversation.messages.value.some((message) => message.content.includes('<fleurterm-action>')),
+    ).toBe(false);
+  });
+
+  it('does not create a new terminal after a saved connection fails to open', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('auto');
+    sendChat.mockResolvedValueOnce(
+      [
+        '<fleurterm-action>{"type":"connection.open","target":"missing"}</fleurterm-action>',
+        '<fleurterm-action>{"type":"terminal.openSsh","host":"missing","user":"root"}</fleurterm-action>',
+      ].join('\n'),
+    );
+    runAppAction.mockResolvedValueOnce({
+      callId: 'app-connection.open',
+      outcome: 'failed',
+      command: 'connection.open',
+      output: '',
+      truncated: false,
+      errorMessage: 'Saved connection "missing" was not found.',
+    });
+
+    await runner.send('open missing', snapshot());
+
+    expect(runAppAction).toHaveBeenCalledOnce();
+    expect(runAppAction).toHaveBeenCalledWith({ type: 'connection.open', target: 'missing' });
+    expect(conversation.messages.value.at(-1)?.content).toBe(
+      'Saved connection "missing" was not found.',
     );
   });
 
@@ -145,6 +331,7 @@ describe('AI conversation runner', () => {
     await turn;
 
     expect(conversation.status.value).toBe('stopped');
+    expect(conversation.messages.value).toHaveLength(1);
   });
 
   it('limits automatic execution to six tool calls', async () => {
@@ -159,9 +346,26 @@ describe('AI conversation runner', () => {
   });
 });
 
-function createRunner(commandPolicy: AiCommandPolicy) {
+function createRunner(
+  commandPolicy: AiCommandPolicy,
+  savedConnections: Array<{
+    id: string;
+    name: string;
+    method: string;
+    host: string;
+    user: string;
+    port: number;
+  }> = [],
+) {
   const sendChat = vi.fn();
   const terminalRunner = { execute: vi.fn() };
+  const runAppAction = vi.fn(async (action) => ({
+    callId: `app-${action.type}`,
+    outcome: 'completed' as const,
+    command: action.type,
+    output: 'submitted',
+    truncated: false,
+  }));
   const runner = createAiConversationRunner({
     sendChat,
     conversation: useAiConversationStore(),
@@ -177,15 +381,10 @@ function createRunner(commandPolicy: AiCommandPolicy) {
       }),
     },
     terminalRunner,
-    runAppAction: vi.fn(async (action) => ({
-      callId: `app-${action.type}`,
-      outcome: 'completed',
-      command: action.type,
-      output: 'submitted',
-      truncated: false,
-    })),
+    runAppAction,
+    listSavedConnections: () => savedConnections,
   });
-  return { runner, sendChat, terminalRunner };
+  return { runner, runAppAction, sendChat, terminalRunner };
 }
 
 function snapshot(): SessionSnapshot {

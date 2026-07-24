@@ -18,6 +18,7 @@ import {
   type MarkdownInlineSegment,
 } from '@/services/markdownRenderer';
 import { createTerminalToolRunner } from '@/services/terminalToolRunner';
+import type { SavedConnectionSummary } from '@/services/connectionProfiles';
 import {
   type AiConversationMessage,
   type AiConversationStatus,
@@ -30,6 +31,7 @@ const props = defineProps<{
   snapshot: SessionSnapshot | null;
   width?: number;
   runAppAction?: (action: AiAppAction) => Promise<AiToolResult>;
+  listSavedConnections?: () => SavedConnectionSummary[];
 }>();
 
 const emit = defineEmits<{
@@ -50,6 +52,7 @@ const runner =
     settings,
     terminalRunner,
     runAppAction: (action) => runApplicationAction(action),
+    listSavedConnections: props.listSavedConnections,
   });
 const threadElement = ref<HTMLElement | null>(null);
 const resizeState = ref<{ startWidth: number; startX: number } | null>(null);
@@ -245,6 +248,10 @@ function appActionLabel(action: AiAppAction): string {
   switch (action.type) {
     case 'terminal.write':
       return labels.value.run;
+    case 'terminal.activate':
+      return labels.value.openTerminal;
+    case 'connection.open':
+      return labels.value.openSsh;
     case 'terminal.openLocal':
       return labels.value.openTerminal;
     case 'terminal.openSsh':
@@ -381,7 +388,9 @@ const zhAiPanelLabels = {
         >
           <div class="ai-message-content">
             <span
-              v-if="item.message.role === 'assistant' && item.message.content.length === 0"
+              v-if="
+                item.message.role === 'assistant' && item.message.content.length === 0 && turnActive
+              "
               class="ai-message-cursor"
               aria-hidden="true"
             />

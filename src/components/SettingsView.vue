@@ -19,6 +19,7 @@ import {
   type ShortcutSettings,
 } from '@/services/appShortcuts';
 import { detectDesktopPlatform } from '@/services/desktopPlatform';
+import { CONNECTIONS_STORAGE_KEY } from '@/services/connectionProfiles';
 import { settingsClient } from '@/services/settingsClient';
 import {
   defaultTerminalSettings,
@@ -94,11 +95,21 @@ type TerminalColorPalette = {
 type ThemeConfigFile = {
   palettes: Record<ThemeTone, TerminalColorPalette>;
 };
+type AdvancedAiSettings = Omit<AiSettings, 'token'>;
 
-const CONNECTIONS_STORAGE_KEY = 'fleurterm.connections';
 const RECENT_CONNECTIONS_STORAGE_KEY = 'fleurterm.recentConnections';
 const THEME_STORAGE_KEY = 'fleurterm.theme';
 const WINDOW_STORAGE_KEY = 'fleurterm.window';
+const COMMON_TERMINAL_FONT_OPTIONS = [
+  { value: 'Source Code Pro, monospace', label: 'Source Code Pro' },
+  { value: 'JetBrains Mono, monospace', label: 'JetBrains Mono' },
+  { value: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', label: 'SF Mono' },
+  { value: 'Menlo, Monaco, Consolas, monospace', label: 'Menlo' },
+  { value: 'Monaco, Consolas, monospace', label: 'Monaco' },
+  { value: 'Cascadia Code, Consolas, monospace', label: 'Cascadia Code' },
+  { value: 'Fira Code, monospace', label: 'Fira Code' },
+  { value: 'Consolas, monospace', label: 'Consolas' },
+];
 
 const emit = defineEmits<{
   openConnection: [connection: WorkbenchConnection];
@@ -191,7 +202,7 @@ const labels = computed(() => (selectedLocale.value === 'zh-CN' ? zhLabels : enL
 const shortcutPlatform: ShortcutPlatform =
   detectDesktopPlatform() === 'macos' ? 'macos' : 'default';
 const shortcutGroups = computed(() =>
-  (['workspace', 'terminal', 'editing'] as const).map((group) => ({
+  (['workspace', 'terminal'] as const).map((group) => ({
     id: group,
     label: labels.value.hotkeyGroups[group],
     shortcuts: APP_SHORTCUTS.filter((shortcutDefinition) => shortcutDefinition.group === group),
@@ -209,6 +220,20 @@ const languageOptions = computed(() =>
     label: `${option.label} / ${option.nativeLabel}`,
   })),
 );
+const terminalFontOptions = computed(() => {
+  const options = [
+    {
+      value: defaultTerminalSettings.fontFamily,
+      label: labels.value.terminalFontDefault,
+    },
+    ...COMMON_TERMINAL_FONT_OPTIONS,
+    { value: 'monospace', label: labels.value.terminalFontSystem },
+  ];
+  const configuredFont = terminalSettings.value.fontFamily;
+  return options.some((option) => option.value === configuredFont)
+    ? options
+    : [{ value: configuredFont, label: configuredFont }, ...options];
+});
 const sections = computed<SettingsSection[]>(() => [
   {
     id: 'general',
@@ -1034,7 +1059,7 @@ function buildSettingsEditorValue(): string {
       },
       window: windowAppearance.value,
       terminal: terminalSettings.value,
-      ai: aiSettings.value,
+      ai: toAdvancedAiSettings(aiSettings.value),
       shortcuts: shortcutSettings.value,
       workbench: {
         recentConnectionIds: recentConnectionIds.value,
@@ -1060,6 +1085,7 @@ function parseSettingsEditorValue(source: string): {
     throw new Error('locale must be en-US or zh-CN');
   }
   const theme = parsed.theme as { mode?: unknown; config?: ThemeConfigFile } | undefined;
+  const advancedAiSettings = (parsed.ai as Partial<AdvancedAiSettings> | undefined) ?? {};
   const workbench = parsed.workbench as
     { connections?: WorkbenchConnection[]; recentConnectionIds?: string[] } | undefined;
   if (theme !== undefined && !isThemeMode(theme.mode)) {
@@ -1084,7 +1110,11 @@ function parseSettingsEditorValue(source: string): {
     terminal: sanitizeTerminalSettings(
       (parsed.terminal as Partial<TerminalSettings> | undefined) ?? terminalSettings.value,
     ),
-    ai: sanitizeAiSettings((parsed.ai as Partial<AiSettings> | undefined) ?? aiSettings.value),
+    ai: sanitizeAiSettings({
+      ...aiSettings.value,
+      ...advancedAiSettings,
+      token: aiSettings.value.token,
+    }),
     shortcuts: sanitizeShortcutSettings(parsed.shortcuts ?? shortcutSettings.value),
     workbench: {
       connections: normalizeConnectionList(workbench.connections),
@@ -1092,6 +1122,20 @@ function parseSettingsEditorValue(source: string): {
         (item): item is string => typeof item === 'string',
       ),
     },
+  };
+}
+
+function toAdvancedAiSettings(settings: AiSettings): AdvancedAiSettings {
+  return {
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    tokenHeaderName: settings.tokenHeaderName,
+    tokenPrefix: settings.tokenPrefix,
+    streamingEnabled: settings.streamingEnabled,
+    contextEnabled: settings.contextEnabled,
+    includeWorkingDirectory: settings.includeWorkingDirectory,
+    commandPolicy: settings.commandPolicy,
   };
 }
 
@@ -1432,6 +1476,8 @@ const enLabels = {
   terminalSectionTitle: 'Terminal',
   terminalFontTitle: 'Font',
   terminalFontDescription: 'Monospace stack used by newly opened terminals.',
+  terminalFontDefault: 'FleurTerm default',
+  terminalFontSystem: 'System monospace',
   terminalFontValue: 'Source Code Pro / JetBrains Mono',
   terminalFontSizeTitle: 'Font size',
   terminalFontSizeDescription: 'Text size used by newly opened terminals.',
@@ -1459,7 +1505,6 @@ const enLabels = {
   hotkeyGroups: {
     workspace: 'Workspace',
     terminal: 'Terminal',
-    editing: 'Editing',
   },
   hotkeyActions: {
     'new-terminal': 'New terminal',
@@ -1469,9 +1514,6 @@ const enLabels = {
     'open-settings': 'Open settings',
     'toggle-ai': 'Toggle AI assistant',
     'clear-terminal': 'Clear terminal',
-    copy: 'Copy',
-    paste: 'Paste',
-    'select-all': 'Select all',
   },
   aiSectionTitle: 'AI',
   aiProviderTitle: 'Provider',
@@ -1651,16 +1693,22 @@ const zhLabels: typeof enLabels = {
   terminalSectionTitle: '终端',
   terminalFontTitle: '字体',
   terminalFontDescription: '终端使用等宽字体栈渲染。',
+  terminalFontDefault: 'FleurTerm 默认字体',
+  terminalFontSystem: '系统等宽字体',
   terminalFontValue: 'Source Code Pro / JetBrains Mono',
   terminalFontSizeTitle: '字号',
   terminalFontSizeDescription: '当前终端渲染字号。',
+  terminalLineHeightTitle: '行高',
+  terminalLineHeightDescription: '新打开终端的垂直行距。',
   terminalScrollbackTitle: '回滚行数',
   terminalScrollbackDescription: '保留在内存中的终端输出行数。',
+  terminalScrollbackUnit: '行',
   terminalScrollbackValue: '25000 行',
   terminalScrollOnInputTitle: '输入时滚动到底部',
   terminalScrollOnInputDescription: '输入内容时回到最新输出位置。',
   terminalCursorTitle: '光标闪烁',
   terminalCursorDescription: '终端聚焦时显示闪烁光标。',
+  terminalReset: '重置终端',
   hotkeysSectionTitle: '快捷键',
   hotkeysDescription: '点击快捷键即可录制新的组合键。',
   hotkeysPlatformHint: '修改后立即生效。',
@@ -1674,7 +1722,6 @@ const zhLabels: typeof enLabels = {
   hotkeyGroups: {
     workspace: '工作区',
     terminal: '终端',
-    editing: '编辑',
   },
   hotkeyActions: {
     'new-terminal': '新建终端',
@@ -1684,9 +1731,6 @@ const zhLabels: typeof enLabels = {
     'open-settings': '打开设置',
     'toggle-ai': '切换 AI 助手',
     'clear-terminal': '清空终端',
-    copy: '复制',
-    paste: '粘贴',
-    'select-all': '全选',
   },
   aiSectionTitle: 'AI',
   aiProviderTitle: '服务提供方',
@@ -1914,18 +1958,13 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.terminalFontDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <label class="settings-compact-input">
-                      <input
-                        :value="terminalSettings.fontFamily"
-                        :aria-label="labels.terminalFontTitle"
-                        @input="
-                          updateTerminalSetting(
-                            'fontFamily',
-                            ($event.target as HTMLInputElement).value,
-                          )
-                        "
-                      />
-                    </label>
+                    <AppSelect
+                      :model-value="terminalSettings.fontFamily"
+                      :options="terminalFontOptions"
+                      :aria-label="labels.terminalFontTitle"
+                      test-id="settings-terminal-font"
+                      @update:model-value="updateTerminalSetting('fontFamily', $event)"
+                    />
                   </div>
                 </div>
 

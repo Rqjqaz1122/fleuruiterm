@@ -3,6 +3,20 @@ import { describe, expect, it } from 'vitest';
 import { formatToolResultMessage, parseAssistantToolResponse } from './aiToolProtocol';
 
 describe('AI tool protocol', () => {
+  it('keeps explanatory terminal code blocks display-only', () => {
+    const content = [
+      'The command that ran was:',
+      '```terminal',
+      '{ ls; }; __fleurterm_exit=$?; printf \'\\n__FLEURTERM_DONE_xxx:%s\\n\' "$__fleurterm_exit"',
+      '```',
+    ].join('\n');
+
+    const response = parseAssistantToolResponse(content);
+
+    expect(response.displayContent).toBe(content);
+    expect(response.toolCalls).toEqual([]);
+  });
+
   it('creates a stable terminal tool call and removes the raw tag from visible text', () => {
     const response = parseAssistantToolResponse(
       'Checking.\n<terminal-command>pwd</terminal-command>',
@@ -30,5 +44,29 @@ describe('AI tool protocol', () => {
     expect(message).toContain('Tool call call-1 completed');
     expect(message).toContain('Command: pwd');
     expect(message).toContain('/Users/fleurui');
+  });
+
+  it('parses an action that activates an existing terminal without creating one', () => {
+    const response = parseAssistantToolResponse(
+      '<fleurterm-action>{"type":"terminal.activate","target":"production"}</fleurterm-action>',
+    );
+
+    expect(response.appActions).toEqual([
+      expect.objectContaining({
+        action: { type: 'terminal.activate', target: 'production' },
+      }),
+    ]);
+  });
+
+  it('parses an action that opens a saved connection', () => {
+    const response = parseAssistantToolResponse(
+      '<fleurterm-action>{"type":"connection.open","target":"10.7.121.72"}</fleurterm-action>',
+    );
+
+    expect(response.appActions).toEqual([
+      expect.objectContaining({
+        action: { type: 'connection.open', target: '10.7.121.72' },
+      }),
+    ]);
   });
 });
