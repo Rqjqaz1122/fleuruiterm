@@ -64,6 +64,8 @@ The SFTP connection reuses the selected saved SSH profile:
 
 Passwords and key contents are never returned in SFTP command results, logged, or persisted in SFTP state. Command errors expose stable public codes and user-safe messages without host secrets or local path contents.
 
+Before authentication, the backend verifies the server host key against the user's OpenSSH `known_hosts` file. A changed or unknown key is rejected. Because SFTP is available only after the system SSH terminal is connected, the user can review and accept a new host key through the normal SSH prompt before opening SFTP; FleurTerm never silently trusts an unknown server.
+
 Remote paths are normalized as POSIX paths. Entry names cannot inject separators into upload destinations. Local upload paths and download destinations must come from the native dialog result and are validated again in Rust. Upload uses truncating file creation only after explicit file selection; download uses the destination explicitly selected by the user.
 
 ## Data Model
