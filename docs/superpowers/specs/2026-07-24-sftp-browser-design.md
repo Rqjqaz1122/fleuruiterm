@@ -106,6 +106,14 @@ Clicking a directory navigates into it. Double-clicking is not required. Downloa
 
 The UI supports existing English and Simplified Chinese locales. Controls include accessible names, disabled states during conflicting operations, keyboard activation, and non-color status text.
 
+### Resizable Panel and Motion
+
+The panel exposes a dedicated resize handle along its top edge. Dragging the handle upward increases the panel height and dragging it downward decreases the height. Pointer capture keeps the interaction stable when the pointer leaves the handle. The panel height is clamped between `220px` and 70% of the current terminal pane height, so the terminal remains usable. The chosen height belongs only to the mounted panel instance and is not persisted after the panel closes.
+
+During a resize, the panel disables text selection and uses a vertical-resize cursor. Pointer listeners and capture are released when the gesture ends, is cancelled, or the component unmounts.
+
+Opening and closing use a 180ms transition that combines opacity, a small vertical offset, and the panel's bounded height. The terminal and panel remain in the same flex layout throughout the transition. When the operating system requests reduced motion through `prefers-reduced-motion`, the transition is disabled without changing the open and close behavior.
+
 ## Lifecycle and Error Handling
 
 Opening the panel establishes SFTP and lists the server's home directory. If connection or authentication fails, the panel remains open with a retry action. A failed listing preserves the previous successful entries. A failed upload or download reports the affected operation and allows retry without reconnecting when the SFTP session remains usable.
