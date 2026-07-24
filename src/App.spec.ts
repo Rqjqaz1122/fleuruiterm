@@ -179,6 +179,44 @@ describe('FleurTerm app shell', () => {
     });
   });
 
+  it('restores the settings tab position and active state', async () => {
+    vi.mocked(workspacePersistenceClient.load).mockResolvedValue({
+      version: 2,
+      activeTabId: 'app-settings',
+      settingsTabIndex: 0,
+      tabs: [
+        {
+          id: 'saved-local',
+          title: 'Project',
+          launch: { type: 'local', shell: '/bin/zsh' },
+        },
+      ],
+    });
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async (options) => {
+      store.workspace = createWorkspace(
+        'runtime-session',
+        ids('runtime-local', 'runtime-pane'),
+        options.title,
+        { type: 'local', shell: options.shell },
+      );
+    });
+
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(wrapper.findAll('.tab-item').map((tab) => tab.attributes('data-tab-id'))).toEqual([
+        'app-settings',
+        'runtime-local',
+      ]),
+    );
+    expect(
+      wrapper.get('[data-tab-id="app-settings"] [role="tab"]').attributes('aria-selected'),
+    ).toBe('true');
+    expect(wrapper.get('#settings-panel').attributes('aria-hidden')).toBe('false');
+  });
+
   it('persists terminal tab changes after workspace restoration is ready', async () => {
     const store = useWorkspaceStore();
     mount(App, { global: { stubs: { TerminalPane: true } } });
@@ -189,8 +227,9 @@ describe('FleurTerm app shell', () => {
 
     await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledOnce());
     expect(workspacePersistenceClient.save).toHaveBeenCalledWith({
-      version: 1,
+      version: 2,
       activeTabId: 'tab-1',
+      settingsTabIndex: null,
       tabs: [
         {
           id: 'tab-1',
@@ -199,6 +238,86 @@ describe('FleurTerm app shell', () => {
         },
       ],
     });
+  });
+
+  it('persists the settings tab even when no terminal workspace state changes', async () => {
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+
+    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledOnce());
+    expect(workspacePersistenceClient.save).toHaveBeenCalledWith({
+      version: 2,
+      activeTabId: 'app-settings',
+      settingsTabIndex: 0,
+      tabs: [],
+    });
+  });
+
+  it('persists settings opened during startup restoration', async () => {
+    const pendingLoad = deferredPromise<null>();
+    vi.mocked(workspacePersistenceClient.load).mockReturnValue(pendingLoad.promise);
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(true);
+    expect(workspacePersistenceClient.save).not.toHaveBeenCalled();
+
+    pendingLoad.resolve(null);
+
+    await vi.waitFor(() => expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(true));
+    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledWith({
+      version: 2,
+      activeTabId: 'app-settings',
+      settingsTabIndex: 0,
+      tabs: [],
+    }));
+  });
+
+  it('keeps SSH, local, and settings tabs in the persisted application workspace', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace(
+      'ssh-session',
+      ids('ssh-tab', 'ssh-pane'),
+      'Production',
+      { type: 'savedConnection', connectionProfileId: 'production' },
+    );
+    store.openTab = vi.fn(async () => {
+      store.workspace = addTab(
+        store.workspace,
+        'local-session',
+        ids('local-tab', 'local-pane'),
+        'Local Terminal 2',
+        { type: 'local' },
+      );
+    });
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    vi.mocked(workspacePersistenceClient.save).mockClear();
+
+    await wrapper.get('[aria-label="New terminal"]').trigger('click');
+
+    await vi.waitFor(() =>
+      expect(workspacePersistenceClient.save).toHaveBeenLastCalledWith({
+        version: 2,
+        activeTabId: 'local-tab',
+        settingsTabIndex: 1,
+        tabs: [
+          {
+            id: 'ssh-tab',
+            title: 'Production',
+            launch: { type: 'savedConnection', connectionProfileId: 'production' },
+          },
+          {
+            id: 'local-tab',
+            title: 'Local Terminal 2',
+            launch: { type: 'local' },
+          },
+        ],
+      }),
+    );
   });
 
   it('serializes rapid workspace saves without letting an older snapshot win', async () => {
@@ -221,8 +340,9 @@ describe('FleurTerm app shell', () => {
 
     await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledTimes(2));
     expect(workspacePersistenceClient.save).toHaveBeenLastCalledWith({
-      version: 1,
+      version: 2,
       activeTabId: 'tab-2',
+      settingsTabIndex: null,
       tabs: [
         {
           id: 'tab-2',
@@ -264,13 +384,124 @@ describe('FleurTerm app shell', () => {
     await expect(closeRequestHandler()).resolves.toBe(true);
 
     expect(workspacePersistenceClient.save).toHaveBeenCalledWith({
-      version: 1,
+      version: 2,
       activeTabId: 'tab-1',
+      settingsTabIndex: null,
       tabs: [
         {
           id: 'tab-1',
           title: 'Local project',
           launch: { type: 'local' },
+        },
+      ],
+    });
+  });
+
+  it('waits for an in-flight terminal open before capturing the final workspace', async () => {
+    const pendingOpen = deferredPromise<void>();
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace(
+      'ssh-session',
+      ids('ssh-tab', 'ssh-pane'),
+      'Production',
+      { type: 'savedConnection', connectionProfileId: 'production' },
+    );
+    store.openTab = vi.fn(async () => {
+      await pendingOpen.promise;
+      store.workspace = addTab(
+        store.workspace,
+        'local-session',
+        ids('local-tab', 'local-pane'),
+        'Local Terminal 2',
+        { type: 'local' },
+      );
+    });
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+    await vi.waitFor(() => expect(workspacePersistenceClient.load).toHaveBeenCalledOnce());
+    await wrapper.get('[aria-label="New terminal"]').trigger('click');
+    const closeRequestHandler = desktopWindowLifecycleMock.closeRequestHandler;
+    if (closeRequestHandler === null) {
+      throw new Error('expected a close request handler');
+    }
+
+    const closeRequest = closeRequestHandler();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(workspacePersistenceClient.save).not.toHaveBeenCalled();
+    pendingOpen.resolve(undefined);
+    await expect(closeRequest).resolves.toBe(true);
+    expect(workspacePersistenceClient.save).toHaveBeenLastCalledWith({
+      version: 2,
+      activeTabId: 'local-tab',
+      settingsTabIndex: null,
+      tabs: [
+        {
+          id: 'ssh-tab',
+          title: 'Production',
+          launch: { type: 'savedConnection', connectionProfileId: 'production' },
+        },
+        {
+          id: 'local-tab',
+          title: 'Local Terminal 2',
+          launch: { type: 'local' },
+        },
+      ],
+    });
+  });
+
+  it('includes settings requested during restoration in the final close snapshot', async () => {
+    const pendingLoad = deferredPromise<{
+      version: 2;
+      activeTabId: string;
+      settingsTabIndex: null;
+      tabs: Array<{
+        id: string;
+        title: string;
+        launch: { type: 'local'; shell: string };
+      }>;
+    }>();
+    vi.mocked(workspacePersistenceClient.load).mockReturnValue(pendingLoad.promise);
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async (options) => {
+      store.workspace = createWorkspace(
+        'runtime-session',
+        ids('runtime-local', 'runtime-pane'),
+        options.title,
+        { type: 'local', shell: options.shell },
+      );
+    });
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+    await vi.waitFor(() => expect(desktopWindowLifecycleMock.closeRequestHandler).not.toBeNull());
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    const closeRequestHandler = desktopWindowLifecycleMock.closeRequestHandler;
+    if (closeRequestHandler === null) {
+      throw new Error('expected a close request handler');
+    }
+
+    const closeRequest = closeRequestHandler();
+    pendingLoad.resolve({
+      version: 2,
+      activeTabId: 'saved-local',
+      settingsTabIndex: null,
+      tabs: [
+        {
+          id: 'saved-local',
+          title: 'Project',
+          launch: { type: 'local', shell: '/bin/zsh' },
+        },
+      ],
+    });
+
+    await expect(closeRequest).resolves.toBe(true);
+    expect(workspacePersistenceClient.save).toHaveBeenLastCalledWith({
+      version: 2,
+      activeTabId: 'app-settings',
+      settingsTabIndex: 1,
+      tabs: [
+        {
+          id: 'runtime-local',
+          title: 'Project',
+          launch: { type: 'local', shell: '/bin/zsh' },
         },
       ],
     });
@@ -392,6 +623,20 @@ describe('FleurTerm app shell', () => {
     expect(store.workspace.activeTabId).toBe('tab-1');
     expect(wrapper.get('#terminal-panel-tab-1').attributes('aria-hidden')).toBe('false');
     expect(wrapper.get('#settings-panel').attributes('aria-hidden')).toBe('true');
+    await vi.waitFor(() =>
+      expect(workspacePersistenceClient.save).toHaveBeenLastCalledWith({
+        version: 2,
+        activeTabId: 'tab-1',
+        settingsTabIndex: 1,
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'Local Terminal 1',
+            launch: { type: 'local' },
+          },
+        ],
+      }),
+    );
   });
 
   it('keeps the terminal workspace laid out and inert while settings is active', async () => {
@@ -424,6 +669,20 @@ describe('FleurTerm app shell', () => {
 
     expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(false);
     expect(wrapper.get('#terminal-panel-tab-1').attributes('aria-hidden')).toBe('false');
+    await vi.waitFor(() =>
+      expect(workspacePersistenceClient.save).toHaveBeenLastCalledWith({
+        version: 2,
+        activeTabId: 'tab-1',
+        settingsTabIndex: null,
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'Local Terminal 1',
+            launch: { type: 'local' },
+          },
+        ],
+      }),
+    );
   });
 
   it('closes settings to the start page when no terminal exists', async () => {
@@ -786,6 +1045,47 @@ describe('FleurTerm app shell', () => {
       'Terminal 1',
     ]);
     expect(store.workspace.tabs.map((tab) => tab.id)).toEqual(['tab-2', 'tab-1']);
+  });
+
+  it('persists the settings tab after moving it before terminal tabs', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    const wrapper = mount(App, {
+      global: { stubs: { TerminalPane: true } },
+    });
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalled());
+    vi.mocked(workspacePersistenceClient.save).mockClear();
+
+    wrapper
+      .getComponent({ name: 'TerminalTabs' })
+      .vm.$emit('reorder', 'app-settings', 'tab-1', 'before');
+
+    await vi.waitFor(() =>
+      expect(workspacePersistenceClient.save).toHaveBeenLastCalledWith({
+        version: 2,
+        activeTabId: 'app-settings',
+        settingsTabIndex: 0,
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'Local Terminal 1',
+            launch: { type: 'local' },
+          },
+          {
+            id: 'tab-2',
+            title: 'Local Terminal 2',
+            launch: { type: 'local' },
+          },
+        ],
+      }),
+    );
+    expect(wrapper.findAll('.tab-item').map((tab) => tab.attributes('data-tab-id'))).toEqual([
+      'app-settings',
+      'tab-1',
+      'tab-2',
+    ]);
   });
 
   it('updates the full application shell when the language changes', async () => {

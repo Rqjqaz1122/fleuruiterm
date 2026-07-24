@@ -1,8 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 
+import { SETTINGS_TAB_ID } from '@/domain/appTab';
 import type { TerminalLaunch, WorkspaceState } from '@/domain/workspace';
 
-const WORKSPACE_SCHEMA_VERSION = 1;
+const LEGACY_WORKSPACE_SCHEMA_VERSION = 1;
+const WORKSPACE_SCHEMA_VERSION = 2;
 
 export interface PersistedTerminalTab {
   id: string;
@@ -13,7 +15,14 @@ export interface PersistedTerminalTab {
 export interface PersistedWorkspace {
   version: typeof WORKSPACE_SCHEMA_VERSION;
   activeTabId: string | null;
+  settingsTabIndex: number | null;
   tabs: PersistedTerminalTab[];
+}
+
+export interface ApplicationTabPersistenceState {
+  activeTabId: string | null;
+  settingsTabOpen: boolean;
+  tabOrder: readonly string[];
 }
 
 type InvokeCommand = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -45,10 +54,24 @@ export class WorkspacePersistenceClient {
   }
 }
 
-export function createPersistedWorkspace(workspace: WorkspaceState): PersistedWorkspace {
+export function createPersistedWorkspace(
+  workspace: WorkspaceState,
+  applicationTabs: ApplicationTabPersistenceState = {
+    activeTabId: workspace.activeTabId,
+    settingsTabOpen: false,
+    tabOrder: workspace.tabs.map((tab) => tab.id),
+  },
+): PersistedWorkspace {
+  const applicationTabOrder = normalizeApplicationTabOrder(workspace, applicationTabs);
+  const activeTabId = applicationTabOrder.includes(applicationTabs.activeTabId ?? '')
+    ? applicationTabs.activeTabId
+    : (workspace.activeTabId ?? applicationTabOrder[0] ?? null);
   return {
     version: WORKSPACE_SCHEMA_VERSION,
-    activeTabId: workspace.activeTabId,
+    activeTabId,
+    settingsTabIndex: applicationTabs.settingsTabOpen
+      ? applicationTabOrder.indexOf(SETTINGS_TAB_ID)
+      : null,
     tabs: workspace.tabs.map(({ id, title, launch }) => ({
       id,
       title,
@@ -58,11 +81,7 @@ export function createPersistedWorkspace(workspace: WorkspaceState): PersistedWo
 }
 
 export function parsePersistedWorkspace(value: unknown): PersistedWorkspace | null {
-  if (
-    !isRecord(value) ||
-    value.version !== WORKSPACE_SCHEMA_VERSION ||
-    !Array.isArray(value.tabs)
-  ) {
+  if (!isRecord(value) || !Array.isArray(value.tabs)) {
     return null;
   }
 
@@ -77,11 +96,69 @@ export function parsePersistedWorkspace(value: unknown): PersistedWorkspace | nu
     tabs.push(tab);
   }
 
-  const activeTabId = value.activeTabId;
-  if (activeTabId !== null && (typeof activeTabId !== 'string' || !tabIds.has(activeTabId))) {
+  if (value.version === LEGACY_WORKSPACE_SCHEMA_VERSION) {
+    const activeTabId = parseActiveTabId(value.activeTabId, tabIds, false);
+    return activeTabId === undefined
+      ? null
+      : { version: WORKSPACE_SCHEMA_VERSION, activeTabId, settingsTabIndex: null, tabs };
+  }
+  if (value.version !== WORKSPACE_SCHEMA_VERSION) {
     return null;
   }
-  return { version: WORKSPACE_SCHEMA_VERSION, activeTabId, tabs };
+  const settingsTabIndex = parseSettingsTabIndex(value.settingsTabIndex, tabs.length);
+  if (settingsTabIndex === undefined) {
+    return null;
+  }
+  const activeTabId = parseActiveTabId(value.activeTabId, tabIds, settingsTabIndex !== null);
+  return activeTabId === undefined
+    ? null
+    : { version: WORKSPACE_SCHEMA_VERSION, activeTabId, settingsTabIndex, tabs };
+}
+
+function normalizeApplicationTabOrder(
+  workspace: WorkspaceState,
+  applicationTabs: ApplicationTabPersistenceState,
+): string[] {
+  const availableTabIds = [
+    ...workspace.tabs.map((tab) => tab.id),
+    ...(applicationTabs.settingsTabOpen ? [SETTINGS_TAB_ID] : []),
+  ];
+  const availableTabIdSet = new Set(availableTabIds);
+  const normalizedTabOrder: string[] = [];
+  for (const tabId of [...applicationTabs.tabOrder, ...availableTabIds]) {
+    if (availableTabIdSet.has(tabId) && !normalizedTabOrder.includes(tabId)) {
+      normalizedTabOrder.push(tabId);
+    }
+  }
+  return normalizedTabOrder;
+}
+
+function parseSettingsTabIndex(value: unknown, terminalTabCount: number): number | null | undefined {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= terminalTabCount
+    ? value
+    : undefined;
+}
+
+function parseActiveTabId(
+  value: unknown,
+  terminalTabIds: ReadonlySet<string>,
+  settingsTabOpen: boolean,
+): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  return terminalTabIds.has(value) || (settingsTabOpen && value === SETTINGS_TAB_ID)
+    ? value
+    : undefined;
 }
 
 function parsePersistedTerminalTab(value: unknown): PersistedTerminalTab | null {
@@ -128,7 +205,10 @@ function cloneTerminalLaunch(launch: TerminalLaunch): TerminalLaunch {
 
 function optionalString(value: Record<string, unknown>, key: string): string | undefined | null {
   const field = value[key];
-  return field === undefined || typeof field === 'string' ? field : null;
+  if (field === undefined || field === null) {
+    return undefined;
+  }
+  return typeof field === 'string' ? field : null;
 }
 
 function optionalStringArray(
@@ -136,7 +216,7 @@ function optionalStringArray(
   key: string,
 ): string[] | undefined | null {
   const field = value[key];
-  if (field === undefined) {
+  if (field === undefined || field === null) {
     return undefined;
   }
   return Array.isArray(field) && field.every((item) => typeof item === 'string')

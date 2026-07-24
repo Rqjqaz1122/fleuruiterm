@@ -58,6 +58,8 @@ struct AppSettingsPayload {
 struct PersistedTerminalWorkspace {
     version: u8,
     active_tab_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settings_tab_index: Option<usize>,
     tabs: Vec<PersistedTerminalTab>,
 }
 
@@ -78,8 +80,11 @@ struct PersistedTerminalTab {
 )]
 enum PersistedTerminalLaunch {
     Local {
+        #[serde(skip_serializing_if = "Option::is_none")]
         shell: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         args: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
     },
     SavedConnection {
@@ -590,9 +595,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApplicationExitState, MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL, PersistedTerminalWorkspace,
-        credential_vault::CredentialVaultError, device_identifier_for_vault, menu_command,
-        normalize_window_opacity, should_intercept_application_exit,
+        ApplicationExitState, MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL, PersistedTerminalLaunch,
+        PersistedTerminalTab, PersistedTerminalWorkspace, credential_vault::CredentialVaultError,
+        device_identifier_for_vault, menu_command, normalize_window_opacity,
+        should_intercept_application_exit,
     };
     use serde_json::json;
 
@@ -661,6 +667,49 @@ mod tests {
             "production"
         );
         assert!(serialized["tabs"][0]["launch"].get("password").is_none());
+    }
+
+    #[test]
+    fn terminal_workspace_omits_absent_local_launch_fields() {
+        let workspace = PersistedTerminalWorkspace {
+            version: 1,
+            active_tab_id: Some("local-tab".to_string()),
+            settings_tab_index: None,
+            tabs: vec![PersistedTerminalTab {
+                id: "local-tab".to_string(),
+                title: "Local".to_string(),
+                launch: PersistedTerminalLaunch::Local {
+                    shell: None,
+                    args: None,
+                    cwd: None,
+                },
+            }],
+        };
+
+        let serialized = serde_json::to_value(workspace).expect("workspace should serialize");
+
+        assert_eq!(serialized["tabs"][0]["launch"], json!({ "type": "local" }));
+    }
+
+    #[test]
+    fn terminal_workspace_schema_accepts_settings_tab_metadata() {
+        let workspace = json!({
+            "version": 2,
+            "activeTabId": "app-settings",
+            "settingsTabIndex": 1,
+            "tabs": [{
+                "id": "local-tab",
+                "title": "Local",
+                "launch": { "type": "local" }
+            }]
+        });
+
+        let parsed = serde_json::from_value::<PersistedTerminalWorkspace>(workspace)
+            .expect("settings tab metadata should be valid");
+        let serialized = serde_json::to_value(parsed).expect("workspace should serialize");
+
+        assert_eq!(serialized["settingsTabIndex"], 1);
+        assert_eq!(serialized["activeTabId"], "app-settings");
     }
 
     #[test]

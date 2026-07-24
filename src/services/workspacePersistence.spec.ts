@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { SETTINGS_TAB_ID } from '@/domain/appTab';
 import { createWorkspace } from '@/domain/workspace';
 
 import {
@@ -10,8 +11,9 @@ import {
 } from './workspacePersistence';
 
 const persistedWorkspace: PersistedWorkspace = {
-  version: 1,
+  version: 2,
   activeTabId: 'tab-2',
+  settingsTabIndex: null,
   tabs: [
     {
       id: 'tab-1',
@@ -26,6 +28,12 @@ const persistedWorkspace: PersistedWorkspace = {
   ],
 };
 
+const legacyPersistedWorkspace = {
+  version: 1,
+  activeTabId: persistedWorkspace.activeTabId,
+  tabs: persistedWorkspace.tabs,
+};
+
 describe('workspace persistence', () => {
   it('serializes launch metadata without runtime session identifiers', () => {
     const workspace = createWorkspace(
@@ -38,8 +46,9 @@ describe('workspace persistence', () => {
     const serialized = createPersistedWorkspace(workspace);
 
     expect(serialized).toEqual({
-      version: 1,
+      version: 2,
       activeTabId: 'tab-1',
+      settingsTabIndex: null,
       tabs: [
         {
           id: 'tab-1',
@@ -51,8 +60,107 @@ describe('workspace persistence', () => {
     expect(JSON.stringify(serialized)).not.toContain('runtime-session');
   });
 
+  it('serializes the settings tab position and active application tab', () => {
+    const workspace = createWorkspace(
+      'runtime-session',
+      sequenceIds('tab-1', 'pane-1'),
+      'Local',
+    );
+
+    const serialized = createPersistedWorkspace(workspace, {
+      activeTabId: SETTINGS_TAB_ID,
+      settingsTabOpen: true,
+      tabOrder: ['tab-1', SETTINGS_TAB_ID],
+    });
+
+    expect(serialized).toEqual({
+      version: 2,
+      activeTabId: SETTINGS_TAB_ID,
+      settingsTabIndex: 1,
+      tabs: [{ id: 'tab-1', title: 'Local', launch: { type: 'local' } }],
+    });
+  });
+
   it('parses restorable terminal tabs without runtime session state', () => {
     expect(parsePersistedWorkspace(persistedWorkspace)).toEqual(persistedWorkspace);
+  });
+
+  it('recovers local launch metadata serialized with null optional fields', () => {
+    expect(
+      parsePersistedWorkspace({
+        version: 1,
+        activeTabId: 'local-tab',
+        tabs: [
+          {
+            id: 'local-tab',
+            title: 'Local',
+            launch: { type: 'local', shell: null, args: null, cwd: null },
+          },
+        ],
+      }),
+    ).toEqual({
+      version: 2,
+      activeTabId: 'local-tab',
+      settingsTabIndex: null,
+      tabs: [{ id: 'local-tab', title: 'Local', launch: { type: 'local' } }],
+    });
+  });
+
+  it('migrates version one terminal workspaces with settings closed', () => {
+    expect(parsePersistedWorkspace(legacyPersistedWorkspace)).toEqual({
+      ...legacyPersistedWorkspace,
+      version: 2,
+      settingsTabIndex: null,
+    });
+  });
+
+  it('parses a version two workspace with settings active', () => {
+    const versionTwoWorkspace = {
+      version: 2,
+      activeTabId: SETTINGS_TAB_ID,
+      settingsTabIndex: 1,
+      tabs: [
+        {
+          id: 'local-tab',
+          title: 'Local',
+          launch: { type: 'local' },
+        },
+      ],
+    };
+
+    expect(parsePersistedWorkspace(versionTwoWorkspace)).toEqual(versionTwoWorkspace);
+  });
+
+  it('treats an omitted version two settings index as a closed settings tab', () => {
+    expect(
+      parsePersistedWorkspace({
+        version: 2,
+        activeTabId: 'local-tab',
+        tabs: [
+          {
+            id: 'local-tab',
+            title: 'Local',
+            launch: { type: 'local' },
+          },
+        ],
+      }),
+    ).toEqual({
+      version: 2,
+      activeTabId: 'local-tab',
+      settingsTabIndex: null,
+      tabs: [{ id: 'local-tab', title: 'Local', launch: { type: 'local' } }],
+    });
+  });
+
+  it('rejects settings as active when the settings tab is closed', () => {
+    expect(
+      parsePersistedWorkspace({
+        version: 2,
+        activeTabId: SETTINGS_TAB_ID,
+        settingsTabIndex: null,
+        tabs: [],
+      }),
+    ).toBeNull();
   });
 
   it('rejects malformed workspace data instead of partially trusting it', () => {
