@@ -344,10 +344,12 @@ onBeforeUnmount(() => {
         />
       </div>
     </div>
-    <SftpPanel
-      v-if="sftpPanelOpen && sftpProfile"
-      :terminal-session-id="sessionId"
-      @close="sftpPanelOpen = false"
-    />
+    <Transition name="sftp-panel">
+      <SftpPanel
+        v-if="sftpPanelOpen && sftpProfile"
+        :terminal-session-id="sessionId"
+        @close="sftpPanelOpen = false"
+      />
+    </Transition>
   </section>
 </template>

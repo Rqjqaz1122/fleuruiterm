@@ -6,6 +6,17 @@ import { SftpClient, SftpClientError, type SftpDirectoryEntry } from '@/services
 
 type PanelState = 'connecting' | 'ready' | 'failed';
 
+interface PanelResizeState {
+  handleElement: HTMLElement;
+  maximumHeight: number;
+  pointerId: number;
+  startHeight: number;
+  startPointerY: number;
+}
+
+const MINIMUM_PANEL_HEIGHT = 220;
+const MAXIMUM_PANEL_HEIGHT_RATIO = 0.7;
+
 const props = defineProps<{
   terminalSessionId: string;
   client?: SftpClient;
@@ -24,12 +35,25 @@ const loadingDirectory = ref(false);
 const transferActive = ref(false);
 const transferMessage = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
+const panelElement = ref<HTMLElement | null>(null);
+const panelHeight = ref<number | null>(null);
 let disposed = false;
 let listingRequest = 0;
+let panelResizeState: PanelResizeState | null = null;
 
 const operationBusy = computed(
   () => panelState.value === 'connecting' || loadingDirectory.value || transferActive.value,
 );
+const panelStyle = computed<Record<string, string> | undefined>(() => {
+  if (panelHeight.value === null) {
+    return undefined;
+  }
+  const height = `${panelHeight.value}px`;
+  return {
+    flexBasis: height,
+    maxHeight: height,
+  };
+});
 const breadcrumbs = computed(() => {
   const segments = currentPath.value.split('/').filter(Boolean);
   return [
@@ -46,8 +70,78 @@ onMounted(connect);
 onBeforeUnmount(() => {
   disposed = true;
   listingRequest += 1;
+  stopPanelResize();
   void closeBackendSession();
 });
+
+function startPanelResize(event: PointerEvent): void {
+  const panel = panelElement.value;
+  const terminalPane = panel?.parentElement;
+  if (panel === null || terminalPane === null) {
+    return;
+  }
+
+  event.preventDefault();
+  stopPanelResize();
+  const maximumHeight = Math.max(
+    MINIMUM_PANEL_HEIGHT,
+    Math.floor(terminalPane.getBoundingClientRect().height * MAXIMUM_PANEL_HEIGHT_RATIO),
+  );
+  const measuredHeight = panel.getBoundingClientRect().height;
+  const startHeight = clamp(
+    measuredHeight > 0 ? measuredHeight : MINIMUM_PANEL_HEIGHT,
+    MINIMUM_PANEL_HEIGHT,
+    maximumHeight,
+  );
+  const handleElement = event.currentTarget as HTMLElement;
+  panelHeight.value = startHeight;
+  panelResizeState = {
+    handleElement,
+    maximumHeight,
+    pointerId: event.pointerId,
+    startHeight,
+    startPointerY: event.clientY,
+  };
+  if (typeof handleElement.setPointerCapture === 'function') {
+    handleElement.setPointerCapture(event.pointerId);
+  }
+  window.addEventListener('pointermove', resizePanel);
+  window.addEventListener('pointerup', stopPanelResize);
+  window.addEventListener('pointercancel', stopPanelResize);
+  document.body.classList.add('sftp-panel-resizing');
+}
+
+function resizePanel(event: PointerEvent): void {
+  const state = panelResizeState;
+  if (state === null) {
+    return;
+  }
+  panelHeight.value = clamp(
+    state.startHeight + state.startPointerY - event.clientY,
+    MINIMUM_PANEL_HEIGHT,
+    state.maximumHeight,
+  );
+}
+
+function stopPanelResize(): void {
+  const state = panelResizeState;
+  panelResizeState = null;
+  if (
+    state !== null &&
+    typeof state.handleElement.hasPointerCapture === 'function' &&
+    state.handleElement.hasPointerCapture(state.pointerId)
+  ) {
+    state.handleElement.releasePointerCapture(state.pointerId);
+  }
+  window.removeEventListener('pointermove', resizePanel);
+  window.removeEventListener('pointerup', stopPanelResize);
+  window.removeEventListener('pointercancel', stopPanelResize);
+  document.body.classList.remove('sftp-panel-resizing');
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
 
 async function connect(): Promise<void> {
   panelState.value = 'connecting';
@@ -216,7 +310,23 @@ function formatModified(timestamp: number | null): string {
 </script>
 
 <template>
-  <section class="sftp-panel" :aria-label="t('sftp.title')" @pointerdown.stop>
+  <section
+    ref="panelElement"
+    class="sftp-panel"
+    :style="panelStyle"
+    :aria-label="t('sftp.title')"
+    @pointerdown.stop
+  >
+    <div
+      data-testid="sftp-resize-handle"
+      class="sftp-resize-handle"
+      role="separator"
+      aria-orientation="horizontal"
+      :aria-label="t('sftp.title')"
+      @pointerdown="startPanelResize"
+    >
+      <span aria-hidden="true" />
+    </div>
     <header class="sftp-header">
       <div class="sftp-heading">
         <strong>{{ t('sftp.title') }}</strong>
@@ -333,6 +443,33 @@ function formatModified(timestamp: number | null): string {
   color: var(--color-text);
   background: var(--terminal-bg);
   border-top: 1px solid var(--color-border);
+}
+
+.sftp-resize-handle {
+  display: grid;
+  min-height: 8px;
+  flex: 0 0 8px;
+  place-items: center;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.sftp-resize-handle span {
+  width: 32px;
+  height: 3px;
+  background: var(--color-border);
+  border-radius: 999px;
+  transition: background var(--transition-fast);
+}
+
+.sftp-resize-handle:hover span {
+  background: var(--color-accent);
+}
+
+:global(body.sftp-panel-resizing),
+:global(body.sftp-panel-resizing *) {
+  cursor: ns-resize !important;
+  user-select: none !important;
 }
 
 .sftp-header,

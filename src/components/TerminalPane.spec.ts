@@ -85,7 +85,12 @@ describe('TerminalPane SFTP integration', () => {
     const wrapper = mountPane();
     await flushPromises();
     await wrapper.get('[data-testid="sftp-open"]').trigger('click');
+
+    expect(wrapper.get('transition-stub').attributes('name')).toBe('sftp-panel');
     expect(wrapper.find('sftp-panel-stub').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="sftp-open"]').trigger('click');
+    expect(wrapper.find('sftp-panel-stub').exists()).toBe(false);
   });
 
   it('closes and removes SFTP when the saved profile is deleted', async () => {
