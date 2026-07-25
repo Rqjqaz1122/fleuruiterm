@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, ref } from 'vue';
 
@@ -238,15 +239,15 @@ async function onTabBarDoubleClick(event: MouseEvent): Promise<void> {
 }
 
 async function minimizeWindow(): Promise<void> {
-  await getCurrentWindow().minimize();
+  await invoke('minimize_window');
 }
 
 async function toggleMaximizeWindow(): Promise<void> {
-  await getCurrentWindow().toggleMaximize();
+  await invoke('toggle_maximize_window');
 }
 
 async function closeWindow(): Promise<void> {
-  await getCurrentWindow().close();
+  await invoke('close_window');
 }
 
 function clearTabDropIndicators(): void {
@@ -405,12 +406,17 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
     >
       {{ t('tabs.settings') }}
     </button>
-    <div v-if="desktopPlatform === 'windows'" class="window-controls">
+    <div
+      v-if="desktopPlatform === 'windows'"
+      class="window-controls"
+      @pointerdown.stop
+      @dblclick.stop
+    >
       <button
         class="window-button"
         type="button"
         aria-label="Minimize window"
-        @click="minimizeWindow"
+        @click.stop="minimizeWindow"
       >
         <span class="window-glyph minimize" />
       </button>
@@ -418,7 +424,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
         class="window-button"
         type="button"
         aria-label="Maximize window"
-        @click="toggleMaximizeWindow"
+        @click.stop="toggleMaximizeWindow"
       >
         <span class="window-glyph maximize" />
       </button>
@@ -426,7 +432,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
         class="window-button danger"
         type="button"
         aria-label="Close window"
-        @click="closeWindow"
+        @click.stop="closeWindow"
       >
         <span class="window-glyph close" />
       </button>

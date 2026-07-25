@@ -4,11 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import TerminalTabs from './TerminalTabs.vue';
 
 const windowApi = vi.hoisted(() => ({
-  close: vi.fn(async () => undefined),
-  minimize: vi.fn(async () => undefined),
   startDragging: vi.fn(async () => undefined),
-  toggleMaximize: vi.fn(async () => undefined),
 }));
+
+const tauriInvoke = vi.hoisted(() => ({
+  invoke: vi.fn(async () => undefined),
+}));
+
+vi.mock('@tauri-apps/api/core', () => tauriInvoke);
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => windowApi,
@@ -108,7 +111,7 @@ describe('TerminalTabs', () => {
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
 
     expect(windowApi.startDragging).toHaveBeenCalledOnce();
-    expect(windowApi.toggleMaximize).toHaveBeenCalledOnce();
+    expect(tauriInvoke.invoke).toHaveBeenCalledWith('toggle_maximize_window');
   });
 
   it('uses custom window controls for the frameless window', async () => {
@@ -120,9 +123,19 @@ describe('TerminalTabs', () => {
     await wrapper.get('[aria-label="Maximize window"]').trigger('click');
     await wrapper.get('[aria-label="Close window"]').trigger('click');
 
-    expect(windowApi.minimize).toHaveBeenCalledOnce();
-    expect(windowApi.toggleMaximize).toHaveBeenCalledOnce();
-    expect(windowApi.close).toHaveBeenCalledOnce();
+    expect(tauriInvoke.invoke).toHaveBeenCalledWith('minimize_window');
+    expect(tauriInvoke.invoke).toHaveBeenCalledWith('toggle_maximize_window');
+    expect(tauriInvoke.invoke).toHaveBeenCalledWith('close_window');
+  });
+
+  it('keeps window controls out of the drag and double-click maximize regions', async () => {
+    const wrapper = mount(TerminalTabs, { props: { tabs: [], activeTabId: null } });
+
+    await wrapper.get('.window-controls').trigger('pointerdown', { button: 0 });
+    await wrapper.get('.window-controls').trigger('dblclick', { button: 0 });
+
+    expect(windowApi.startDragging).not.toHaveBeenCalled();
+    expect(tauriInvoke.invoke).not.toHaveBeenCalled();
   });
 
   it('uses native window controls and reserves traffic-light space on macOS', async () => {
@@ -137,7 +150,7 @@ describe('TerminalTabs', () => {
 
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
 
-    expect(windowApi.toggleMaximize).not.toHaveBeenCalled();
+    expect(tauriInvoke.invoke).not.toHaveBeenCalledWith('toggle_maximize_window');
   });
 
   it('emits the selected application action', async () => {

@@ -347,6 +347,25 @@ fn set_window_opacity(window: tauri::Window, opacity: f64) -> Result<(), String>
     }
 }
 
+#[tauri::command]
+fn minimize_window(window: tauri::Window) -> Result<(), String> {
+    window.minimize().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn toggle_maximize_window(window: tauri::Window) -> Result<(), String> {
+    if window.is_maximized().map_err(|error| error.to_string())? {
+        window.unmaximize().map_err(|error| error.to_string())
+    } else {
+        window.maximize().map_err(|error| error.to_string())
+    }
+}
+
+#[tauri::command]
+fn close_window(window: tauri::Window) -> Result<(), String> {
+    window.close().map_err(|error| error.to_string())
+}
+
 fn normalize_window_opacity(opacity: f64) -> f64 {
     opacity.clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
 }
@@ -483,7 +502,6 @@ fn apply_window_opacity(window: tauri::Window, opacity: f64) -> Result<(), Strin
         })
         .map_err(|error| error.to_string())
 }
-
 #[cfg(target_os = "windows")]
 fn apply_window_opacity(
     hwnd: windows::Win32::Foundation::HWND,
@@ -562,7 +580,10 @@ pub fn run() {
             load_connection_passwords,
             save_connection_password,
             delete_connection_password,
-            set_window_opacity
+            set_window_opacity,
+            minimize_window,
+            toggle_maximize_window,
+            close_window
         ])
         .build(tauri::generate_context!())
         .expect("failed to build FleurTerm desktop application");
