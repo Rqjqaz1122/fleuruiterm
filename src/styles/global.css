@@ -2169,30 +2169,37 @@ button.start-action:disabled {
   box-shadow: none;
 }
 
-.sftp-panel-enter-active,
-.sftp-panel-leave-active {
-  min-height: 0 !important;
-  overflow: hidden;
-  transition:
-    flex-basis 180ms ease,
-    max-height 180ms ease,
-    opacity 180ms ease,
-    transform 180ms ease;
-  will-change: flex-basis, max-height, opacity, transform;
+.sftp-drawer-layer {
+  position: absolute;
+  z-index: 6;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 75%;
+  pointer-events: none;
 }
 
-.sftp-panel-enter-from,
-.sftp-panel-leave-to {
-  min-height: 0 !important;
-  max-height: 0 !important;
-  flex-basis: 0 !important;
+.sftp-drawer-layer > .sftp-panel {
+  pointer-events: auto;
+}
+
+.sftp-drawer-enter-active,
+.sftp-drawer-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+  will-change: opacity, transform;
+}
+
+.sftp-drawer-enter-from,
+.sftp-drawer-leave-to {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(24px);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sftp-panel-enter-active,
-  .sftp-panel-leave-active {
+  .sftp-drawer-enter-active,
+  .sftp-drawer-leave-active {
     transition: none;
   }
 }

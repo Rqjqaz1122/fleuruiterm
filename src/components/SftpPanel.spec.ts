@@ -123,89 +123,15 @@ describe('SftpPanel', () => {
     expect(wrapper.text()).not.toContain('raw backend message');
   });
 
-  it('increases the panel height when the resize handle moves upward', async () => {
+  it('renders without a resize handle', async () => {
     const wrapper = mount(SftpPanel, {
       props: { terminalSessionId: 'terminal-1', client: createClient() },
     });
     await flushPromises();
-    mockPanelBounds(wrapper.element, 300, 600);
 
-    await wrapper.get('[data-testid="sftp-resize-handle"]').trigger('pointerdown', {
-      clientY: 400,
-      pointerId: 1,
-    });
-    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 340 }));
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.get('.sftp-panel').attributes('style')).toContain('flex-basis: 360px');
-    window.dispatchEvent(new MouseEvent('pointerup'));
-  });
-
-  it('clamps resized height to the minimum and terminal pane ratio', async () => {
-    const wrapper = mount(SftpPanel, {
-      props: { terminalSessionId: 'terminal-1', client: createClient() },
-    });
-    await flushPromises();
-    mockPanelBounds(wrapper.element, 300, 600);
-
-    await wrapper.get('[data-testid="sftp-resize-handle"]').trigger('pointerdown', {
-      clientY: 400,
-      pointerId: 1,
-    });
-    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 100 }));
-    await wrapper.vm.$nextTick();
-    expect(wrapper.get('.sftp-panel').attributes('style')).toContain('flex-basis: 420px');
-
-    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 500 }));
-    await wrapper.vm.$nextTick();
-    expect(wrapper.get('.sftp-panel').attributes('style')).toContain('flex-basis: 220px');
-    window.dispatchEvent(new MouseEvent('pointerup'));
-  });
-
-  it('stops resizing after the pointer is released', async () => {
-    const wrapper = mount(SftpPanel, {
-      props: { terminalSessionId: 'terminal-1', client: createClient() },
-    });
-    await flushPromises();
-    mockPanelBounds(wrapper.element, 300, 600);
-
-    await wrapper.get('[data-testid="sftp-resize-handle"]').trigger('pointerdown', {
-      clientY: 400,
-      pointerId: 1,
-    });
-    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 340 }));
-    await wrapper.vm.$nextTick();
-    window.dispatchEvent(new MouseEvent('pointerup'));
-    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 300 }));
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.get('.sftp-panel').attributes('style')).toContain('flex-basis: 360px');
-    expect(document.body.classList.contains('sftp-panel-resizing')).toBe(false);
+    expect(wrapper.find('[data-testid="sftp-resize-handle"]').exists()).toBe(false);
   });
 });
-
-function mockPanelBounds(panel: Element, panelHeight: number, terminalPaneHeight: number): void {
-  const terminalPane = panel.parentElement;
-  if (terminalPane === null) {
-    throw new Error('SFTP panel must have a parent element');
-  }
-  vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(createRect(panelHeight));
-  vi.spyOn(terminalPane, 'getBoundingClientRect').mockReturnValue(createRect(terminalPaneHeight));
-}
-
-function createRect(height: number): DOMRect {
-  return {
-    bottom: height,
-    height,
-    left: 0,
-    right: 800,
-    top: 0,
-    width: 800,
-    x: 0,
-    y: 0,
-    toJSON: () => ({}),
-  } as DOMRect;
-}
 
 function createClient(): SftpClient {
   const directory: SftpDirectoryResult = {

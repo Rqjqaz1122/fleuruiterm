@@ -86,8 +86,8 @@ describe('TerminalPane SFTP integration', () => {
     await flushPromises();
     await wrapper.get('[data-testid="sftp-open"]').trigger('click');
 
-    expect(wrapper.get('transition-stub').attributes('name')).toBe('sftp-panel');
-    expect(wrapper.find('sftp-panel-stub').exists()).toBe(true);
+    expect(wrapper.get('transition-stub').attributes('name')).toBe('sftp-drawer');
+    expect(wrapper.get('.sftp-drawer-layer').find('sftp-panel-stub').exists()).toBe(true);
 
     await wrapper.get('[data-testid="sftp-open"]').trigger('click');
     expect(wrapper.find('sftp-panel-stub').exists()).toBe(false);
