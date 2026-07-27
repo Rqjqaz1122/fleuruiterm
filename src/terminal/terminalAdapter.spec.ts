@@ -11,7 +11,7 @@ import {
 class FakeTerminal implements TerminalPort {
   cols = 80;
   rows = 24;
-  options: { theme?: Record<string, string> } = {};
+  options: { theme?: Record<string, string>; fontSize?: number } = { fontSize: 14 };
   readonly buffer = {
     active: {
       baseY: 0,
@@ -29,6 +29,7 @@ class FakeTerminal implements TerminalPort {
   getSelection = vi.fn(() => 'selected terminal text');
   paste = vi.fn();
   selectAll = vi.fn();
+  refresh = vi.fn();
   private readonly writeCallbacks: Array<() => void> = [];
   write = vi.fn((_data: Uint8Array, callback?: () => void) => {
     if (callback !== undefined) {
@@ -263,6 +264,24 @@ describe('TerminalAdapter', () => {
     expect(frames.pendingCount()).toBe(1);
     frames.runNextFrame();
     expect(fitAddon.fit).toHaveBeenCalledOnce();
+  });
+
+  it('redraws resized rows without changing the configured font size', () => {
+    const terminal = new FakeTerminal();
+    const observer = createResizeObserver();
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      frames,
+    });
+    adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
+    terminal.refresh.mockClear();
+
+    observer.trigger();
+    frames.runNextFrame();
+
+    expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
+    expect(terminal.options.fontSize).toBe(14);
   });
 
   it('cancels a pending resize fit on dispose', () => {

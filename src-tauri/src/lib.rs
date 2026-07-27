@@ -385,6 +385,56 @@ fn normalize_window_opacity(opacity: f64) -> f64 {
     opacity.clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
 }
 
+#[cfg(target_os = "macos")]
+fn macos_webview_redraw_policy() -> objc2_app_kit::NSViewLayerContentsRedrawPolicy {
+    objc2_app_kit::NSViewLayerContentsRedrawPolicy::DuringViewResize
+}
+
+#[cfg(target_os = "macos")]
+fn macos_preserves_content_during_live_resize() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn configure_macos_webview_layout(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    window.with_webview(|platform_webview| unsafe {
+        use objc2_app_kit::NSView;
+
+        let webview = &*platform_webview.inner().cast::<NSView>();
+        let Some(parent_view) = webview.superview() else {
+            tracing::error!("macOS WKWebView parent view is unavailable");
+            return;
+        };
+
+        webview.setTranslatesAutoresizingMaskIntoConstraints(false);
+        webview
+            .leadingAnchor()
+            .constraintEqualToAnchor(&parent_view.leadingAnchor())
+            .setActive(true);
+        webview
+            .trailingAnchor()
+            .constraintEqualToAnchor(&parent_view.trailingAnchor())
+            .setActive(true);
+        webview
+            .topAnchor()
+            .constraintEqualToAnchor(&parent_view.topAnchor())
+            .setActive(true);
+        webview
+            .bottomAnchor()
+            .constraintEqualToAnchor(&parent_view.bottomAnchor())
+            .setActive(true);
+
+        let redraw_policy = macos_webview_redraw_policy();
+        webview.setLayerContentsRedrawPolicy(redraw_policy);
+        parent_view.setLayerContentsRedrawPolicy(redraw_policy);
+        if let Some(native_window) = webview.window() {
+            native_window
+                .setPreservesContentDuringLiveResize(macos_preserves_content_during_live_resize());
+        }
+        parent_view.layoutSubtreeIfNeeded();
+    })
+}
+
 fn device_identifier_for_vault(identifier_result: Result<String, CredentialVaultError>) -> String {
     match identifier_result {
         Ok(identifier) => identifier,
@@ -578,6 +628,12 @@ pub fn run() {
                 directory.join(CREDENTIAL_INSTALLATION_KEY_FILE_NAME),
                 device_identifier,
             )));
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main")
+                && let Err(error) = configure_macos_webview_layout(&window)
+            {
+                tracing::error!(%error, "failed to configure macOS webview layout");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -641,6 +697,10 @@ mod tests {
         credential_vault::CredentialVaultError, device_identifier_for_vault, menu_command,
         next_window_zoom_action, normalize_window_opacity, should_intercept_application_exit,
     };
+    #[cfg(target_os = "macos")]
+    use super::{macos_preserves_content_during_live_resize, macos_webview_redraw_policy};
+    #[cfg(target_os = "macos")]
+    use objc2_app_kit::NSViewLayerContentsRedrawPolicy;
     use serde_json::json;
 
     #[test]
@@ -654,6 +714,27 @@ mod tests {
     fn window_zoom_action_uses_the_current_tauri_maximized_state() {
         assert_eq!(next_window_zoom_action(false), WindowZoomAction::Maximize);
         assert_eq!(next_window_zoom_action(true), WindowZoomAction::Unmaximize);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_window_reflows_webview_content_during_native_resize() {
+        assert_eq!(
+            macos_webview_redraw_policy(),
+            NSViewLayerContentsRedrawPolicy::DuringViewResize
+        );
+        assert!(!macos_preserves_content_during_live_resize());
+    }
+
+    #[test]
+    fn macos_window_background_matches_application_canvas() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.macos.conf.json")).unwrap();
+
+        assert_eq!(
+            config["app"]["windows"][0]["backgroundColor"],
+            json!("#000000")
+        );
     }
 
     #[test]

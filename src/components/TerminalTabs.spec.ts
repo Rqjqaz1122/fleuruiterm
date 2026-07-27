@@ -130,7 +130,7 @@ describe('TerminalTabs', () => {
     expect(windowApi.close).toHaveBeenCalledOnce();
   });
 
-  it('uses native window controls and reserves traffic-light space on macOS', async () => {
+  it('uses native drag regions and native frame animation on macOS', async () => {
     const wrapper = mount(TerminalTabs, {
       props: { tabs: [], activeTabId: null, platform: 'macos' },
     });
@@ -141,7 +141,8 @@ describe('TerminalTabs', () => {
     );
     expect(wrapper.get('.tabbar-drag-region').attributes('data-tauri-drag-region')).toBe('true');
 
-    await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0 });
+    await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0, detail: 1 });
+    await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0, detail: 2 });
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
 
     expect(windowApi.startDragging).not.toHaveBeenCalled();

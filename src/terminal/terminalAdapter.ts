@@ -13,7 +13,7 @@ export interface TerminalPort extends DisposablePort {
   readonly cols: number;
   readonly rows: number;
   readonly buffer: { readonly active: TerminalBufferPort };
-  readonly options: { theme?: TerminalTheme };
+  readonly options: { theme?: TerminalTheme; fontSize?: number };
   open(element: HTMLElement): void;
   write(data: Uint8Array, callback?: () => void): void;
   loadAddon(addon: FitAddonPort): void;
@@ -21,6 +21,7 @@ export interface TerminalPort extends DisposablePort {
   getSelection(): string;
   paste(text: string): void;
   selectAll(): void;
+  refresh(startRow: number, endRow: number): void;
   scrollToBottom(): void;
   scrollToLine(line: number): void;
 }
@@ -182,6 +183,7 @@ export class TerminalAdapter {
     if (this.terminal.cols <= 0 || this.terminal.rows <= 0) {
       return;
     }
+    this.terminal.refresh(0, this.terminal.rows - 1);
     if (
       this.terminal.cols === this.lastNotifiedColumns &&
       this.terminal.rows === this.lastNotifiedRows
