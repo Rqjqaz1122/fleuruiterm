@@ -17,7 +17,7 @@ A local terminal in which the user manually runs `ssh` is intentionally unsuppor
 
 The first release includes:
 
-- Open and close an SFTP panel below the active terminal.
+- Open and close an SFTP drawer over the bottom of the active terminal.
 - Connect using the saved SSH host, port, username, and authentication configuration.
 - List a remote directory.
 - Navigate into a directory and to its parent.
@@ -102,17 +102,17 @@ The panel contains:
 - Upload-file action.
 - A compact table with name, size, modified time, permissions, and a download action for files.
 
-Clicking a directory navigates into it. Double-clicking is not required. Download is always explicit through the file action and native save dialog. The panel keeps the current terminal visible above it and uses a bounded resizable-height layout suitable for smaller windows.
+Clicking a directory navigates into it. Double-clicking is not required. Download is always explicit through the file action and native save dialog. The drawer overlays the terminal content without changing the terminal surface size or triggering a terminal resize.
 
 The UI supports existing English and Simplified Chinese locales. Controls include accessible names, disabled states during conflicting operations, keyboard activation, and non-color status text.
 
-### Resizable Panel and Motion
+### Terminal Drawer and Motion
 
-The panel exposes a dedicated resize handle along its top edge. Dragging the handle upward increases the panel height and dragging it downward decreases the height. Pointer capture keeps the interaction stable when the pointer leaves the handle. The panel height is clamped between `220px` and 70% of the current terminal pane height, so the terminal remains usable. The chosen height belongs only to the mounted panel instance and is not persisted after the panel closes.
+The SFTP surface is an absolutely positioned bottom drawer contained by the active terminal pane. Its height is 75% of the terminal pane, and it covers the terminal content instead of participating in the pane's flex layout. Opening or closing the drawer therefore does not change the terminal element's measured size and does not trigger terminal reflow or fitting.
 
-During a resize, the panel disables text selection and uses a vertical-resize cursor. Pointer listeners and capture are released when the gesture ends, is cancelled, or the component unmounts.
+The drawer has no resize handle and no persisted size setting. Its header retains the existing close action, and the pane toolbar SFTP button continues to toggle the drawer.
 
-Opening and closing use a 180ms transition that combines opacity, a small vertical offset, and the panel's bounded height. The terminal and panel remain in the same flex layout throughout the transition. When the operating system requests reduced motion through `prefers-reduced-motion`, the transition is disabled without changing the open and close behavior.
+Opening and closing use a 180ms transition that combines opacity and a bottom-to-top slide. The terminal remains mounted and unchanged behind the drawer throughout the transition. When the operating system requests reduced motion through `prefers-reduced-motion`, the transition is disabled without changing the open and close behavior.
 
 ## Lifecycle and Error Handling
 
