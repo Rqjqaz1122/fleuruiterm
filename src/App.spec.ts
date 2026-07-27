@@ -121,6 +121,7 @@ describe('FleurTerm app shell', () => {
       args: ['-p', '22', 'deploy@server.example.com'],
       title: 'Production terminal',
       connectionProfileId: 'production',
+      sftpConnectionProfileId: 'production',
     });
     expect(store.workspace.activeTabId).toBe('tab-2');
     expect(wrapper.get('[data-tab-id="tab-2"] [role="tab"]').attributes('aria-selected')).toBe(
@@ -266,23 +267,25 @@ describe('FleurTerm app shell', () => {
 
     pendingLoad.resolve(null);
 
-    await vi.waitFor(() => expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(true));
-    await vi.waitFor(() => expect(workspacePersistenceClient.save).toHaveBeenCalledWith({
-      version: 2,
-      activeTabId: 'app-settings',
-      settingsTabIndex: 0,
-      tabs: [],
-    }));
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(workspacePersistenceClient.save).toHaveBeenCalledWith({
+        version: 2,
+        activeTabId: 'app-settings',
+        settingsTabIndex: 0,
+        tabs: [],
+      }),
+    );
   });
 
   it('keeps SSH, local, and settings tabs in the persisted application workspace', async () => {
     const store = useWorkspaceStore();
-    store.workspace = createWorkspace(
-      'ssh-session',
-      ids('ssh-tab', 'ssh-pane'),
-      'Production',
-      { type: 'savedConnection', connectionProfileId: 'production' },
-    );
+    store.workspace = createWorkspace('ssh-session', ids('ssh-tab', 'ssh-pane'), 'Production', {
+      type: 'savedConnection',
+      connectionProfileId: 'production',
+    });
     store.openTab = vi.fn(async () => {
       store.workspace = addTab(
         store.workspace,
@@ -400,12 +403,10 @@ describe('FleurTerm app shell', () => {
   it('waits for an in-flight terminal open before capturing the final workspace', async () => {
     const pendingOpen = deferredPromise<void>();
     const store = useWorkspaceStore();
-    store.workspace = createWorkspace(
-      'ssh-session',
-      ids('ssh-tab', 'ssh-pane'),
-      'Production',
-      { type: 'savedConnection', connectionProfileId: 'production' },
-    );
+    store.workspace = createWorkspace('ssh-session', ids('ssh-tab', 'ssh-pane'), 'Production', {
+      type: 'savedConnection',
+      connectionProfileId: 'production',
+    });
     store.openTab = vi.fn(async () => {
       await pendingOpen.promise;
       store.workspace = addTab(
@@ -861,6 +862,7 @@ describe('FleurTerm app shell', () => {
       args: ['-p', '2222', 'deploy@server.example.com'],
       title: 'SSH deploy@server.example.com',
       connectionProfileId: 'server',
+      sftpConnectionProfileId: 'server',
     });
   });
 
@@ -946,6 +948,7 @@ describe('FleurTerm app shell', () => {
       ],
       title: 'SSH deploy@server.example.com',
       connectionProfileId: 'tunnel',
+      sftpConnectionProfileId: 'tunnel',
     });
   });
 
@@ -988,6 +991,7 @@ describe('FleurTerm app shell', () => {
       password: 'secret',
       title: 'SSH deploy@server.example.com',
       connectionProfileId: 'password-host',
+      sftpConnectionProfileId: 'password-host',
     });
   });
 
@@ -1307,6 +1311,7 @@ describe('FleurTerm app shell', () => {
       password: 'secret',
       title: 'SSH root@10.7.121.72',
       connectionProfileId: 'root-10-7-121-72',
+      sftpConnectionProfileId: 'root-10-7-121-72',
     });
   });
 });

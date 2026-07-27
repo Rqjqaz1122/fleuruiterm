@@ -13,7 +13,7 @@ export interface TerminalPort extends DisposablePort {
   readonly cols: number;
   readonly rows: number;
   readonly buffer: { readonly active: TerminalBufferPort };
-  readonly options: { theme?: TerminalTheme };
+  readonly options: { theme?: TerminalTheme; fontSize?: number };
   open(element: HTMLElement): void;
   write(data: Uint8Array, callback?: () => void): void;
   loadAddon(addon: FitAddonPort): void;
@@ -21,6 +21,7 @@ export interface TerminalPort extends DisposablePort {
   getSelection(): string;
   paste(text: string): void;
   selectAll(): void;
+  refresh(startRow: number, endRow: number): void;
   scrollToBottom(): void;
   scrollToLine(line: number): void;
 }
@@ -79,6 +80,7 @@ export class TerminalAdapter {
   private inputSubscription: DisposablePort | null = null;
   private readonly pendingOutputCompletions = new Set<() => void>();
   private pendingInitialFitFrameId: number | null = null;
+  private pendingResizeFit = false;
   private lastNotifiedColumns: number | null = null;
   private lastNotifiedRows: number | null = null;
   private expectedSequence: number;
@@ -88,7 +90,7 @@ export class TerminalAdapter {
     this.expectedSequence = options.initialSequence ?? 1;
     this.terminal = options.createTerminal();
     this.fitAddon = options.createFitAddon();
-    this.resizeObserver = options.createResizeObserver(() => this.fitAndNotify());
+    this.resizeObserver = options.createResizeObserver(() => this.scheduleResizeFit());
   }
 
   open(element: HTMLElement): void {
@@ -160,6 +162,7 @@ export class TerminalAdapter {
       this.options.frameScheduler.cancelFrame(this.pendingInitialFitFrameId);
       this.pendingInitialFitFrameId = null;
     }
+    this.pendingResizeFit = false;
     this.resizeObserver.disconnect();
     this.pendingOutputCompletions.forEach((complete) => complete());
     this.pendingOutputCompletions.clear();
@@ -177,6 +180,7 @@ export class TerminalAdapter {
     if (this.terminal.cols <= 0 || this.terminal.rows <= 0) {
       return;
     }
+    this.terminal.refresh(0, this.terminal.rows - 1);
     if (
       this.terminal.cols === this.lastNotifiedColumns &&
       this.terminal.rows === this.lastNotifiedRows
@@ -188,6 +192,19 @@ export class TerminalAdapter {
     void this.options.sessionClient
       .resize(this.options.sessionId, this.terminal.cols, this.terminal.rows)
       .catch((error: unknown) => this.reportClientError(error));
+  }
+
+  private scheduleResizeFit(): void {
+    if (this.disposed || this.pendingResizeFit) {
+      return;
+    }
+    this.pendingResizeFit = true;
+    queueMicrotask(() => {
+      this.pendingResizeFit = false;
+      if (!this.disposed) {
+        this.fitAndNotify();
+      }
+    });
   }
 
   private schedulePostRenderFit(): void {

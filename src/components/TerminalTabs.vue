@@ -229,21 +229,23 @@ async function onTabBarPointerDown(event: PointerEvent): Promise<void> {
 
 async function onTabBarDoubleClick(event: MouseEvent): Promise<void> {
   if (
-    desktopPlatform.value !== 'windows' ||
+    (desktopPlatform.value !== 'windows' && desktopPlatform.value !== 'macos') ||
     event.button !== 0 ||
     isInteractiveWindowChromeTarget(event.target)
   ) {
     return;
   }
-  await toggleMaximizeWindow();
+  event.preventDefault();
+  event.stopPropagation();
+  await toggleWindowZoom();
 }
 
 async function minimizeWindow(): Promise<void> {
   await invoke('minimize_window');
 }
 
-async function toggleMaximizeWindow(): Promise<void> {
-  await invoke('toggle_maximize_window');
+async function toggleWindowZoom(): Promise<void> {
+  await invoke('toggle_window_zoom');
 }
 
 async function closeWindow(): Promise<void> {
@@ -320,7 +322,6 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       v-if="desktopPlatform === 'macos'"
       class="macos-window-control-space"
       aria-hidden="true"
-      data-tauri-drag-region
     />
     <div class="tabbar-actions">
       <button
@@ -383,7 +384,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       </div>
     </TransitionGroup>
 
-    <span class="tabbar-drag-region" aria-hidden="true" data-tauri-drag-region />
+    <span class="tabbar-drag-region" aria-hidden="true" />
     <button
       class="tabbar-command tabbar-ai"
       :class="{ active: aiOpen }"
@@ -424,7 +425,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
         class="window-button"
         type="button"
         aria-label="Maximize window"
-        @click.stop="toggleMaximizeWindow"
+        @click.stop="toggleWindowZoom"
       >
         <span class="window-glyph maximize" />
       </button>

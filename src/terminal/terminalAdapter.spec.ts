@@ -11,7 +11,7 @@ import {
 class FakeTerminal implements TerminalPort {
   cols = 80;
   rows = 24;
-  options: { theme?: Record<string, string> } = {};
+  options: { theme?: Record<string, string>; fontSize?: number } = { fontSize: 14 };
   readonly buffer = {
     active: {
       baseY: 0,
@@ -29,6 +29,7 @@ class FakeTerminal implements TerminalPort {
   getSelection = vi.fn(() => 'selected terminal text');
   paste = vi.fn();
   selectAll = vi.fn();
+  refresh = vi.fn();
   private readonly writeCallbacks: Array<() => void> = [];
   write = vi.fn((_data: Uint8Array, callback?: () => void) => {
     if (callback !== undefined) {
@@ -242,31 +243,105 @@ describe('TerminalAdapter', () => {
     expect(frames.cancelFrame).toHaveBeenCalledOnce();
   });
 
-  it('sends positive dimensions after fitting its container', async () => {
+  it('coalesces repeated resize observations before the next paint', async () => {
     const terminal = new FakeTerminal();
-    terminal.cols = 120;
-    terminal.rows = 40;
     const observer = createResizeObserver();
-    const sessionClient = createSessionClient();
-    const adapter = createAdapter(terminal, sessionClient, vi.fn(), observer);
+    const fitAddon = createFitAddon();
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      fitAddon,
+      frames,
+    });
     adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
+    vi.mocked(fitAddon.fit).mockClear();
 
     observer.trigger();
+    observer.trigger();
+    observer.trigger();
+
+    expect(fitAddon.fit).not.toHaveBeenCalled();
+    expect(frames.pendingCount()).toBe(0);
+    await Promise.resolve();
+    expect(fitAddon.fit).toHaveBeenCalledOnce();
+  });
+
+  it('redraws resized rows without changing the configured font size', async () => {
+    const terminal = new FakeTerminal();
+    const observer = createResizeObserver();
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      frames,
+    });
+    adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
+    terminal.refresh.mockClear();
+
+    observer.trigger();
+    await Promise.resolve();
+
+    expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
+    expect(terminal.options.fontSize).toBe(14);
+  });
+
+  it('skips a pending resize fit after dispose', async () => {
+    const terminal = new FakeTerminal();
+    const observer = createResizeObserver();
+    const fitAddon = createFitAddon();
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      fitAddon,
+      frames,
+    });
+    adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
+    vi.mocked(frames.cancelFrame).mockClear();
+    vi.mocked(fitAddon.fit).mockClear();
+
+    observer.trigger();
+    expect(frames.pendingCount()).toBe(0);
+    adapter.dispose();
+    await Promise.resolve();
+
+    expect(frames.pendingCount()).toBe(0);
+    expect(frames.cancelFrame).not.toHaveBeenCalled();
+    expect(fitAddon.fit).not.toHaveBeenCalled();
+  });
+
+  it('sends positive dimensions after fitting its container', async () => {
+    const terminal = new FakeTerminal();
+    const observer = createResizeObserver();
+    const frames = createFrameScheduler();
+    const sessionClient = createSessionClient();
+    const adapter = createAdapter(terminal, sessionClient, vi.fn(), observer, 1, { frames });
+    adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
+    sessionClient.resize.mockClear();
+    terminal.cols = 120;
+    terminal.rows = 40;
+
+    observer.trigger();
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(sessionClient.resize).toHaveBeenCalledWith('session-a', 120, 40);
   });
 
-  it('restores the history viewport after fitting its container', () => {
+  it('restores the history viewport after fitting its container', async () => {
     const terminal = new FakeTerminal();
     const observer = createResizeObserver();
-    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer);
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      frames,
+    });
     adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
     terminal.buffer.active.baseY = 100;
     terminal.buffer.active.viewportY = 35;
     terminal.scrollToLine.mockClear();
 
     observer.trigger();
+    await Promise.resolve();
 
     expect(terminal.scrollToLine).toHaveBeenCalledWith(35);
   });
@@ -369,6 +444,11 @@ function createFrameScheduler(): AnimationFrameScheduler & {
       return callbacks.size;
     },
   };
+}
+
+function completeInitialFit(frames: ReturnType<typeof createFrameScheduler>): void {
+  frames.runNextFrame();
+  frames.runNextFrame();
 }
 
 interface AdapterFixtureOptions {

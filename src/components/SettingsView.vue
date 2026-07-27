@@ -19,7 +19,10 @@ import {
   type ShortcutSettings,
 } from '@/services/appShortcuts';
 import { detectDesktopPlatform } from '@/services/desktopPlatform';
-import { CONNECTIONS_STORAGE_KEY } from '@/services/connectionProfiles';
+import {
+  CONNECTIONS_STORAGE_KEY,
+  notifySavedConnectionProfilesChanged,
+} from '@/services/connectionProfiles';
 import { settingsClient } from '@/services/settingsClient';
 import {
   defaultTerminalSettings,
@@ -1153,6 +1156,7 @@ function persistAll(): void {
       CONNECTIONS_STORAGE_KEY,
       JSON.stringify(redactConnectionPasswords(connections.value)),
     );
+    notifySavedConnectionProfilesChanged();
     localStorage.setItem(RECENT_CONNECTIONS_STORAGE_KEY, JSON.stringify(recentConnectionIds.value));
     localStorage.setItem(
       THEME_STORAGE_KEY,

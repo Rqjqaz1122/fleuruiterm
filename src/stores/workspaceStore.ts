@@ -41,6 +41,7 @@ export interface OpenTerminalTabOptions {
   password?: string;
   title?: string;
   connectionProfileId?: string;
+  sftpConnectionProfileId?: string;
 }
 
 export interface TerminalOutputCursor {
@@ -106,6 +107,7 @@ export function createWorkspaceStore(
     const pendingConsumptions = new Map<string, Map<number, PendingConsumption>>();
     const activeOutputWaitClosers = new Map<string, Set<() => void>>();
     const passwordPromptResponses = new Map<string, string>();
+    const connectionProfileIds = new Map<string, string>();
 
     const activeSnapshot = computed(() => {
       const sessionId = workspace.value.focusedSessionId;
@@ -301,6 +303,7 @@ export function createWorkspaceStore(
             shell: options.shell,
             args: options.args,
             cwd: options.cwd,
+            connectionProfileId: options.sftpConnectionProfileId,
             columns: DEFAULT_TERMINAL_COLUMNS,
             rows: DEFAULT_TERMINAL_ROWS,
           },
@@ -312,6 +315,9 @@ export function createWorkspaceStore(
         const currentSnapshot =
           pendingState === undefined ? snapshot : { ...snapshot, state: pendingState };
         snapshots.value = { ...snapshots.value, [snapshot.sessionId]: currentSnapshot };
+        if (options.connectionProfileId !== undefined) {
+          connectionProfileIds.set(snapshot.sessionId, options.connectionProfileId);
+        }
         if (options.password) {
           passwordPromptResponses.set(snapshot.sessionId, options.password);
         }
@@ -370,7 +376,16 @@ export function createWorkspaceStore(
       lastOutputSequence.delete(sessionId);
       pendingSessionStates.delete(sessionId);
       passwordPromptResponses.delete(sessionId);
+      connectionProfileIds.delete(sessionId);
       settlePendingSession(sessionId);
+    }
+
+    function connectionProfileIdForSession(sessionId: string): string | null {
+      return connectionProfileIds.get(sessionId) ?? null;
+    }
+
+    function sessionStateForSession(sessionId: string): SessionState | null {
+      return snapshots.value[sessionId]?.state ?? null;
     }
 
     function waitForSessionTerminalOutput(
@@ -588,6 +603,8 @@ export function createWorkspaceStore(
       getFocusedTerminalOutputCursor,
       waitForSessionTerminalOutput,
       waitForFocusedTerminalOutput,
+      connectionProfileIdForSession,
+      sessionStateForSession,
     };
   });
 }

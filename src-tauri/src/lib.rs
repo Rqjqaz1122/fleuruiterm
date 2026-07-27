@@ -3,14 +3,20 @@ mod credential_vault;
 mod credentials;
 pub mod ipc;
 pub mod session;
+pub mod sftp;
 
 use credential_vault::{CredentialVault, CredentialVaultError, platform_device_identifier};
 use ipc::session_commands::{
     AppState, session_ack_output, session_close, session_interrupt, session_open_local,
     session_resize, session_write,
 };
+use ipc::sftp_commands::{
+    sftp_close, sftp_download_file, sftp_list_directory, sftp_open, sftp_upload_files,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(target_os = "macos")]
+use std::collections::HashSet;
 use std::{
     collections::HashMap,
     fs,
@@ -28,12 +34,16 @@ use tauri::{
 };
 use zeroize::Zeroize;
 
-const APP_SETTINGS_FILE_NAME: &str = "settings.json";
+pub(crate) const APP_SETTINGS_FILE_NAME: &str = "settings.json";
 const TERMINAL_WORKSPACE_FILE_NAME: &str = "workspace.json";
 const CREDENTIAL_VAULT_FILE_NAME: &str = "credentials.vault";
 const CREDENTIAL_INSTALLATION_KEY_FILE_NAME: &str = "credentials.key";
 const MIN_WINDOW_OPACITY: f64 = 0.58;
 const MAX_WINDOW_OPACITY: f64 = 1.0;
+#[cfg(target_os = "macos")]
+const WINDOW_ZOOM_ANIMATION_DURATION: Duration = Duration::from_millis(360);
+#[cfg(target_os = "macos")]
+const WINDOW_ZOOM_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const MENU_ACTION_EVENT: &str = "fleurterm://menu-action";
 const APPLICATION_EXIT_REQUESTED_EVENT: &str = "fleurterm://application-exit-requested";
 const MENU_NEW_TERMINAL: &str = "new-terminal";
@@ -43,6 +53,94 @@ const MENU_PREVIOUS_TAB: &str = "previous-tab";
 const MENU_OPEN_SETTINGS: &str = "open-settings";
 const MENU_TOGGLE_AI: &str = "toggle-ai";
 const MENU_CLEAR_TERMINAL: &str = "clear-terminal";
+
+#[cfg(any(not(target_os = "macos"), test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowZoomAction {
+    Maximize,
+    Unmaximize,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WindowBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+#[cfg(target_os = "macos")]
+impl WindowBounds {
+    const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MacosWindowFrame {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosWindowFrame {
+    const fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_frame_for_bounds(
+    start_frame: MacosWindowFrame,
+    start_bounds: WindowBounds,
+    current_bounds: WindowBounds,
+    scale_factor: f64,
+) -> MacosWindowFrame {
+    let start_bottom = f64::from(start_bounds.y) + f64::from(start_bounds.height);
+    let current_bottom = f64::from(current_bounds.y) + f64::from(current_bounds.height);
+    MacosWindowFrame::new(
+        start_frame.x + (f64::from(current_bounds.x) - f64::from(start_bounds.x)) / scale_factor,
+        start_frame.y - (current_bottom - start_bottom) / scale_factor,
+        start_frame.width
+            + (f64::from(current_bounds.width) - f64::from(start_bounds.width)) / scale_factor,
+        start_frame.height
+            + (f64::from(current_bounds.height) - f64::from(start_bounds.height)) / scale_factor,
+    )
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WindowZoomTransition {
+    target_bounds: WindowBounds,
+    restore_bounds_after: Option<WindowBounds>,
+}
+
+#[derive(Default)]
+struct WindowZoomState {
+    #[cfg(target_os = "macos")]
+    runtime: Mutex<WindowZoomRuntimeState>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct WindowZoomRuntimeState {
+    restore_bounds_by_window: HashMap<String, WindowBounds>,
+    animating_window_labels: HashSet<String>,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -153,7 +251,11 @@ fn load_app_settings(app: tauri::AppHandle) -> Result<AppSettingsPayload, String
 }
 
 #[tauri::command]
-fn save_app_settings(app: tauri::AppHandle, settings: Value) -> Result<String, String> {
+fn save_app_settings(
+    app: tauri::AppHandle,
+    settings: Value,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
     let directory = app
         .path()
         .app_config_dir()
@@ -165,6 +267,9 @@ fn save_app_settings(app: tauri::AppHandle, settings: Value) -> Result<String, S
         serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    state
+        .reconcile_sftp_bindings(&settings)
+        .map_err(|error| error.to_string())?;
     Ok(path.display().to_string())
 }
 
@@ -353,12 +458,222 @@ fn minimize_window(window: tauri::Window) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn toggle_maximize_window(window: tauri::Window) -> Result<(), String> {
-    if window.is_maximized().map_err(|error| error.to_string())? {
-        window.unmaximize().map_err(|error| error.to_string())
-    } else {
-        window.maximize().map_err(|error| error.to_string())
+async fn toggle_window_zoom(
+    window: tauri::Window,
+    zoom_state: tauri::State<'_, WindowZoomState>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return toggle_macos_window_zoom(&window, zoom_state.inner()).await;
     }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = zoom_state;
+        let is_maximized = window.is_maximized().map_err(|error| error.to_string())?;
+        match next_window_zoom_action(is_maximized) {
+            WindowZoomAction::Maximize => window.maximize().map_err(|error| error.to_string()),
+            WindowZoomAction::Unmaximize => window.unmaximize().map_err(|error| error.to_string()),
+        }
+    }
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn next_window_zoom_action(is_maximized: bool) -> WindowZoomAction {
+    if is_maximized {
+        WindowZoomAction::Unmaximize
+    } else {
+        WindowZoomAction::Maximize
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn next_macos_window_zoom_transition(
+    restore_bounds: Option<WindowBounds>,
+    current_bounds: WindowBounds,
+    work_area_bounds: WindowBounds,
+) -> WindowZoomTransition {
+    match restore_bounds {
+        Some(target_bounds) => WindowZoomTransition {
+            target_bounds,
+            restore_bounds_after: None,
+        },
+        None => WindowZoomTransition {
+            target_bounds: work_area_bounds,
+            restore_bounds_after: Some(current_bounds),
+        },
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn interpolate_window_bounds(
+    start_bounds: WindowBounds,
+    target_bounds: WindowBounds,
+    progress: f64,
+) -> WindowBounds {
+    let normalized_progress = progress.clamp(0.0, 1.0);
+    let eased_progress = 1.0 - (1.0 - normalized_progress).powi(3);
+    let x = interpolate_i32(start_bounds.x, target_bounds.x, eased_progress);
+    let right_edge = interpolate_i64(
+        i64::from(start_bounds.x) + i64::from(start_bounds.width),
+        i64::from(target_bounds.x) + i64::from(target_bounds.width),
+        eased_progress,
+    );
+    let width = u32::try_from((right_edge - i64::from(x)).max(0)).unwrap_or(u32::MAX);
+    WindowBounds::new(
+        x,
+        interpolate_i32(start_bounds.y, target_bounds.y, eased_progress),
+        width,
+        interpolate_u32(start_bounds.height, target_bounds.height, eased_progress),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn interpolate_i32(start: i32, target: i32, progress: f64) -> i32 {
+    (f64::from(start) + (f64::from(target) - f64::from(start)) * progress).round() as i32
+}
+
+#[cfg(target_os = "macos")]
+fn interpolate_i64(start: i64, target: i64, progress: f64) -> i64 {
+    (start as f64 + (target - start) as f64 * progress).round() as i64
+}
+
+#[cfg(target_os = "macos")]
+fn interpolate_u32(start: u32, target: u32, progress: f64) -> u32 {
+    (f64::from(start) + (f64::from(target) - f64::from(start)) * progress).round() as u32
+}
+
+#[cfg(target_os = "macos")]
+async fn toggle_macos_window_zoom(
+    window: &tauri::Window,
+    zoom_state: &WindowZoomState,
+) -> Result<(), String> {
+    let current_position = window.outer_position().map_err(|error| error.to_string())?;
+    let current_size = window.outer_size().map_err(|error| error.to_string())?;
+    let current_bounds = WindowBounds::new(
+        current_position.x,
+        current_position.y,
+        current_size.width,
+        current_size.height,
+    );
+    let window_label = window.label();
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "WINDOW_MONITOR_UNAVAILABLE".to_string())?;
+    let work_area = monitor.work_area();
+    let work_area_bounds = WindowBounds::new(
+        work_area.position.x,
+        work_area.position.y,
+        work_area.size.width,
+        work_area.size.height,
+    );
+    let transition = {
+        let mut runtime = zoom_state
+            .runtime
+            .lock()
+            .map_err(|_| "WINDOW_ZOOM_STATE_UNAVAILABLE".to_string())?;
+        if !runtime
+            .animating_window_labels
+            .insert(window_label.to_string())
+        {
+            return Ok(());
+        }
+        let restore_bounds = runtime.restore_bounds_by_window.get(window_label).copied();
+        next_macos_window_zoom_transition(restore_bounds, current_bounds, work_area_bounds)
+    };
+
+    let animation_result =
+        animate_window_bounds(window, current_bounds, transition.target_bounds).await;
+    let mut runtime = zoom_state
+        .runtime
+        .lock()
+        .map_err(|_| "WINDOW_ZOOM_STATE_UNAVAILABLE".to_string())?;
+    runtime.animating_window_labels.remove(window_label);
+    if animation_result.is_ok() {
+        match transition.restore_bounds_after {
+            Some(bounds) => {
+                runtime
+                    .restore_bounds_by_window
+                    .insert(window_label.to_string(), bounds);
+            }
+            None => {
+                runtime.restore_bounds_by_window.remove(window_label);
+            }
+        }
+    }
+    animation_result
+}
+
+#[cfg(target_os = "macos")]
+async fn animate_window_bounds(
+    window: &tauri::Window,
+    start_bounds: WindowBounds,
+    target_bounds: WindowBounds,
+) -> Result<(), String> {
+    let started_at = std::time::Instant::now();
+    let mut previous_bounds = start_bounds;
+    loop {
+        let elapsed = started_at.elapsed();
+        let progress = elapsed.as_secs_f64() / WINDOW_ZOOM_ANIMATION_DURATION.as_secs_f64();
+        let current_bounds = interpolate_window_bounds(start_bounds, target_bounds, progress);
+        apply_macos_window_frame(window, previous_bounds, current_bounds).await?;
+        if progress >= 1.0 {
+            return Ok(());
+        }
+        previous_bounds = current_bounds;
+        tokio::time::sleep(WINDOW_ZOOM_FRAME_INTERVAL).await;
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn apply_macos_window_frame(
+    window: &tauri::Window,
+    previous_bounds: WindowBounds,
+    current_bounds: WindowBounds,
+) -> Result<(), String> {
+    use objc2_app_kit::NSWindow;
+
+    let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err("WINDOW_SCALE_FACTOR_INVALID".to_string());
+    }
+
+    let window_for_update = window.clone();
+    let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
+    window
+        .run_on_main_thread(move || {
+            let update_result = (|| {
+                let native_window_pointer = window_for_update
+                    .ns_window()
+                    .map_err(|error| error.to_string())?;
+                let native_window = unsafe { &*native_window_pointer.cast::<NSWindow>() };
+                let mut native_frame = NSWindow::frame(native_window);
+                let target_frame = macos_window_frame_for_bounds(
+                    MacosWindowFrame::new(
+                        native_frame.origin.x,
+                        native_frame.origin.y,
+                        native_frame.size.width,
+                        native_frame.size.height,
+                    ),
+                    previous_bounds,
+                    current_bounds,
+                    scale_factor,
+                );
+                native_frame.origin.x = target_frame.x;
+                native_frame.origin.y = target_frame.y;
+                native_frame.size.width = target_frame.width;
+                native_frame.size.height = target_frame.height;
+                NSWindow::setFrame_display(native_window, native_frame, true);
+                Ok(())
+            })();
+            let _ = result_sender.send(update_result);
+        })
+        .map_err(|error| error.to_string())?;
+
+    result_receiver
+        .await
+        .map_err(|_| "WINDOW_FRAME_UPDATE_CANCELLED".to_string())?
 }
 
 #[tauri::command]
@@ -540,6 +855,7 @@ fn apply_window_opacity(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let application = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -553,6 +869,7 @@ pub fn run() {
         })
         .manage(AppState::new())
         .manage(ApplicationExitState::default())
+        .manage(WindowZoomState::default())
         .setup(|app| {
             let directory = app.path().app_config_dir()?;
             let device_identifier = device_identifier_for_vault(platform_device_identifier());
@@ -570,6 +887,11 @@ pub fn run() {
             session_resize,
             session_interrupt,
             session_close,
+            sftp_open,
+            sftp_list_directory,
+            sftp_upload_files,
+            sftp_download_file,
+            sftp_close,
             load_app_settings,
             save_app_settings,
             load_terminal_workspace,
@@ -582,7 +904,7 @@ pub fn run() {
             delete_connection_password,
             set_window_opacity,
             minimize_window,
-            toggle_maximize_window,
+            toggle_window_zoom,
             close_window
         ])
         .build(tauri::generate_context!())
@@ -617,17 +939,118 @@ pub fn run() {
 mod tests {
     use super::{
         ApplicationExitState, MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL, PersistedTerminalLaunch,
-        PersistedTerminalTab, PersistedTerminalWorkspace, credential_vault::CredentialVaultError,
-        device_identifier_for_vault, menu_command, normalize_window_opacity,
-        should_intercept_application_exit,
+        PersistedTerminalTab, PersistedTerminalWorkspace, WindowZoomAction,
+        credential_vault::CredentialVaultError, device_identifier_for_vault, menu_command,
+        next_window_zoom_action, normalize_window_opacity, should_intercept_application_exit,
+    };
+    #[cfg(target_os = "macos")]
+    use super::{
+        MacosWindowFrame, WINDOW_ZOOM_ANIMATION_DURATION, WindowBounds, interpolate_window_bounds,
+        macos_window_frame_for_bounds, next_macos_window_zoom_transition,
     };
     use serde_json::json;
+    #[cfg(target_os = "macos")]
+    use std::time::Duration;
 
     #[test]
     fn window_opacity_is_limited_to_the_supported_range() {
         assert_eq!(normalize_window_opacity(0.2), 0.58);
         assert_eq!(normalize_window_opacity(0.75), 0.75);
         assert_eq!(normalize_window_opacity(1.4), 1.0);
+    }
+
+    #[test]
+    fn window_zoom_action_uses_the_current_tauri_maximized_state() {
+        assert_eq!(next_window_zoom_action(false), WindowZoomAction::Maximize);
+        assert_eq!(next_window_zoom_action(true), WindowZoomAction::Unmaximize);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_window_zoom_uses_work_area_bounds_and_restores_previous_bounds() {
+        let current_bounds = WindowBounds::new(120, 80, 1180, 760);
+        let work_area_bounds = WindowBounds::new(0, 25, 1728, 1080);
+
+        let maximize_transition =
+            next_macos_window_zoom_transition(None, current_bounds, work_area_bounds);
+        assert_eq!(maximize_transition.target_bounds, work_area_bounds);
+        assert_eq!(
+            maximize_transition.restore_bounds_after,
+            Some(current_bounds)
+        );
+
+        let restore_transition = next_macos_window_zoom_transition(
+            maximize_transition.restore_bounds_after,
+            work_area_bounds,
+            work_area_bounds,
+        );
+        assert_eq!(restore_transition.target_bounds, current_bounds);
+        assert_eq!(restore_transition.restore_bounds_after, None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_window_zoom_animation_uses_eased_window_bounds() {
+        let start_bounds = WindowBounds::new(100, 80, 1000, 700);
+        let target_bounds = WindowBounds::new(0, 25, 1728, 1080);
+
+        assert_eq!(
+            interpolate_window_bounds(start_bounds, target_bounds, 0.0),
+            start_bounds
+        );
+        assert_eq!(
+            interpolate_window_bounds(start_bounds, target_bounds, 1.0),
+            target_bounds
+        );
+
+        let halfway_bounds = interpolate_window_bounds(start_bounds, target_bounds, 0.5);
+        assert!(halfway_bounds.x < 50);
+        assert!(halfway_bounds.y < 53);
+        assert!(halfway_bounds.width > 1364);
+        assert!(halfway_bounds.height > 890);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_window_zoom_animation_keeps_the_right_edge_on_its_eased_path() {
+        let start_bounds = WindowBounds::new(100, 80, 1000, 700);
+        let target_bounds = WindowBounds::new(0, 25, 1728, 1080);
+
+        let current_bounds = interpolate_window_bounds(start_bounds, target_bounds, 0.3);
+        let current_right_edge = i64::from(current_bounds.x) + i64::from(current_bounds.width);
+
+        assert_eq!(current_right_edge, 1513);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_window_zoom_converts_outer_bounds_to_one_native_frame() {
+        let start_bounds = WindowBounds::new(200, 100, 1000, 800);
+        let current_bounds = WindowBounds::new(100, 50, 1200, 1000);
+        let start_frame = MacosWindowFrame::new(100.0, 200.0, 500.0, 400.0);
+
+        assert_eq!(
+            macos_window_frame_for_bounds(start_frame, start_bounds, current_bounds, 2.0),
+            MacosWindowFrame::new(50.0, 125.0, 600.0, 500.0)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_window_zoom_animation_uses_a_readable_duration() {
+        assert_eq!(WINDOW_ZOOM_ANIMATION_DURATION, Duration::from_millis(360));
+    }
+
+    #[test]
+    fn macos_window_background_matches_application_canvas() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.macos.conf.json")).unwrap();
+
+        assert_eq!(
+            config["app"]["windows"][0]["backgroundColor"],
+            json!("#000000")
+        );
+        assert_eq!(config["app"]["macOSPrivateApi"], json!(true));
     }
 
     #[test]

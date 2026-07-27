@@ -3,15 +3,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import TerminalTabs from './TerminalTabs.vue';
 
+const coreApi = vi.hoisted(() => ({
+  invoke: vi.fn(async () => undefined),
+}));
+
 const windowApi = vi.hoisted(() => ({
   startDragging: vi.fn(async () => undefined),
 }));
 
-const tauriInvoke = vi.hoisted(() => ({
-  invoke: vi.fn(async () => undefined),
-}));
-
-vi.mock('@tauri-apps/api/core', () => tauriInvoke);
+vi.mock('@tauri-apps/api/core', () => coreApi);
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => windowApi,
@@ -93,7 +93,7 @@ describe('TerminalTabs', () => {
 
     expect(wrapper.get('.terminal-tabs').attributes()).not.toHaveProperty('data-tauri-drag-region');
     expect(wrapper.get('.tabbar-actions').exists()).toBe(true);
-    expect(wrapper.get('.tabbar-drag-region').attributes()).toHaveProperty(
+    expect(wrapper.get('.tabbar-drag-region').attributes()).not.toHaveProperty(
       'data-tauri-drag-region',
     );
     expect(wrapper.get('.window-controls').exists()).toBe(true);
@@ -111,7 +111,7 @@ describe('TerminalTabs', () => {
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
 
     expect(windowApi.startDragging).toHaveBeenCalledOnce();
-    expect(tauriInvoke.invoke).toHaveBeenCalledWith('toggle_maximize_window');
+    expect(coreApi.invoke).toHaveBeenCalledWith('toggle_window_zoom');
   });
 
   it('uses custom window controls for the frameless window', async () => {
@@ -123,34 +123,51 @@ describe('TerminalTabs', () => {
     await wrapper.get('[aria-label="Maximize window"]').trigger('click');
     await wrapper.get('[aria-label="Close window"]').trigger('click');
 
-    expect(tauriInvoke.invoke).toHaveBeenCalledWith('minimize_window');
-    expect(tauriInvoke.invoke).toHaveBeenCalledWith('toggle_maximize_window');
-    expect(tauriInvoke.invoke).toHaveBeenCalledWith('close_window');
+    expect(coreApi.invoke).toHaveBeenCalledWith('minimize_window');
+    expect(coreApi.invoke).toHaveBeenCalledWith('toggle_window_zoom');
+    expect(coreApi.invoke).toHaveBeenCalledWith('close_window');
   });
 
   it('keeps window controls out of the drag and double-click maximize regions', async () => {
-    const wrapper = mount(TerminalTabs, { props: { tabs: [], activeTabId: null } });
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs: [], activeTabId: null, platform: 'windows' },
+    });
 
     await wrapper.get('.window-controls').trigger('pointerdown', { button: 0 });
     await wrapper.get('.window-controls').trigger('dblclick', { button: 0 });
 
     expect(windowApi.startDragging).not.toHaveBeenCalled();
-    expect(tauriInvoke.invoke).not.toHaveBeenCalled();
+    expect(coreApi.invoke).not.toHaveBeenCalled();
   });
 
-  it('uses native window controls and reserves traffic-light space on macOS', async () => {
+  it('uses custom dragging and zoom on macOS to avoid native frame scaling', async () => {
     const wrapper = mount(TerminalTabs, {
       props: { tabs: [], activeTabId: null, platform: 'macos' },
     });
 
     expect(wrapper.find('.window-controls').exists()).toBe(false);
-    expect(wrapper.get('.macos-window-control-space').attributes()).toHaveProperty(
+    expect(wrapper.get('.macos-window-control-space').attributes()).not.toHaveProperty(
+      'data-tauri-drag-region',
+    );
+    expect(wrapper.get('.tabbar-drag-region').attributes()).not.toHaveProperty(
       'data-tauri-drag-region',
     );
 
+    await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0 });
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
 
-    expect(tauriInvoke.invoke).not.toHaveBeenCalledWith('toggle_maximize_window');
+    expect(windowApi.startDragging).toHaveBeenCalledOnce();
+    expect(coreApi.invoke).toHaveBeenCalledWith('toggle_window_zoom');
+  });
+
+  it('does not zoom when double-clicking an interactive tab control', async () => {
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs, activeTabId: 'tab-1', platform: 'macos' },
+    });
+
+    await wrapper.get('[data-tab-id="tab-1"] .tab-button').trigger('dblclick', { button: 0 });
+
+    expect(coreApi.invoke).not.toHaveBeenCalled();
   });
 
   it('emits the selected application action', async () => {
