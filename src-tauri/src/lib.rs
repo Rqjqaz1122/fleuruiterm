@@ -48,6 +48,12 @@ const MENU_OPEN_SETTINGS: &str = "open-settings";
 const MENU_TOGGLE_AI: &str = "toggle-ai";
 const MENU_CLEAR_TERMINAL: &str = "clear-terminal";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowZoomAction {
+    Maximize,
+    Unmaximize,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSettingsPayload {
@@ -358,6 +364,23 @@ fn set_window_opacity(window: tauri::Window, opacity: f64) -> Result<(), String>
     }
 }
 
+#[tauri::command]
+fn toggle_window_zoom(window: tauri::Window) -> Result<(), String> {
+    let is_maximized = window.is_maximized().map_err(|error| error.to_string())?;
+    match next_window_zoom_action(is_maximized) {
+        WindowZoomAction::Maximize => window.maximize().map_err(|error| error.to_string()),
+        WindowZoomAction::Unmaximize => window.unmaximize().map_err(|error| error.to_string()),
+    }
+}
+
+fn next_window_zoom_action(is_maximized: bool) -> WindowZoomAction {
+    if is_maximized {
+        WindowZoomAction::Unmaximize
+    } else {
+        WindowZoomAction::Maximize
+    }
+}
+
 fn normalize_window_opacity(opacity: f64) -> f64 {
     opacity.clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
 }
@@ -579,7 +602,8 @@ pub fn run() {
             load_connection_passwords,
             save_connection_password,
             delete_connection_password,
-            set_window_opacity
+            set_window_opacity,
+            toggle_window_zoom
         ])
         .build(tauri::generate_context!())
         .expect("failed to build FleurTerm desktop application");
@@ -613,9 +637,9 @@ pub fn run() {
 mod tests {
     use super::{
         ApplicationExitState, MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL, PersistedTerminalLaunch,
-        PersistedTerminalTab, PersistedTerminalWorkspace, credential_vault::CredentialVaultError,
-        device_identifier_for_vault, menu_command, normalize_window_opacity,
-        should_intercept_application_exit,
+        PersistedTerminalTab, PersistedTerminalWorkspace, WindowZoomAction,
+        credential_vault::CredentialVaultError, device_identifier_for_vault, menu_command,
+        next_window_zoom_action, normalize_window_opacity, should_intercept_application_exit,
     };
     use serde_json::json;
 
@@ -624,6 +648,12 @@ mod tests {
         assert_eq!(normalize_window_opacity(0.2), 0.58);
         assert_eq!(normalize_window_opacity(0.75), 0.75);
         assert_eq!(normalize_window_opacity(1.4), 1.0);
+    }
+
+    #[test]
+    fn window_zoom_action_uses_the_current_tauri_maximized_state() {
+        assert_eq!(next_window_zoom_action(false), WindowZoomAction::Maximize);
+        assert_eq!(next_window_zoom_action(true), WindowZoomAction::Unmaximize);
     }
 
     #[test]

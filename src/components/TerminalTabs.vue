@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, ref } from 'vue';
 
@@ -220,7 +221,11 @@ function onTabClick(event: MouseEvent, tabId: string): void {
 }
 
 async function onTabBarPointerDown(event: PointerEvent): Promise<void> {
-  if (event.button !== 0 || isInteractiveWindowChromeTarget(event.target)) {
+  if (
+    desktopPlatform.value === 'macos' ||
+    event.button !== 0 ||
+    isInteractiveWindowChromeTarget(event.target)
+  ) {
     return;
   }
   await getCurrentWindow().startDragging();
@@ -234,15 +239,17 @@ async function onTabBarDoubleClick(event: MouseEvent): Promise<void> {
   ) {
     return;
   }
-  await toggleMaximizeWindow();
+  event.preventDefault();
+  event.stopPropagation();
+  await toggleWindowZoom();
 }
 
 async function minimizeWindow(): Promise<void> {
   await getCurrentWindow().minimize();
 }
 
-async function toggleMaximizeWindow(): Promise<void> {
-  await getCurrentWindow().toggleMaximize();
+async function toggleWindowZoom(): Promise<void> {
+  await invoke('toggle_window_zoom');
 }
 
 async function closeWindow(): Promise<void> {
@@ -319,7 +326,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       v-if="desktopPlatform === 'macos'"
       class="macos-window-control-space"
       aria-hidden="true"
-      data-tauri-drag-region
+      data-tauri-drag-region="true"
     />
     <div class="tabbar-actions">
       <button
@@ -382,7 +389,11 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       </div>
     </TransitionGroup>
 
-    <span class="tabbar-drag-region" aria-hidden="true" data-tauri-drag-region />
+    <span
+      class="tabbar-drag-region"
+      aria-hidden="true"
+      :data-tauri-drag-region="desktopPlatform === 'macos' ? 'true' : undefined"
+    />
     <button
       class="tabbar-command tabbar-ai"
       :class="{ active: aiOpen }"
@@ -418,7 +429,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
         class="window-button"
         type="button"
         aria-label="Maximize window"
-        @click="toggleMaximizeWindow"
+        @click="toggleWindowZoom"
       >
         <span class="window-glyph maximize" />
       </button>

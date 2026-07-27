@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import TerminalTabs from './TerminalTabs.vue';
 
+const coreApi = vi.hoisted(() => ({
+  invoke: vi.fn(async () => undefined),
+}));
+
 const windowApi = vi.hoisted(() => ({
   close: vi.fn(async () => undefined),
   minimize: vi.fn(async () => undefined),
   startDragging: vi.fn(async () => undefined),
-  toggleMaximize: vi.fn(async () => undefined),
 }));
+
+vi.mock('@tauri-apps/api/core', () => coreApi);
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => windowApi,
@@ -90,7 +95,7 @@ describe('TerminalTabs', () => {
 
     expect(wrapper.get('.terminal-tabs').attributes()).not.toHaveProperty('data-tauri-drag-region');
     expect(wrapper.get('.tabbar-actions').exists()).toBe(true);
-    expect(wrapper.get('.tabbar-drag-region').attributes()).toHaveProperty(
+    expect(wrapper.get('.tabbar-drag-region').attributes()).not.toHaveProperty(
       'data-tauri-drag-region',
     );
     expect(wrapper.get('.window-controls').exists()).toBe(true);
@@ -108,7 +113,7 @@ describe('TerminalTabs', () => {
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
 
     expect(windowApi.startDragging).toHaveBeenCalledOnce();
-    expect(windowApi.toggleMaximize).toHaveBeenCalledOnce();
+    expect(coreApi.invoke).toHaveBeenCalledWith('toggle_window_zoom');
   });
 
   it('uses custom window controls for the frameless window', async () => {
@@ -121,7 +126,7 @@ describe('TerminalTabs', () => {
     await wrapper.get('[aria-label="Close window"]').trigger('click');
 
     expect(windowApi.minimize).toHaveBeenCalledOnce();
-    expect(windowApi.toggleMaximize).toHaveBeenCalledOnce();
+    expect(coreApi.invoke).toHaveBeenCalledWith('toggle_window_zoom');
     expect(windowApi.close).toHaveBeenCalledOnce();
   });
 
@@ -131,13 +136,26 @@ describe('TerminalTabs', () => {
     });
 
     expect(wrapper.find('.window-controls').exists()).toBe(false);
-    expect(wrapper.get('.macos-window-control-space').attributes()).toHaveProperty(
-      'data-tauri-drag-region',
+    expect(wrapper.get('.macos-window-control-space').attributes('data-tauri-drag-region')).toBe(
+      'true',
     );
+    expect(wrapper.get('.tabbar-drag-region').attributes('data-tauri-drag-region')).toBe('true');
 
+    await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0 });
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
 
-    expect(windowApi.toggleMaximize).not.toHaveBeenCalled();
+    expect(windowApi.startDragging).not.toHaveBeenCalled();
+    expect(coreApi.invoke).not.toHaveBeenCalled();
+  });
+
+  it('does not zoom when double-clicking an interactive tab control', async () => {
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs, activeTabId: 'tab-1', platform: 'macos' },
+    });
+
+    await wrapper.get('[data-tab-id="tab-1"] .tab-button').trigger('dblclick', { button: 0 });
+
+    expect(coreApi.invoke).not.toHaveBeenCalled();
   });
 
   it('emits the selected application action', async () => {

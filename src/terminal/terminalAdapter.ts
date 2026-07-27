@@ -79,6 +79,7 @@ export class TerminalAdapter {
   private inputSubscription: DisposablePort | null = null;
   private readonly pendingOutputCompletions = new Set<() => void>();
   private pendingInitialFitFrameId: number | null = null;
+  private pendingResizeFitFrameId: number | null = null;
   private lastNotifiedColumns: number | null = null;
   private lastNotifiedRows: number | null = null;
   private expectedSequence: number;
@@ -88,7 +89,7 @@ export class TerminalAdapter {
     this.expectedSequence = options.initialSequence ?? 1;
     this.terminal = options.createTerminal();
     this.fitAddon = options.createFitAddon();
-    this.resizeObserver = options.createResizeObserver(() => this.fitAndNotify());
+    this.resizeObserver = options.createResizeObserver(() => this.scheduleResizeFit());
   }
 
   open(element: HTMLElement): void {
@@ -160,6 +161,10 @@ export class TerminalAdapter {
       this.options.frameScheduler.cancelFrame(this.pendingInitialFitFrameId);
       this.pendingInitialFitFrameId = null;
     }
+    if (this.pendingResizeFitFrameId !== null) {
+      this.options.frameScheduler.cancelFrame(this.pendingResizeFitFrameId);
+      this.pendingResizeFitFrameId = null;
+    }
     this.resizeObserver.disconnect();
     this.pendingOutputCompletions.forEach((complete) => complete());
     this.pendingOutputCompletions.clear();
@@ -188,6 +193,18 @@ export class TerminalAdapter {
     void this.options.sessionClient
       .resize(this.options.sessionId, this.terminal.cols, this.terminal.rows)
       .catch((error: unknown) => this.reportClientError(error));
+  }
+
+  private scheduleResizeFit(): void {
+    if (this.disposed || this.pendingResizeFitFrameId !== null) {
+      return;
+    }
+    this.pendingResizeFitFrameId = this.options.frameScheduler.requestFrame(() => {
+      this.pendingResizeFitFrameId = null;
+      if (!this.disposed) {
+        this.fitAndNotify();
+      }
+    });
   }
 
   private schedulePostRenderFit(): void {

@@ -242,16 +242,62 @@ describe('TerminalAdapter', () => {
     expect(frames.cancelFrame).toHaveBeenCalledOnce();
   });
 
-  it('sends positive dimensions after fitting its container', async () => {
+  it('coalesces repeated resize observations into one animation frame', () => {
     const terminal = new FakeTerminal();
-    terminal.cols = 120;
-    terminal.rows = 40;
     const observer = createResizeObserver();
-    const sessionClient = createSessionClient();
-    const adapter = createAdapter(terminal, sessionClient, vi.fn(), observer);
+    const fitAddon = createFitAddon();
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      fitAddon,
+      frames,
+    });
     adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
+    vi.mocked(fitAddon.fit).mockClear();
 
     observer.trigger();
+    observer.trigger();
+    observer.trigger();
+
+    expect(fitAddon.fit).not.toHaveBeenCalled();
+    expect(frames.pendingCount()).toBe(1);
+    frames.runNextFrame();
+    expect(fitAddon.fit).toHaveBeenCalledOnce();
+  });
+
+  it('cancels a pending resize fit on dispose', () => {
+    const terminal = new FakeTerminal();
+    const observer = createResizeObserver();
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      frames,
+    });
+    adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
+    vi.mocked(frames.cancelFrame).mockClear();
+
+    observer.trigger();
+    expect(frames.pendingCount()).toBe(1);
+    adapter.dispose();
+
+    expect(frames.pendingCount()).toBe(0);
+    expect(frames.cancelFrame).toHaveBeenCalledOnce();
+  });
+
+  it('sends positive dimensions after fitting its container', async () => {
+    const terminal = new FakeTerminal();
+    const observer = createResizeObserver();
+    const frames = createFrameScheduler();
+    const sessionClient = createSessionClient();
+    const adapter = createAdapter(terminal, sessionClient, vi.fn(), observer, 1, { frames });
+    adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
+    sessionClient.resize.mockClear();
+    terminal.cols = 120;
+    terminal.rows = 40;
+
+    observer.trigger();
+    frames.runNextFrame();
     await Promise.resolve();
 
     expect(sessionClient.resize).toHaveBeenCalledWith('session-a', 120, 40);
@@ -260,13 +306,18 @@ describe('TerminalAdapter', () => {
   it('restores the history viewport after fitting its container', () => {
     const terminal = new FakeTerminal();
     const observer = createResizeObserver();
-    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer);
+    const frames = createFrameScheduler();
+    const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      frames,
+    });
     adapter.open(document.createElement('div'));
+    completeInitialFit(frames);
     terminal.buffer.active.baseY = 100;
     terminal.buffer.active.viewportY = 35;
     terminal.scrollToLine.mockClear();
 
     observer.trigger();
+    frames.runNextFrame();
 
     expect(terminal.scrollToLine).toHaveBeenCalledWith(35);
   });
@@ -369,6 +420,11 @@ function createFrameScheduler(): AnimationFrameScheduler & {
       return callbacks.size;
     },
   };
+}
+
+function completeInitialFit(frames: ReturnType<typeof createFrameScheduler>): void {
+  frames.runNextFrame();
+  frames.runNextFrame();
 }
 
 interface AdapterFixtureOptions {
