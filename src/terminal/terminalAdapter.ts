@@ -80,7 +80,7 @@ export class TerminalAdapter {
   private inputSubscription: DisposablePort | null = null;
   private readonly pendingOutputCompletions = new Set<() => void>();
   private pendingInitialFitFrameId: number | null = null;
-  private pendingResizeFitFrameId: number | null = null;
+  private pendingResizeFit = false;
   private lastNotifiedColumns: number | null = null;
   private lastNotifiedRows: number | null = null;
   private expectedSequence: number;
@@ -162,10 +162,7 @@ export class TerminalAdapter {
       this.options.frameScheduler.cancelFrame(this.pendingInitialFitFrameId);
       this.pendingInitialFitFrameId = null;
     }
-    if (this.pendingResizeFitFrameId !== null) {
-      this.options.frameScheduler.cancelFrame(this.pendingResizeFitFrameId);
-      this.pendingResizeFitFrameId = null;
-    }
+    this.pendingResizeFit = false;
     this.resizeObserver.disconnect();
     this.pendingOutputCompletions.forEach((complete) => complete());
     this.pendingOutputCompletions.clear();
@@ -198,11 +195,12 @@ export class TerminalAdapter {
   }
 
   private scheduleResizeFit(): void {
-    if (this.disposed || this.pendingResizeFitFrameId !== null) {
+    if (this.disposed || this.pendingResizeFit) {
       return;
     }
-    this.pendingResizeFitFrameId = this.options.frameScheduler.requestFrame(() => {
-      this.pendingResizeFitFrameId = null;
+    this.pendingResizeFit = true;
+    queueMicrotask(() => {
+      this.pendingResizeFit = false;
       if (!this.disposed) {
         this.fitAndNotify();
       }

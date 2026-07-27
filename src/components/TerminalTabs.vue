@@ -221,11 +221,7 @@ function onTabClick(event: MouseEvent, tabId: string): void {
 }
 
 async function onTabBarPointerDown(event: PointerEvent): Promise<void> {
-  if (
-    desktopPlatform.value === 'macos' ||
-    event.button !== 0 ||
-    isInteractiveWindowChromeTarget(event.target)
-  ) {
+  if (event.button !== 0 || isInteractiveWindowChromeTarget(event.target)) {
     return;
   }
   await getCurrentWindow().startDragging();
@@ -233,7 +229,7 @@ async function onTabBarPointerDown(event: PointerEvent): Promise<void> {
 
 async function onTabBarDoubleClick(event: MouseEvent): Promise<void> {
   if (
-    desktopPlatform.value !== 'windows' ||
+    (desktopPlatform.value !== 'windows' && desktopPlatform.value !== 'macos') ||
     event.button !== 0 ||
     isInteractiveWindowChromeTarget(event.target)
   ) {
@@ -326,7 +322,6 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       v-if="desktopPlatform === 'macos'"
       class="macos-window-control-space"
       aria-hidden="true"
-      data-tauri-drag-region="true"
     />
     <div class="tabbar-actions">
       <button
@@ -389,11 +384,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       </div>
     </TransitionGroup>
 
-    <span
-      class="tabbar-drag-region"
-      aria-hidden="true"
-      :data-tauri-drag-region="desktopPlatform === 'macos' ? 'true' : undefined"
-    />
+    <span class="tabbar-drag-region" aria-hidden="true" />
     <button
       class="tabbar-command tabbar-ai"
       :class="{ active: aiOpen }"

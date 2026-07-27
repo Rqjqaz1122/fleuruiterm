@@ -243,7 +243,7 @@ describe('TerminalAdapter', () => {
     expect(frames.cancelFrame).toHaveBeenCalledOnce();
   });
 
-  it('coalesces repeated resize observations into one animation frame', () => {
+  it('coalesces repeated resize observations before the next paint', async () => {
     const terminal = new FakeTerminal();
     const observer = createResizeObserver();
     const fitAddon = createFitAddon();
@@ -261,12 +261,12 @@ describe('TerminalAdapter', () => {
     observer.trigger();
 
     expect(fitAddon.fit).not.toHaveBeenCalled();
-    expect(frames.pendingCount()).toBe(1);
-    frames.runNextFrame();
+    expect(frames.pendingCount()).toBe(0);
+    await Promise.resolve();
     expect(fitAddon.fit).toHaveBeenCalledOnce();
   });
 
-  it('redraws resized rows without changing the configured font size', () => {
+  it('redraws resized rows without changing the configured font size', async () => {
     const terminal = new FakeTerminal();
     const observer = createResizeObserver();
     const frames = createFrameScheduler();
@@ -278,29 +278,34 @@ describe('TerminalAdapter', () => {
     terminal.refresh.mockClear();
 
     observer.trigger();
-    frames.runNextFrame();
+    await Promise.resolve();
 
     expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
     expect(terminal.options.fontSize).toBe(14);
   });
 
-  it('cancels a pending resize fit on dispose', () => {
+  it('skips a pending resize fit after dispose', async () => {
     const terminal = new FakeTerminal();
     const observer = createResizeObserver();
+    const fitAddon = createFitAddon();
     const frames = createFrameScheduler();
     const adapter = createAdapter(terminal, createSessionClient(), vi.fn(), observer, 1, {
+      fitAddon,
       frames,
     });
     adapter.open(document.createElement('div'));
     completeInitialFit(frames);
     vi.mocked(frames.cancelFrame).mockClear();
+    vi.mocked(fitAddon.fit).mockClear();
 
     observer.trigger();
-    expect(frames.pendingCount()).toBe(1);
+    expect(frames.pendingCount()).toBe(0);
     adapter.dispose();
+    await Promise.resolve();
 
     expect(frames.pendingCount()).toBe(0);
-    expect(frames.cancelFrame).toHaveBeenCalledOnce();
+    expect(frames.cancelFrame).not.toHaveBeenCalled();
+    expect(fitAddon.fit).not.toHaveBeenCalled();
   });
 
   it('sends positive dimensions after fitting its container', async () => {
@@ -316,13 +321,13 @@ describe('TerminalAdapter', () => {
     terminal.rows = 40;
 
     observer.trigger();
-    frames.runNextFrame();
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(sessionClient.resize).toHaveBeenCalledWith('session-a', 120, 40);
   });
 
-  it('restores the history viewport after fitting its container', () => {
+  it('restores the history viewport after fitting its container', async () => {
     const terminal = new FakeTerminal();
     const observer = createResizeObserver();
     const frames = createFrameScheduler();
@@ -336,7 +341,7 @@ describe('TerminalAdapter', () => {
     terminal.scrollToLine.mockClear();
 
     observer.trigger();
-    frames.runNextFrame();
+    await Promise.resolve();
 
     expect(terminal.scrollToLine).toHaveBeenCalledWith(35);
   });

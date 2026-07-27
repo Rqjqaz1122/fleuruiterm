@@ -130,23 +130,24 @@ describe('TerminalTabs', () => {
     expect(windowApi.close).toHaveBeenCalledOnce();
   });
 
-  it('uses native drag regions and native frame animation on macOS', async () => {
+  it('uses custom dragging and zoom on macOS to avoid native frame scaling', async () => {
     const wrapper = mount(TerminalTabs, {
       props: { tabs: [], activeTabId: null, platform: 'macos' },
     });
 
     expect(wrapper.find('.window-controls').exists()).toBe(false);
-    expect(wrapper.get('.macos-window-control-space').attributes('data-tauri-drag-region')).toBe(
-      'true',
+    expect(wrapper.get('.macos-window-control-space').attributes()).not.toHaveProperty(
+      'data-tauri-drag-region',
     );
-    expect(wrapper.get('.tabbar-drag-region').attributes('data-tauri-drag-region')).toBe('true');
+    expect(wrapper.get('.tabbar-drag-region').attributes()).not.toHaveProperty(
+      'data-tauri-drag-region',
+    );
 
-    await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0, detail: 1 });
-    await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0, detail: 2 });
+    await wrapper.get('.tabbar-drag-region').trigger('pointerdown', { button: 0 });
     await wrapper.get('.tabbar-drag-region').trigger('dblclick', { button: 0 });
 
-    expect(windowApi.startDragging).not.toHaveBeenCalled();
-    expect(coreApi.invoke).not.toHaveBeenCalled();
+    expect(windowApi.startDragging).toHaveBeenCalledOnce();
+    expect(coreApi.invoke).toHaveBeenCalledWith('toggle_window_zoom');
   });
 
   it('does not zoom when double-clicking an interactive tab control', async () => {
