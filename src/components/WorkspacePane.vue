@@ -30,6 +30,7 @@ defineEmits<{
   </div>
   <TerminalPane
     v-else
+    :key="node.sessionId"
     :tab-id="tabId"
     :pane-id="node.id"
     :session-id="node.sessionId"

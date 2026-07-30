@@ -14,6 +14,7 @@ export interface TerminalPort extends DisposablePort {
   readonly rows: number;
   readonly buffer: { readonly active: TerminalBufferPort };
   readonly options: { theme?: TerminalTheme; fontSize?: number };
+  focus(): void;
   open(element: HTMLElement): void;
   write(data: Uint8Array, callback?: () => void): void;
   loadAddon(addon: FitAddonPort): void;
@@ -51,6 +52,7 @@ export interface TerminalAdapterOptions {
   initialSequence?: number;
   sessionClient: TerminalSessionClient;
   scrollOnInput?: boolean;
+  shouldForwardInput?: (input: string) => boolean;
   createTerminal: () => TerminalPort;
   createFitAddon: () => FitAddonPort;
   createResizeObserver: (callback: () => void) => ResizeObserverPort;
@@ -97,6 +99,9 @@ export class TerminalAdapter {
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.open(element);
     this.inputSubscription = this.terminal.onData((input) => {
+      if (this.options.shouldForwardInput?.(input) === false) {
+        return;
+      }
       if (this.options.scrollOnInput ?? true) {
         this.terminal.scrollToBottom();
       }
@@ -107,6 +112,24 @@ export class TerminalAdapter {
     this.resizeObserver.observe(element);
     this.fitAndNotify();
     this.schedulePostRenderFit();
+  }
+
+  focus(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.terminal.focus();
+  }
+
+  writeSystemMessage(message: string): void {
+    if (this.disposed) {
+      return;
+    }
+    try {
+      this.terminal.write(new TextEncoder().encode(message));
+    } catch (error) {
+      this.reportClientError(error);
+    }
   }
 
   acceptChunk(chunk: TerminalChunk): Promise<void> {

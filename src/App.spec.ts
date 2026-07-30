@@ -695,6 +695,14 @@ describe('FleurTerm app shell', () => {
     expect(wrapper.get('[aria-label="FleurTerm start page"]').exists()).toBe(true);
   });
 
+  it('uses the start-page footer as the only bottom bar when no terminal exists', () => {
+    const wrapper = mount(App);
+
+    expect(wrapper.get('.start-page-footer').exists()).toBe(true);
+    expect(wrapper.find('.status-bar').exists()).toBe(false);
+    expect(wrapper.get('.app-shell').classes()).toContain('start-page-active');
+  });
+
   it('removes the FleurTerm title header and keeps the tab row at the top', () => {
     const wrapper = mount(App);
 

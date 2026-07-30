@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { flushPromises, mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -5,7 +7,17 @@ import { SftpClientError, type SftpClient, type SftpDirectoryResult } from '@/se
 
 import SftpPanel from './SftpPanel.vue';
 
+const globalStyles = readFileSync('src/styles/global.css', 'utf8');
+
 describe('SftpPanel', () => {
+  it('prevents selecting labels and glyphs inside action buttons', () => {
+    const buttonRule = /(?:^|\n)button\s*\{([^}]*)\}/.exec(globalStyles)?.[1];
+
+    expect(buttonRule).toBeDefined();
+    expect(buttonRule).toContain('-webkit-user-select: none');
+    expect(buttonRule).toContain('user-select: none');
+  });
+
   it('connects and lists the remote home directory', async () => {
     const client = createClient();
     const wrapper = mount(SftpPanel, { props: { terminalSessionId: 'terminal-1', client } });

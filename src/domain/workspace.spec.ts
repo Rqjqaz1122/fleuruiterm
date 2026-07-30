@@ -10,6 +10,7 @@ import {
   focusPane,
   mergeTabIntoPane,
   reorderTab,
+  replacePaneSession,
   splitPane,
   type IdGenerator,
 } from './workspace';
@@ -111,6 +112,21 @@ describe('workspace domain', () => {
     expect(updated.activeTabId).toBe('tab-1');
     expect(updated.focusedPaneId).toBe('pane-1');
     expect(updated.focusedSessionId).toBe('session-a');
+  });
+
+  it('replaces a pane session without changing its tab or pane identity', () => {
+    const workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+
+    const updated = replacePaneSession(workspace, 'pane-1', 'session-b');
+
+    expect(updated.tabs[0]?.root).toEqual({
+      kind: 'pane',
+      id: 'pane-1',
+      sessionId: 'session-b',
+    });
+    expect(updated.activeTabId).toBe('tab-1');
+    expect(updated.focusedPaneId).toBe('pane-1');
+    expect(updated.focusedSessionId).toBe('session-b');
   });
 
   it('reorders terminal tabs without changing the active session', () => {

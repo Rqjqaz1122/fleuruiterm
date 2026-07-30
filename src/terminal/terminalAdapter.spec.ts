@@ -19,6 +19,7 @@ class FakeTerminal implements TerminalPort {
     },
   };
   dispose = vi.fn();
+  focus = vi.fn();
   open = vi.fn();
   scrollToBottom = vi.fn(() => {
     this.buffer.active.viewportY = this.buffer.active.baseY;
@@ -55,6 +56,16 @@ class FakeTerminal implements TerminalPort {
 }
 
 describe('TerminalAdapter', () => {
+  it('focuses the terminal input when requested', () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+    adapter.open(document.createElement('div'));
+
+    adapter.focus();
+
+    expect(terminal.focus).toHaveBeenCalledOnce();
+  });
+
   it('scrolls to the bottom before forwarding terminal input', async () => {
     const terminal = new FakeTerminal();
     const sessionClient = createSessionClient();
@@ -92,6 +103,38 @@ describe('TerminalAdapter', () => {
       'session-a',
       new TextEncoder().encode('pwd\n'),
     );
+  });
+
+  it('does not forward terminal input rejected by the input guard', async () => {
+    const terminal = new FakeTerminal();
+    const sessionClient = createSessionClient();
+    const shouldForwardInput = vi.fn((input: string) => input !== '\r');
+    const adapter = createAdapter(terminal, sessionClient, vi.fn(), createResizeObserver(), 1, {
+      shouldForwardInput,
+    });
+    adapter.open(document.createElement('div'));
+
+    terminal.emitData('\r');
+    terminal.emitData('pwd\r');
+    await Promise.resolve();
+
+    expect(shouldForwardInput).toHaveBeenCalledTimes(2);
+    expect(sessionClient.write).toHaveBeenCalledOnce();
+    expect(sessionClient.write).toHaveBeenCalledWith(
+      'session-a',
+      new TextEncoder().encode('pwd\r'),
+    );
+  });
+
+  it('writes application notices directly into the terminal buffer', () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+    adapter.open(document.createElement('div'));
+    terminal.write.mockClear();
+
+    adapter.writeSystemMessage('Connection closed');
+
+    expect(terminal.write).toHaveBeenCalledWith(new TextEncoder().encode('Connection closed'));
   });
 
   it('writes ordered terminal chunks and rejects a sequence gap', async () => {
@@ -454,6 +497,7 @@ function completeInitialFit(frames: ReturnType<typeof createFrameScheduler>): vo
 interface AdapterFixtureOptions {
   fitAddon?: FitAddonPort;
   frames?: AnimationFrameScheduler;
+  shouldForwardInput?: (input: string) => boolean;
   scrollOnInput?: boolean;
 }
 
@@ -471,6 +515,7 @@ function createAdapter(
     sessionId: 'session-a',
     initialSequence,
     sessionClient,
+    shouldForwardInput: fixtureOptions.shouldForwardInput,
     scrollOnInput: fixtureOptions.scrollOnInput,
     createTerminal: () => terminal,
     createFitAddon: () => fitAddon,

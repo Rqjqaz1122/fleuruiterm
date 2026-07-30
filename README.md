@@ -17,7 +17,7 @@
 
 FleurTerm 是一个基于 `Tauri 2`、`Vue 3`、`TypeScript`、`xterm.js` 和 `Rust` 构建的桌面终端。它将 Local Shell、SSH、Terminal workspace、SFTP 文件传输和 AI-assisted terminal workflow 集成在同一个轻量级原生应用中。
 
-当前稳定版本为 [v0.0.6](https://github.com/Rqjqaz1122/fleuruiterm/releases/tag/v0.0.6)，提供 macOS Universal 和 Windows x64 安装包。
+当前稳定版本为 [v0.0.7](https://github.com/Rqjqaz1122/fleuruiterm/releases/tag/v0.0.7)，提供 macOS Universal 和 Windows x64 安装包。
 
 ### 功能特性
 
@@ -137,7 +137,7 @@ WebView 不直接启动系统进程。Terminal 输入、resize、interrupt、clo
 
 FleurTerm is a desktop terminal built with `Tauri 2`, `Vue 3`, `TypeScript`, `xterm.js`, and `Rust`. It brings Local Shell, SSH, a Terminal workspace, SFTP file transfers, and AI-assisted terminal workflows together in one lightweight native application.
 
-The current stable version is [v0.0.6](https://github.com/Rqjqaz1122/fleuruiterm/releases/tag/v0.0.6), with macOS Universal and Windows x64 installers.
+The current stable version is [v0.0.7](https://github.com/Rqjqaz1122/fleuruiterm/releases/tag/v0.0.7), with macOS Universal and Windows x64 installers.
 
 ### Features
 

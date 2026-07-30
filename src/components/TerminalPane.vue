@@ -18,6 +18,9 @@ import {
   type TerminalThemeTone,
 } from '@/terminal/terminalTheme';
 
+const TERMINAL_NOTICE_PREFIX = '\r\n\x1b[33m[FleurTerm]\x1b[0m ';
+const TERMINAL_NOTICE_SUFFIX = '\r\n';
+
 const props = defineProps<{
   tabId: string;
   paneId: string;
@@ -41,13 +44,18 @@ const terminalScrollbarThumbStyle = ref<Record<string, string>>({
   transform: 'translateY(0px)',
 });
 const terminalError = ref<string | null>(null);
+const reconnectPending = ref(false);
 const sftpPanelOpen = ref(false);
 const savedConnectionProfiles = ref<OpenableConnectionProfile[]>(loadSavedConnectionProfiles());
+const sessionState = computed(() => store.sessionStateForSession(props.sessionId));
+const sessionDisconnected = computed(
+  () => sessionState.value === 'closed' || sessionState.value === 'failed',
+);
 const visibleTerminalError = computed(() =>
-  terminalError.value === null ? null : t('error.terminalBridge'),
+  terminalError.value === null || sessionDisconnected.value ? null : t('error.terminalBridge'),
 );
 const sftpProfile = computed<OpenableConnectionProfile | null>(() => {
-  if (store.sessionStateForSession(props.sessionId) !== 'ready') {
+  if (sessionState.value !== 'ready') {
     return null;
   }
   const connectionProfileId = store.connectionProfileIdForSession(props.sessionId);
@@ -84,6 +92,24 @@ watch(sftpProfile, (profile) => {
     sftpPanelOpen.value = false;
   }
 });
+
+watch(sessionState, (state) => {
+  if (state !== 'closed' && state !== 'failed') {
+    return;
+  }
+  terminalError.value = null;
+  sftpPanelOpen.value = false;
+  writeReconnectPrompt();
+});
+
+watch(
+  () => props.focused,
+  (focused) => {
+    if (focused) {
+      adapter?.focus();
+    }
+  },
+);
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
@@ -219,6 +245,44 @@ function handleConnectionProfilesChanged(): void {
   savedConnectionProfiles.value = loadSavedConnectionProfiles();
 }
 
+function writeTerminalNotice(message: string): void {
+  adapter?.writeSystemMessage(TERMINAL_NOTICE_PREFIX + message + TERMINAL_NOTICE_SUFFIX);
+}
+
+function writeReconnectPrompt(): void {
+  if (!sessionDisconnected.value || reconnectPending.value) {
+    return;
+  }
+  writeTerminalNotice(t('terminal.disconnected'));
+}
+
+function shouldForwardTerminalInput(input: string): boolean {
+  if (!sessionDisconnected.value) {
+    return true;
+  }
+  if (input === '\r' || input === '\n') {
+    void reconnectTerminal();
+  }
+  return false;
+}
+
+async function reconnectTerminal(): Promise<void> {
+  if (reconnectPending.value) {
+    return;
+  }
+  reconnectPending.value = true;
+  writeTerminalNotice(t('terminal.reconnecting'));
+  try {
+    await store.reconnectPane(props.paneId);
+  } catch {
+    if (!disposed) {
+      writeTerminalNotice(t('terminal.reconnectFailed'));
+    }
+  } finally {
+    reconnectPending.value = false;
+  }
+}
+
 onMounted(async () => {
   window.addEventListener(CONNECTION_PROFILES_CHANGED_EVENT, handleConnectionProfilesChanged);
   const element = terminalElement.value;
@@ -240,6 +304,7 @@ onMounted(async () => {
     initialSequence: store.nextOutputSequence(props.sessionId),
     sessionClient,
     scrollOnInput: terminalSettings.value.scrollOnInput,
+    shouldForwardInput: shouldForwardTerminalInput,
     createTerminal: () =>
       new Terminal({
         cursorBlink: terminalSettings.value.cursorBlink,
@@ -260,6 +325,10 @@ onMounted(async () => {
     },
   });
   adapter.open(element);
+  if (props.focused) {
+    adapter.focus();
+  }
+  writeReconnectPrompt();
   window.addEventListener(TERMINAL_THEME_CHANGED_EVENT, updateOpenTerminalTheme);
   scrollbarResizeObserver = new ResizeObserver(scheduleTerminalScrollbarUpdate);
   scrollbarResizeObserver.observe(element);

@@ -122,6 +122,24 @@ export function focusPane(workspace: WorkspaceState, paneId: string): WorkspaceS
   };
 }
 
+export function replacePaneSession(
+  workspace: WorkspaceState,
+  paneId: string,
+  sessionId: string,
+): WorkspaceState {
+  const currentPane = findPane(workspace, paneId);
+  const replacement: TerminalPaneNode = { ...currentPane, sessionId };
+  const tabs = workspace.tabs.map((tab) => ({
+    ...tab,
+    root: replacePane(tab.root, paneId, replacement),
+  }));
+  return {
+    ...workspace,
+    tabs,
+    focusedSessionId: workspace.focusedPaneId === paneId ? sessionId : workspace.focusedSessionId,
+  };
+}
+
 export function splitPane(
   workspace: WorkspaceState,
   paneId: string | null,

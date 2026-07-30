@@ -803,7 +803,10 @@ function clampAiPanelWidth(width: number): number {
 </script>
 
 <template>
-  <main class="app-shell">
+  <main
+    class="app-shell"
+    :class="{ 'start-page-active': workspace.tabs.length === 0 && !settingsTabOpen }"
+  >
     <TerminalTabs
       :tabs="appTabs"
       :active-tab-id="activeAppTabId"
@@ -887,6 +890,7 @@ function clampAiPanelWidth(width: number): number {
         <StartPage
           v-if="workspace.tabs.length === 0"
           :pending="actionPending"
+          :version="appUpdate.currentVersion"
           aria-label="FleurTerm start page"
           @create-terminal="openTerminal"
           @open-settings="openSettings"
@@ -894,6 +898,6 @@ function clampAiPanelWidth(width: number): number {
       </section>
     </div>
 
-    <StatusBar :snapshot="activeSnapshot" />
+    <StatusBar v-if="workspace.tabs.length > 0 || settingsTabOpen" :snapshot="activeSnapshot" />
   </main>
 </template>

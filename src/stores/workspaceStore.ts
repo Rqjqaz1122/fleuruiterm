@@ -16,6 +16,7 @@ import {
   focusPane as focusWorkspacePane,
   mergeTabIntoPane as mergeWorkspaceTabIntoPane,
   reorderTab as reorderWorkspaceTab,
+  replacePaneSession as replaceWorkspacePaneSession,
   splitPane,
   type IdGenerator,
   type PaneDropPosition,
@@ -108,6 +109,8 @@ export function createWorkspaceStore(
     const activeOutputWaitClosers = new Map<string, Set<() => void>>();
     const passwordPromptResponses = new Map<string, string>();
     const connectionProfileIds = new Map<string, string>();
+    const sessionOpenOptions = new Map<string, OpenTerminalTabOptions>();
+    const pendingPaneReconnects = new Map<string, Promise<void>>();
 
     const activeSnapshot = computed(() => {
       const sessionId = workspace.value.focusedSessionId;
@@ -142,6 +145,39 @@ export function createWorkspaceStore(
         snapshot.sessionId,
         generateId,
       );
+    }
+
+    function reconnectPane(paneId: string): Promise<void> {
+      const pendingReconnect = pendingPaneReconnects.get(paneId);
+      if (pendingReconnect !== undefined) {
+        return pendingReconnect;
+      }
+      const reconnectAttempt = reconnectPaneOnce(paneId).finally(() => {
+        pendingPaneReconnects.delete(paneId);
+      });
+      pendingPaneReconnects.set(paneId, reconnectAttempt);
+      return reconnectAttempt;
+    }
+
+    async function reconnectPaneOnce(paneId: string): Promise<void> {
+      const previousSessionId = findPaneSessionId(workspace.value, paneId);
+      const previousState = sessionStateForSession(previousSessionId);
+      if (previousState !== 'closed' && previousState !== 'failed') {
+        throw new Error('terminal session is not disconnected');
+      }
+      const options = sessionOpenOptions.get(previousSessionId);
+      if (options === undefined) {
+        throw new Error('terminal reconnect options are unavailable');
+      }
+
+      const snapshot = await createSession(options);
+      if (findPaneSessionIdIfPresent(workspace.value, paneId) !== previousSessionId) {
+        await Promise.allSettled([sessionClient.close(snapshot.sessionId)]);
+        removeSessionState(snapshot.sessionId);
+        return;
+      }
+      workspace.value = replaceWorkspacePaneSession(workspace.value, paneId, snapshot.sessionId);
+      removeSessionState(previousSessionId);
     }
 
     function focusPane(paneId: string): void {
@@ -179,7 +215,10 @@ export function createWorkspaceStore(
       errorMessage.value = null;
       errorCode.value = null;
       try {
-        await sessionClient.close(sessionId);
+        const sessionState = sessionStateForSession(sessionId);
+        if (sessionState !== 'closed' && sessionState !== 'failed') {
+          await sessionClient.close(sessionId);
+        }
         workspace.value = closeWorkspacePane(workspace.value, paneId);
         removeSessionState(sessionId);
       } catch (error) {
@@ -298,7 +337,21 @@ export function createWorkspaceStore(
       errorMessage.value = null;
       errorCode.value = null;
       try {
-        const snapshot = await sessionClient.openLocal(
+        return await createSession(options);
+      } catch (error) {
+        errorCode.value = 'OPEN_TERMINAL_FAILED';
+        errorMessage.value = userVisibleError(error, 'Unable to open local terminal');
+        throw error;
+      }
+    }
+
+    async function createSession(options: OpenTerminalTabOptions): Promise<SessionSnapshot> {
+      let openingSessionId: string | null = null;
+      let openingPasswordPromptObserved = false;
+      let sessionOpening = true;
+      let snapshot: SessionSnapshot;
+      try {
+        snapshot = await sessionClient.openLocal(
           {
             shell: options.shell,
             args: options.args,
@@ -307,26 +360,41 @@ export function createWorkspaceStore(
             columns: DEFAULT_TERMINAL_COLUMNS,
             rows: DEFAULT_TERMINAL_ROWS,
           },
-          publishChunk,
-          updateSessionState,
+          async (chunk) => {
+            openingSessionId = chunk.sessionId;
+            if (sessionOpening && options.password && !openingPasswordPromptObserved) {
+              passwordPromptResponses.set(chunk.sessionId, options.password);
+              openingPasswordPromptObserved =
+                openingPasswordPromptObserved || isPasswordPrompt(chunk);
+            }
+            await publishChunk(chunk);
+          },
+          (event) => {
+            openingSessionId = event.sessionId;
+            updateSessionState(event);
+          },
         );
-        const pendingState = pendingSessionStates.get(snapshot.sessionId);
-        pendingSessionStates.delete(snapshot.sessionId);
-        const currentSnapshot =
-          pendingState === undefined ? snapshot : { ...snapshot, state: pendingState };
-        snapshots.value = { ...snapshots.value, [snapshot.sessionId]: currentSnapshot };
-        if (options.connectionProfileId !== undefined) {
-          connectionProfileIds.set(snapshot.sessionId, options.connectionProfileId);
-        }
-        if (options.password) {
-          passwordPromptResponses.set(snapshot.sessionId, options.password);
-        }
-        return currentSnapshot;
+        sessionOpening = false;
       } catch (error) {
-        errorCode.value = 'OPEN_TERMINAL_FAILED';
-        errorMessage.value = userVisibleError(error, 'Unable to open local terminal');
+        sessionOpening = false;
+        if (openingSessionId !== null) {
+          removeSessionState(openingSessionId);
+        }
         throw error;
       }
+      const pendingState = pendingSessionStates.get(snapshot.sessionId);
+      pendingSessionStates.delete(snapshot.sessionId);
+      const currentSnapshot =
+        pendingState === undefined ? snapshot : { ...snapshot, state: pendingState };
+      snapshots.value = { ...snapshots.value, [snapshot.sessionId]: currentSnapshot };
+      if (options.connectionProfileId !== undefined) {
+        connectionProfileIds.set(snapshot.sessionId, options.connectionProfileId);
+      }
+      if (options.password && !openingPasswordPromptObserved) {
+        passwordPromptResponses.set(snapshot.sessionId, options.password);
+      }
+      sessionOpenOptions.set(snapshot.sessionId, cloneOpenTerminalTabOptions(options));
+      return currentSnapshot;
     }
 
     async function publishChunk(chunk: TerminalChunk): Promise<void> {
@@ -377,6 +445,7 @@ export function createWorkspaceStore(
       pendingSessionStates.delete(sessionId);
       passwordPromptResponses.delete(sessionId);
       connectionProfileIds.delete(sessionId);
+      sessionOpenOptions.delete(sessionId);
       settlePendingSession(sessionId);
     }
 
@@ -524,12 +593,16 @@ export function createWorkspaceStore(
       if (!password) {
         return;
       }
-      const output = decodeTerminalPayload(chunk.payload).toLowerCase();
-      if (!/password(?: for [^:]+)?:\s*$/.test(output) && !output.includes("'s password:")) {
+      if (!isPasswordPrompt(chunk)) {
         return;
       }
       passwordPromptResponses.delete(chunk.sessionId);
       await sessionClient.write(chunk.sessionId, encodeTerminalInput(`${password}\r`));
+    }
+
+    function isPasswordPrompt(chunk: TerminalChunk): boolean {
+      const output = decodeTerminalPayload(chunk.payload).toLowerCase();
+      return /password(?: for [^:]+)?:\s*$/.test(output) || output.includes("'s password:");
     }
 
     function waitForTerminalConsumption(chunk: TerminalChunk): Promise<void> {
@@ -587,6 +660,7 @@ export function createWorkspaceStore(
       openTab,
       splitFocused,
       splitPaneById,
+      reconnectPane,
       focusPane,
       activateTab,
       reorderTabById,
@@ -632,13 +706,21 @@ function encodeTerminalInput(input: string): Uint8Array {
 export const useWorkspaceStore = createWorkspaceStore(new SessionClient());
 
 function findPaneSessionId(workspace: WorkspaceState, paneId: string): string {
+  const sessionId = findPaneSessionIdIfPresent(workspace, paneId);
+  if (sessionId !== null) {
+    return sessionId;
+  }
+  throw new Error(`unknown pane: ${paneId}`);
+}
+
+function findPaneSessionIdIfPresent(workspace: WorkspaceState, paneId: string): string | null {
   for (const tab of workspace.tabs) {
     const sessionId = findSessionId(tab.root, paneId);
     if (sessionId !== null) {
       return sessionId;
     }
   }
-  throw new Error(`unknown pane: ${paneId}`);
+  return null;
 }
 
 function findSessionId(node: TerminalNode, paneId: string): string | null {
@@ -676,6 +758,13 @@ function createTerminalLaunch(options: OpenTerminalTabOptions): TerminalLaunch {
     ...(options.shell === undefined ? {} : { shell: options.shell }),
     ...(options.args === undefined ? {} : { args: [...options.args] }),
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+  };
+}
+
+function cloneOpenTerminalTabOptions(options: OpenTerminalTabOptions): OpenTerminalTabOptions {
+  return {
+    ...options,
+    ...(options.args === undefined ? {} : { args: [...options.args] }),
   };
 }
 

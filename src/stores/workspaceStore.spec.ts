@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { TerminalChunk } from '@/domain/session';
+import type { SessionStateChanged, TerminalChunk } from '@/domain/session';
 
 import { createWorkspaceStore, type WorkspaceSessionClient } from './workspaceStore';
 
@@ -111,6 +111,168 @@ describe('workspace store', () => {
     expect(store.sessionStateForSession('session-1')).toBe('ready');
   });
 
+  it('reconnects a disconnected pane with its original runtime options', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab({
+      shell: 'ssh',
+      args: ['-p', '22', 'deploy@example.com'],
+      password: 'secret',
+      connectionProfileId: 'production',
+      sftpConnectionProfileId: 'production',
+    });
+    client.emitState({ sessionId: 'session-1', state: 'closed' });
+
+    await store.reconnectPane('pane-1');
+
+    expect(client.openLocal).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        shell: 'ssh',
+        args: ['-p', '22', 'deploy@example.com'],
+        connectionProfileId: 'production',
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(store.workspace.tabs[0]?.root).toEqual({
+      kind: 'pane',
+      id: 'pane-1',
+      sessionId: 'session-2',
+    });
+    expect(store.workspace.focusedSessionId).toBe('session-2');
+    expect(store.snapshots['session-1']).toBeUndefined();
+    expect(store.sessionStateForSession('session-2')).toBe('ready');
+    expect(store.connectionProfileIdForSession('session-2')).toBe('production');
+    store.subscribeToSession('session-2', vi.fn());
+    await client.emit({
+      sessionId: 'session-2',
+      sequence: 1,
+      payload: Array.from(new TextEncoder().encode("deploy@example.com's password: ")),
+    });
+    expect(client.write).toHaveBeenCalledWith('session-2', new TextEncoder().encode('secret\r'));
+  });
+
+  it('keeps a disconnected pane retryable without publishing a global error', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab({ shell: 'ssh', args: ['deploy@example.com'] });
+    client.emitState({ sessionId: 'session-1', state: 'failed' });
+    client.openLocal.mockRejectedValueOnce(new Error('network unreachable'));
+
+    await expect(store.reconnectPane('pane-1')).rejects.toThrow('network unreachable');
+
+    expect(store.workspace.tabs[0]?.root).toMatchObject({ sessionId: 'session-1' });
+    expect(store.sessionStateForSession('session-1')).toBe('failed');
+    expect(store.errorCode).toBeNull();
+    expect(store.errorMessage).toBeNull();
+  });
+
+  it('reuses the password when its prompt arrives before reconnect open completes', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab({
+      shell: 'ssh',
+      args: ['deploy@example.com'],
+      password: 'secret',
+    });
+    client.emitState({ sessionId: 'session-1', state: 'closed' });
+    let reconnectOutput: ((chunk: TerminalChunk) => void | Promise<void>) | null = null;
+    client.openLocal.mockImplementationOnce(async (_options, onOutput) => {
+      reconnectOutput = onOutput;
+      void onOutput({
+        sessionId: 'session-2',
+        sequence: 1,
+        payload: Array.from(new TextEncoder().encode("deploy@example.com's password: ")),
+      });
+      void onOutput({
+        sessionId: 'session-2',
+        sequence: 2,
+        payload: Array.from(new TextEncoder().encode('Authentication banner\r\n')),
+      });
+      await Promise.resolve();
+      return {
+        sessionId: 'session-2',
+        backendType: 'local' as const,
+        state: 'ready' as const,
+        shell: 'ssh',
+      };
+    });
+
+    await store.reconnectPane('pane-1');
+    store.subscribeToSession('session-2', vi.fn());
+    await reconnectOutput?.({
+      sessionId: 'session-2',
+      sequence: 3,
+      payload: Array.from(new TextEncoder().encode("deploy@example.com's password: ")),
+    });
+
+    expect(client.write).toHaveBeenCalledOnce();
+    expect(client.write).toHaveBeenCalledWith('session-2', new TextEncoder().encode('secret\r'));
+  });
+
+  it('cleans up a replacement session when its pane closes during reconnect', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab({ shell: 'ssh', args: ['deploy@example.com'] });
+    client.emitState({ sessionId: 'session-1', state: 'closed' });
+    let finishReconnect: (() => void) | null = null;
+    client.openLocal.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishReconnect = () =>
+            resolve({
+              sessionId: 'session-2',
+              backendType: 'local' as const,
+              state: 'ready' as const,
+              shell: 'ssh',
+            });
+        }),
+    );
+
+    const reconnect = store.reconnectPane('pane-1');
+    await store.closePane('pane-1');
+    finishReconnect?.();
+    await reconnect;
+
+    expect(client.close).toHaveBeenCalledWith('session-2');
+    expect(store.workspace.tabs).toEqual([]);
+    expect(store.snapshots['session-2']).toBeUndefined();
+  });
+
+  it('shares one pending reconnect attempt for repeated Enter input', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab();
+    client.emitState({ sessionId: 'session-1', state: 'failed' });
+    let finishReconnect: (() => void) | null = null;
+    client.openLocal.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishReconnect = () =>
+            resolve({
+              sessionId: 'session-2',
+              backendType: 'local' as const,
+              state: 'ready' as const,
+              shell: '/bin/zsh',
+            });
+        }),
+    );
+
+    const firstReconnect = store.reconnectPane('pane-1');
+    const secondReconnect = store.reconnectPane('pane-1');
+    finishReconnect?.();
+    await Promise.all([firstReconnect, secondReconnect]);
+
+    expect(client.openLocal).toHaveBeenCalledTimes(2);
+    expect(store.workspace.tabs[0]?.root).toMatchObject({ sessionId: 'session-2' });
+  });
+
   it('does not inherit the SSH profile when a local pane is split from its tab', async () => {
     const client = createClient();
     const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1', 'split-1', 'pane-2'));
@@ -132,6 +294,20 @@ describe('workspace store', () => {
     await store.closeTab('tab-1');
 
     expect(store.connectionProfileIdForSession('session-1')).toBeNull();
+    expect(store.sessionStateForSession('session-1')).toBeNull();
+  });
+
+  it('removes an already disconnected pane without closing the missing backend session', async () => {
+    const client = createClient();
+    const useStore = createWorkspaceStore(client, ids('tab-1', 'pane-1'));
+    const store = useStore();
+    await store.openTab();
+    client.emitState({ sessionId: 'session-1', state: 'closed' });
+
+    await store.closePane('pane-1');
+
+    expect(client.close).not.toHaveBeenCalled();
+    expect(store.workspace.tabs).toEqual([]);
     expect(store.sessionStateForSession('session-1')).toBeNull();
   });
 
@@ -513,11 +689,13 @@ describe('workspace store', () => {
 function createClient() {
   let sessionNumber = 0;
   const outputHandlers = new Map<string, (chunk: TerminalChunk) => void | Promise<void>>();
+  const stateHandlers = new Map<string, (event: SessionStateChanged) => void>();
   const client = {
-    openLocal: vi.fn(async (_options, onOutput) => {
+    openLocal: vi.fn(async (_options, onOutput, onState = () => undefined) => {
       sessionNumber += 1;
       const sessionId = `session-${sessionNumber}`;
       outputHandlers.set(sessionId, onOutput);
+      stateHandlers.set(sessionId, onState);
       return {
         sessionId,
         backendType: 'local' as const,
@@ -531,7 +709,13 @@ function createClient() {
     emit(chunk: TerminalChunk): Promise<void> {
       return Promise.resolve(outputHandlers.get(chunk.sessionId)?.(chunk));
     },
-  } satisfies WorkspaceSessionClient & { emit: (chunk: TerminalChunk) => Promise<void> };
+    emitState(event: SessionStateChanged): void {
+      stateHandlers.get(event.sessionId)?.(event);
+    },
+  } satisfies WorkspaceSessionClient & {
+    emit: (chunk: TerminalChunk) => Promise<void>;
+    emitState: (event: SessionStateChanged) => void;
+  };
   return client;
 }
 
