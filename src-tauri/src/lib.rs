@@ -11,7 +11,8 @@ use ipc::session_commands::{
     session_resize, session_write,
 };
 use ipc::sftp_commands::{
-    sftp_close, sftp_download_file, sftp_list_directory, sftp_open, sftp_upload_files,
+    sftp_close, sftp_delete_entry, sftp_download_file, sftp_list_directory, sftp_open,
+    sftp_upload_files,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -891,6 +892,7 @@ pub fn run() {
             sftp_list_directory,
             sftp_upload_files,
             sftp_download_file,
+            sftp_delete_entry,
             sftp_close,
             load_app_settings,
             save_app_settings,

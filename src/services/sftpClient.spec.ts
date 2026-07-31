@@ -80,4 +80,16 @@ describe('SftpClient', () => {
       ['sftp_close', { sftpSessionId: 'sftp-1' }],
     ]);
   });
+
+  it('deletes a remote entry through the named SFTP session', async () => {
+    const invoke = vi.fn(async () => undefined);
+    const client = new SftpClient(invoke);
+
+    await client.deleteEntry('sftp-1', '/tmp/archive');
+
+    expect(invoke).toHaveBeenCalledWith('sftp_delete_entry', {
+      sftpSessionId: 'sftp-1',
+      remotePath: '/tmp/archive',
+    });
+  });
 });

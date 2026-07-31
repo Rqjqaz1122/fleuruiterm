@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -5,6 +7,8 @@ import { setLocale } from '@/i18n/locale';
 import { CONNECTION_PROFILES_CHANGED_EVENT } from '@/services/connectionProfiles';
 
 import TerminalPane from './TerminalPane.vue';
+
+const globalStyles = readFileSync('src/styles/global.css', 'utf8');
 
 const workspace = vi.hoisted(() => ({
   connectionProfileId: 'server-1' as string | null,
@@ -85,6 +89,14 @@ describe('TerminalPane SFTP integration', () => {
       return 1;
     });
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  });
+
+  it('prevents selecting the terminal pane toolbar', () => {
+    const paneToolbarRule = /(?:^|\n)\.pane-toolbar\s*\{([^}]*)\}/.exec(globalStyles)?.[1];
+
+    expect(paneToolbarRule).toBeDefined();
+    expect(paneToolbarRule).toContain('-webkit-user-select: none');
+    expect(paneToolbarRule).toContain('user-select: none');
   });
 
   it('shows SFTP only for a ready pane opened from a saved SSH profile', async () => {

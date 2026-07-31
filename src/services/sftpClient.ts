@@ -62,6 +62,10 @@ export class SftpClient {
     }).then(parseTransferred);
   }
 
+  async deleteEntry(sftpSessionId: string, remotePath: string): Promise<void> {
+    await this.call('sftp_delete_entry', { sftpSessionId, remotePath });
+  }
+
   async close(sftpSessionId: string): Promise<void> {
     await this.call('sftp_close', { sftpSessionId });
   }
