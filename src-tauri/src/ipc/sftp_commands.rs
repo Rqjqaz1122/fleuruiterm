@@ -136,6 +136,19 @@ pub async fn sftp_download_file(
 }
 
 #[tauri::command]
+pub async fn sftp_delete_entry(
+    sftp_session_id: String,
+    remote_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), PublicSftpError> {
+    state
+        .sftp_registry()
+        .delete_entry(&sftp_session_id, &remote_path)
+        .await
+        .map_err(PublicSftpError::from)
+}
+
+#[tauri::command]
 pub fn sftp_close(
     sftp_session_id: String,
     state: State<'_, AppState>,

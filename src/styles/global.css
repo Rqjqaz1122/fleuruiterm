@@ -2260,6 +2260,8 @@ select:focus-visible {
   background: var(--color-surface);
   font-size: 11px;
   flex: 0 0 30px;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .pane-toolbar.sftp-available {

@@ -117,6 +117,36 @@ impl SftpOperations for Ssh2SftpConnection {
             .map_err(remote_error)?;
         persist_download(&mut remote_file, local_path, cancelled)
     }
+
+    fn entry_kind(
+        &mut self,
+        remote_path: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<SftpEntryKind, SftpError> {
+        ensure_not_cancelled(cancelled)?;
+        self.sftp
+            .lstat(Path::new(remote_path))
+            .map(|metadata| entry_kind(metadata.perm))
+            .map_err(remote_error)
+    }
+
+    fn remove_file(&mut self, remote_path: &str, cancelled: &AtomicBool) -> Result<(), SftpError> {
+        ensure_not_cancelled(cancelled)?;
+        self.sftp
+            .unlink(Path::new(remote_path))
+            .map_err(remote_error)
+    }
+
+    fn remove_directory(
+        &mut self,
+        remote_path: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<(), SftpError> {
+        ensure_not_cancelled(cancelled)?;
+        self.sftp
+            .rmdir(Path::new(remote_path))
+            .map_err(remote_error)
+    }
 }
 
 fn persist_download(

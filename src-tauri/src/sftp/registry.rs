@@ -13,7 +13,7 @@ use crate::session::model::SessionId;
 
 use super::{
     error::SftpError,
-    model::{SftpDirectoryEntry, sort_entries},
+    model::{SftpDirectoryEntry, SftpEntryKind, sort_entries},
     path::{join_remote_child, normalize_remote_path},
 };
 
@@ -35,6 +35,20 @@ pub trait SftpOperations: Send {
         &mut self,
         remote_path: &str,
         local_path: &Path,
+        cancelled: &AtomicBool,
+    ) -> Result<(), SftpError>;
+
+    fn entry_kind(
+        &mut self,
+        remote_path: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<SftpEntryKind, SftpError>;
+
+    fn remove_file(&mut self, remote_path: &str, cancelled: &AtomicBool) -> Result<(), SftpError>;
+
+    fn remove_directory(
+        &mut self,
+        remote_path: &str,
         cancelled: &AtomicBool,
     ) -> Result<(), SftpError>;
 }
@@ -161,6 +175,25 @@ impl SftpRegistry {
         .map_err(|_| SftpError::WorkerFailed)?
     }
 
+    pub async fn delete_entry(&self, session_id: &str, remote_path: &str) -> Result<(), SftpError> {
+        let remote_path =
+            normalize_remote_path(remote_path).map_err(|_| SftpError::InvalidRemotePath)?;
+        if remote_path == "/" {
+            return Err(SftpError::InvalidRequest);
+        }
+        let session = self.session(session_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            ensure_active(&session.cancelled)?;
+            let mut operations = session
+                .operations
+                .lock()
+                .map_err(|_| SftpError::WorkerFailed)?;
+            delete_remote_entry(operations.as_mut(), &remote_path, &session.cancelled)
+        })
+        .await
+        .map_err(|_| SftpError::WorkerFailed)?
+    }
+
     pub fn close(&self, session_id: &str) -> Result<(), SftpError> {
         if let Some(session) = self
             .sessions
@@ -204,6 +237,24 @@ impl SftpRegistry {
     }
 }
 
+fn delete_remote_entry(
+    operations: &mut dyn SftpOperations,
+    remote_path: &str,
+    cancelled: &AtomicBool,
+) -> Result<(), SftpError> {
+    ensure_active(cancelled)?;
+    let entry_kind = operations.entry_kind(remote_path, cancelled)?;
+    if entry_kind != SftpEntryKind::Directory {
+        return operations.remove_file(remote_path, cancelled);
+    }
+    for child in operations.list_directory(remote_path, cancelled)? {
+        let child_path = join_remote_child(remote_path, &child.name)
+            .map_err(|_| SftpError::InvalidRemotePath)?;
+        delete_remote_entry(operations, &child_path, cancelled)?;
+    }
+    operations.remove_directory(remote_path, cancelled)
+}
+
 fn ensure_active(cancelled: &AtomicBool) -> Result<(), SftpError> {
     if cancelled.load(Ordering::SeqCst) {
         Err(SftpError::Cancelled)
@@ -232,12 +283,21 @@ mod tests {
     };
 
     type UploadedFiles = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+    type RemovedEntries = Arc<Mutex<Vec<(String, RemovalKind)>>>;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum RemovalKind {
+        File,
+        Directory,
+    }
 
     #[derive(Default)]
     struct FakeSftpOperations {
         directories: HashMap<String, Vec<SftpDirectoryEntry>>,
         uploaded: UploadedFiles,
         downloads: HashMap<String, Vec<u8>>,
+        entry_kinds: HashMap<String, SftpEntryKind>,
+        removed_entries: RemovedEntries,
     }
 
     struct BlockingSftpOperations {
@@ -270,6 +330,30 @@ mod tests {
             &mut self,
             _remote_path: &str,
             _local_path: &Path,
+            _cancelled: &AtomicBool,
+        ) -> Result<(), SftpError> {
+            unreachable!()
+        }
+
+        fn entry_kind(
+            &mut self,
+            _remote_path: &str,
+            _cancelled: &AtomicBool,
+        ) -> Result<SftpEntryKind, SftpError> {
+            unreachable!()
+        }
+
+        fn remove_file(
+            &mut self,
+            _remote_path: &str,
+            _cancelled: &AtomicBool,
+        ) -> Result<(), SftpError> {
+            unreachable!()
+        }
+
+        fn remove_directory(
+            &mut self,
+            _remote_path: &str,
             _cancelled: &AtomicBool,
         ) -> Result<(), SftpError> {
             unreachable!()
@@ -312,6 +396,41 @@ mod tests {
                 .ok_or_else(|| SftpError::RemoteOperationFailed("missing fake file".to_owned()))?;
             std::fs::write(local_path, content)
                 .map_err(|error| SftpError::LocalFileOperationFailed(error.to_string()))
+        }
+
+        fn entry_kind(
+            &mut self,
+            remote_path: &str,
+            _cancelled: &AtomicBool,
+        ) -> Result<SftpEntryKind, SftpError> {
+            self.entry_kinds
+                .get(remote_path)
+                .copied()
+                .ok_or_else(|| SftpError::RemoteOperationFailed("missing fake entry".to_owned()))
+        }
+
+        fn remove_file(
+            &mut self,
+            remote_path: &str,
+            _cancelled: &AtomicBool,
+        ) -> Result<(), SftpError> {
+            self.removed_entries
+                .lock()
+                .unwrap()
+                .push((remote_path.to_owned(), RemovalKind::File));
+            Ok(())
+        }
+
+        fn remove_directory(
+            &mut self,
+            remote_path: &str,
+            _cancelled: &AtomicBool,
+        ) -> Result<(), SftpError> {
+            self.removed_entries
+                .lock()
+                .unwrap()
+                .push((remote_path.to_owned(), RemovalKind::Directory));
+            Ok(())
         }
     }
 
@@ -389,6 +508,111 @@ mod tests {
             .unwrap();
 
         assert_eq!(std::fs::read(local_path).unwrap(), b"downloaded");
+    }
+
+    #[tokio::test]
+    async fn recursively_deletes_directory_contents_before_the_directory() {
+        let removed_entries = Arc::new(Mutex::new(Vec::new()));
+        let mut operations = FakeSftpOperations {
+            removed_entries: Arc::clone(&removed_entries),
+            ..Default::default()
+        };
+        operations
+            .entry_kinds
+            .insert("/archive".to_owned(), SftpEntryKind::Directory);
+        for (path, kind) in [
+            ("/archive/nested", SftpEntryKind::Directory),
+            ("/archive/nested/inner.txt", SftpEntryKind::File),
+            ("/archive/report.txt", SftpEntryKind::File),
+            ("/archive/latest", SftpEntryKind::Symlink),
+        ] {
+            operations.entry_kinds.insert(path.to_owned(), kind);
+        }
+        operations.directories.insert(
+            "/archive".to_owned(),
+            vec![
+                entry("nested", SftpEntryKind::Directory),
+                entry("report.txt", SftpEntryKind::File),
+                entry("latest", SftpEntryKind::Symlink),
+            ],
+        );
+        operations.directories.insert(
+            "/archive/nested".to_owned(),
+            vec![entry("inner.txt", SftpEntryKind::File)],
+        );
+        let registry = SftpRegistry::default();
+        let session_id = registry
+            .insert(SessionId::new(), Box::new(operations))
+            .unwrap();
+
+        registry
+            .delete_entry(&session_id, "/archive")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            removed_entries.lock().unwrap().as_slice(),
+            &[
+                ("/archive/nested/inner.txt".to_owned(), RemovalKind::File),
+                ("/archive/nested".to_owned(), RemovalKind::Directory),
+                ("/archive/report.txt".to_owned(), RemovalKind::File),
+                ("/archive/latest".to_owned(), RemovalKind::File),
+                ("/archive".to_owned(), RemovalKind::Directory),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn checks_each_child_kind_before_recursive_deletion() {
+        let removed_entries = Arc::new(Mutex::new(Vec::new()));
+        let mut operations = FakeSftpOperations {
+            removed_entries: Arc::clone(&removed_entries),
+            ..Default::default()
+        };
+        operations
+            .entry_kinds
+            .insert("/archive".to_owned(), SftpEntryKind::Directory);
+        operations
+            .entry_kinds
+            .insert("/archive/latest".to_owned(), SftpEntryKind::Symlink);
+        operations.directories.insert(
+            "/archive".to_owned(),
+            vec![entry("latest", SftpEntryKind::Directory)],
+        );
+        let registry = SftpRegistry::default();
+        let session_id = registry
+            .insert(SessionId::new(), Box::new(operations))
+            .unwrap();
+
+        registry
+            .delete_entry(&session_id, "/archive")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            removed_entries.lock().unwrap().as_slice(),
+            &[
+                ("/archive/latest".to_owned(), RemovalKind::File),
+                ("/archive".to_owned(), RemovalKind::Directory),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_deleting_the_remote_root_directory() {
+        let mut operations = FakeSftpOperations::default();
+        operations
+            .entry_kinds
+            .insert("/".to_owned(), SftpEntryKind::Directory);
+        let registry = SftpRegistry::default();
+        let session_id = registry
+            .insert(SessionId::new(), Box::new(operations))
+            .unwrap();
+
+        assert!(matches!(
+            registry.delete_entry(&session_id, "/").await,
+            Err(SftpError::InvalidRequest)
+        ));
     }
 
     #[tokio::test]

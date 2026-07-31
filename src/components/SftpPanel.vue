@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
+import AppDialog from '@/components/AppDialog.vue';
 import { t, type TranslationKey } from '@/i18n/locale';
 import { SftpClient, SftpClientError, type SftpDirectoryEntry } from '@/services/sftpClient';
 
@@ -24,6 +25,7 @@ const loadingDirectory = ref(false);
 const transferActive = ref(false);
 const transferMessage = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
+const deleteTarget = ref<SftpDirectoryEntry | null>(null);
 let disposed = false;
 let listingRequest = 0;
 
@@ -163,6 +165,43 @@ async function downloadFile(entry: SftpDirectoryEntry): Promise<void> {
 async function requestClose(): Promise<void> {
   await closeBackendSession();
   emit('close');
+}
+
+function requestDelete(entry: SftpDirectoryEntry): void {
+  if (!operationBusy.value) {
+    errorMessage.value = null;
+    deleteTarget.value = entry;
+  }
+}
+
+function cancelDelete(): void {
+  if (!transferActive.value) {
+    deleteTarget.value = null;
+  }
+}
+
+async function confirmDelete(): Promise<void> {
+  const sessionId = sftpSessionId.value;
+  const target = deleteTarget.value;
+  if (sessionId === null || target === null || operationBusy.value) {
+    return;
+  }
+  transferActive.value = true;
+  errorMessage.value = null;
+  try {
+    await client.deleteEntry(sessionId, target.path);
+    if (disposed) {
+      return;
+    }
+    deleteTarget.value = null;
+    await loadDirectory(currentPath.value);
+  } catch (error) {
+    if (!disposed) {
+      errorMessage.value = visibleError(error);
+    }
+  } finally {
+    transferActive.value = false;
+  }
 }
 
 async function closeBackendSession(): Promise<void> {
@@ -306,19 +345,85 @@ function formatModified(timestamp: number | null): string {
           <span>{{ formatSize(entry.size) }}</span>
           <span>{{ formatModified(entry.modifiedAt) }}</span>
           <span class="sftp-permissions">{{ entry.permissions || '—' }}</span>
-          <button
-            v-if="entry.kind === 'file'"
-            :data-testid="`sftp-download-${entry.name}`"
-            type="button"
-            :disabled="operationBusy"
-            @click="downloadFile(entry)"
-          >
-            {{ t('sftp.download') }}
-          </button>
-          <span v-else />
+          <div class="sftp-entry-actions">
+            <button
+              v-if="entry.kind === 'file'"
+              :data-testid="`sftp-download-${entry.name}`"
+              class="sftp-entry-action"
+              type="button"
+              :title="t('sftp.download')"
+              :aria-label="t('sftp.download')"
+              :disabled="operationBusy"
+              @click="downloadFile(entry)"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" />
+              </svg>
+            </button>
+            <button
+              :data-testid="`sftp-delete-${entry.name}`"
+              class="sftp-entry-action sftp-entry-delete"
+              type="button"
+              :title="t('sftp.delete')"
+              :aria-label="t('sftp.delete')"
+              :disabled="operationBusy"
+              @click="requestDelete(entry)"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </template>
+
+    <AppDialog
+      :open="deleteTarget !== null"
+      :aria-label="t('sftp.deleteTitle')"
+      width="420px"
+      :close-on-backdrop="false"
+      @close="cancelDelete"
+    >
+      <div class="sftp-delete-dialog-content">
+        <span class="sftp-delete-dialog-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M12 3 2.8 20h18.4L12 3Zm0 6v5m0 3h.01" />
+          </svg>
+        </span>
+        <div>
+          <h2>{{ t('sftp.deleteTitle') }}</h2>
+          <p>{{ t('sftp.deleteWarning') }}</p>
+          <div class="sftp-delete-target">
+            <span>{{ t('sftp.selectedEntry') }}</span>
+            <strong>{{ deleteTarget?.name }}</strong>
+          </div>
+          <p v-if="errorMessage" class="sftp-delete-error" role="alert">
+            {{ errorMessage }}
+          </p>
+        </div>
+      </div>
+      <footer class="sftp-delete-dialog-actions">
+        <button
+          data-testid="sftp-cancel-delete"
+          class="sftp-delete-cancel"
+          type="button"
+          :disabled="transferActive"
+          @click="cancelDelete"
+        >
+          {{ t('sftp.cancel') }}
+        </button>
+        <button
+          data-testid="sftp-confirm-delete"
+          class="sftp-delete-confirm"
+          type="button"
+          :disabled="transferActive"
+          @click="confirmDelete"
+        >
+          {{ t('sftp.delete') }}
+        </button>
+      </footer>
+    </AppDialog>
   </section>
 </template>
 
@@ -491,6 +596,120 @@ function formatModified(timestamp: number | null): string {
 
 .sftp-permissions {
   font-family: var(--font-mono);
+}
+
+.sftp-entry-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.sftp-entry-actions .sftp-entry-action {
+  display: inline-grid;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  place-items: center;
+}
+
+.sftp-entry-action svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.sftp-entry-delete:hover:not(:disabled),
+.sftp-entry-delete:focus-visible {
+  color: var(--color-danger);
+}
+
+.sftp-delete-dialog-content {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 14px;
+  padding: 22px 22px 18px;
+}
+
+.sftp-delete-dialog-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  border-radius: 50%;
+  place-items: center;
+}
+
+.sftp-delete-dialog-icon svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.sftp-delete-dialog-content h2 {
+  margin: 1px 0 8px;
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.sftp-delete-dialog-content p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.sftp-delete-target {
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 9px 10px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-hover-soft);
+  border-radius: var(--radius-small);
+  font-size: 11px;
+}
+
+.sftp-delete-target strong {
+  overflow: hidden;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-delete-dialog-content .sftp-delete-error {
+  margin-top: 12px;
+  color: var(--color-danger);
+}
+
+.sftp-delete-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--color-border);
+}
+
+.sftp-delete-dialog-actions button {
+  min-height: 30px;
+  padding: 5px 13px;
+}
+
+.sftp-delete-confirm {
+  color: white !important;
+  background: var(--color-danger) !important;
 }
 
 .sftp-state {
