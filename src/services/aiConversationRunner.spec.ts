@@ -2,7 +2,11 @@ import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionSnapshot } from '@/domain/session';
-import { defaultAiSettings, type AiCommandPolicy } from '@/stores/appSettingsStore';
+import {
+  defaultAiSettings,
+  defaultTerminalSettings,
+  type AiCommandPolicy,
+} from '@/stores/appSettingsStore';
 import { useAiConversationStore } from '@/stores/aiConversationStore';
 
 import { createAiConversationRunner } from './aiConversationRunner';
@@ -205,6 +209,50 @@ describe('AI conversation runner', () => {
     );
   });
 
+  it('provides the terminal settings action contract and current values to the model', async () => {
+    const { runner, sendChat } = createRunner('ask');
+    sendChat.mockResolvedValueOnce('Ready.');
+
+    await runner.send('make the terminal font larger', snapshot());
+
+    const requestMessages = sendChat.mock.calls[0]?.[1] as AiChatMessage[];
+    const systemContext = requestMessages
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n');
+    expect(systemContext).toContain('settings.updateTerminal');
+    expect(systemContext).toContain(JSON.stringify(defaultTerminalSettings));
+  });
+
+  it('applies terminal setting actions immediately in ask mode', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"settings.updateTerminal","patch":{"fontSize":16}}</fleurterm-action>',
+      )
+      .mockResolvedValueOnce('The terminal font size is now 16.');
+
+    await runner.send('set the terminal font size to 16', snapshot());
+
+    expect(runAppAction).toHaveBeenCalledWith({
+      type: 'settings.updateTerminal',
+      patch: { fontSize: 16 },
+    });
+  });
+
+  it('does not leave an apply button after a terminal setting action runs automatically', async () => {
+    const { runner, sendChat } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"settings.updateTerminal","patch":{"cursorBlink":false}}</fleurterm-action>',
+      )
+      .mockResolvedValueOnce('Cursor blinking is disabled.');
+
+    await runner.send('disable terminal cursor blinking', snapshot());
+
+    expect(conversation.messages.value[1]?.appActions).toEqual([]);
+  });
+
   it('opens a saved connection action automatically in ask mode', async () => {
     const { runner, runAppAction, sendChat } = createRunner('ask');
     sendChat
@@ -379,6 +427,7 @@ function createRunner(
         streamingEnabled: false,
         commandPolicy,
       }),
+      terminalSettings: ref({ ...defaultTerminalSettings }),
     },
     terminalRunner,
     runAppAction,

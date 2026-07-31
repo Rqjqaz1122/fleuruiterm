@@ -1,7 +1,7 @@
 import type { Ref } from 'vue';
 
 import type { SessionSnapshot } from '@/domain/session';
-import type { AiSettings } from '@/stores/appSettingsStore';
+import type { AiSettings, TerminalSettings } from '@/stores/appSettingsStore';
 import { type AiToolDecision, useAiConversationStore } from '@/stores/aiConversationStore';
 
 import { classifyTerminalCommand } from './aiCommandRisk';
@@ -13,6 +13,7 @@ import {
   type AiAppAction,
   type AiTerminalToolCall,
   type AiToolResult,
+  type ParsedAiAppAction,
 } from './aiToolProtocol';
 import type { TerminalToolRunner } from './terminalToolRunner';
 import type { SavedConnectionSummary } from './connectionProfiles';
@@ -29,6 +30,7 @@ const SYSTEM_PROMPT = [
   'Use <fleurterm-action>{"type":"terminal.activate","target":"tab title or id"}</fleurterm-action> to switch to an existing terminal tab.',
   'Use <fleurterm-action>{"type":"connection.open","target":"saved connection id, name, host, or user@host"}</fleurterm-action> when the user asks to open a saved connection. Emit the action instead of merely saying that the connection was requested.',
   'Use terminal.openLocal or terminal.openSsh only when the user explicitly asks to create a new terminal, never as a fallback when terminal.activate or connection.open reports that a target was not found.',
+  'Use <fleurterm-action>{"type":"settings.updateTerminal","patch":{"fontSize":16}}</fleurterm-action> when the user asks to change terminal settings. Supported patch fields are fontFamily (non-empty string), fontSize (10-24), lineHeight (1-1.8), scrollback (1000-100000), scrollOnInput (boolean), and cursorBlink (boolean). Include only fields requested by the user. This action applies immediately.',
   'Use <fleurterm-action>{"type":"settings.open"}</fleurterm-action> to open settings.',
   'After a terminal command is denied, do not request the same command again in the current turn. Explain the denial or choose a materially different safe action.',
   'Do not claim an action succeeded until a labeled tool result confirms it.',
@@ -43,7 +45,10 @@ type ConversationStore = ReturnType<typeof useAiConversationStore>;
 export interface AiConversationRunnerDependencies {
   sendChat: typeof sendAiChat;
   conversation: ConversationStore;
-  settings: { aiSettings: Ref<AiSettings> };
+  settings: {
+    aiSettings: Ref<AiSettings>;
+    terminalSettings: Ref<TerminalSettings>;
+  };
   terminalRunner: TerminalToolRunner;
   runAppAction: (action: AiAppAction) => Promise<AiToolResult>;
   listSavedConnections?: () => SavedConnectionSummary[];
@@ -91,6 +96,7 @@ async function runConversationTurn(
   const requestMessages = buildRequestMessages(
     dependencies.conversation,
     dependencies.settings.aiSettings.value,
+    dependencies.settings.terminalSettings.value,
     snapshot,
     dependencies.listSavedConnections?.() ?? [],
   );
@@ -131,7 +137,7 @@ async function runConversationTurn(
       dependencies.conversation.updateMessage(assistantMessage.id, {
         content: visibleAssistantContent(responseContent, parsedResponse),
         terminalCommands: toolCalls.map(({ id, command }) => ({ id, command })),
-        appActions: parsedResponse.appActions,
+        appActions: interactiveAppActions(parsedResponse.appActions),
       });
       pendingAssistantMessageId = null;
       requestMessages.push({ role: 'assistant', content: responseContent });
@@ -233,10 +239,15 @@ async function runConversationTurn(
 function buildRequestMessages(
   conversation: ConversationStore,
   aiSettings: AiSettings,
+  terminalSettings: TerminalSettings,
   snapshot: SessionSnapshot | null,
   savedConnections: SavedConnectionSummary[],
 ): AiChatMessage[] {
   const messages: AiChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+  messages.push({
+    role: 'system',
+    content: `Current terminal settings: ${JSON.stringify(terminalSettings)}`,
+  });
   if (savedConnections.length > 0) {
     messages.push({
       role: 'system',
@@ -328,14 +339,9 @@ async function runAutomaticAppActions(
   actions: AiAppAction[],
 ): Promise<AiToolResult[]> {
   const policy = dependencies.settings.aiSettings.value.commandPolicy;
-  const mayRunAllActions = policy === 'auto' || policy === 'fullAccess';
   const results: AiToolResult[] = [];
   for (const action of actions) {
-    if (
-      !mayRunAllActions &&
-      action.type !== 'terminal.activate' &&
-      action.type !== 'connection.open'
-    ) {
+    if (!canRunAppActionAutomatically(action, policy)) {
       continue;
     }
     const result = await dependencies.runAppAction(action);
@@ -348,6 +354,23 @@ async function runAutomaticAppActions(
     }
   }
   return results;
+}
+
+function canRunAppActionAutomatically(
+  action: AiAppAction,
+  policy: AiSettings['commandPolicy'],
+): boolean {
+  if (action.type === 'settings.updateTerminal') {
+    return true;
+  }
+  if (action.type === 'terminal.activate' || action.type === 'connection.open') {
+    return true;
+  }
+  return policy === 'auto' || policy === 'fullAccess';
+}
+
+function interactiveAppActions(actions: ParsedAiAppAction[]): ParsedAiAppAction[] {
+  return actions.filter(({ action }) => action.type !== 'settings.updateTerminal');
 }
 
 function terminalCommandSignature(command: string): string {
