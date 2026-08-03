@@ -6,7 +6,13 @@ import { addTab, createWorkspace } from '@/domain/workspace';
 import { setLocale } from '@/i18n/locale';
 import { settingsClient } from '@/services/settingsClient';
 import { workspacePersistenceClient } from '@/services/workspacePersistence';
-import { defaultTerminalSettings, useAppSettingsStore } from '@/stores/appSettingsStore';
+import {
+  defaultAiSettings,
+  defaultAppearanceSettings,
+  defaultStartupSettings,
+  defaultTerminalSettings,
+  useAppSettingsStore,
+} from '@/stores/appSettingsStore';
 import { useAppUpdateStore } from '@/stores/appUpdateStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 
@@ -18,6 +24,7 @@ const desktopMenuMock = vi.hoisted(() => ({
     desktopMenuMock.commandHandler = handler;
     return vi.fn();
   }),
+  setLocale: vi.fn(async () => undefined),
 }));
 const desktopWindowLifecycleMock = vi.hoisted(() => ({
   applicationExitRequestHandler: null as (() => Promise<boolean>) | null,
@@ -40,6 +47,7 @@ vi.mock('@/services/desktopMenuClient', () => ({
   desktopMenuClient: {
     available: false,
     listen: desktopMenuMock.listen,
+    setLocale: desktopMenuMock.setLocale,
   },
 }));
 vi.mock('@/services/desktopWindowLifecycleClient', () => ({
@@ -58,14 +66,20 @@ describe('FleurTerm app shell', () => {
     localStorage.clear();
     desktopMenuMock.commandHandler = null;
     desktopMenuMock.listen.mockClear();
+    desktopMenuMock.setLocale.mockClear();
     desktopWindowLifecycleMock.closeRequestHandler = null;
     desktopWindowLifecycleMock.applicationExitRequestHandler = null;
     desktopWindowLifecycleMock.exitFailureHandler = null;
     desktopWindowLifecycleMock.listenForApplicationExitRequest.mockClear();
     desktopWindowLifecycleMock.listenForCloseRequest.mockClear();
     const appSettings = useAppSettingsStore();
-    appSettings.resetShortcutSettings();
+    appSettings.replaceRuntimeSettings({
+      ai: defaultAiSettings,
+      appearance: defaultAppearanceSettings,
+      startup: defaultStartupSettings,
+    });
     appSettings.updateUpdateSettings({ automaticDownloadEnabled: false });
+    appSettings.resetShortcutSettings();
     vi.spyOn(workspacePersistenceClient, 'load').mockResolvedValue(null);
     vi.spyOn(workspacePersistenceClient, 'save').mockResolvedValue();
   });
@@ -129,6 +143,47 @@ describe('FleurTerm app shell', () => {
     expect(wrapper.get('[data-tab-id="tab-2"] [role="tab"]').attributes('aria-selected')).toBe(
       'true',
     );
+  });
+
+  it('opens one startup terminal only when restoration leaves the terminal workspace empty', async () => {
+    useAppSettingsStore().updateStartupSettings({ openTerminalOnStartup: true });
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => {
+      store.workspace = createWorkspace('startup-session', ids('startup-tab', 'startup-pane'));
+    });
+
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+  });
+
+  it('does not add a startup terminal when restoration recreated a terminal session', async () => {
+    useAppSettingsStore().updateStartupSettings({ openTerminalOnStartup: true });
+    vi.mocked(workspacePersistenceClient.load).mockResolvedValue({
+      version: 2,
+      activeTabId: 'saved-local',
+      settingsTabIndex: null,
+      tabs: [
+        {
+          id: 'saved-local',
+          title: 'Project',
+          launch: { type: 'local', shell: '/bin/zsh' },
+        },
+      ],
+    });
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async (options) => {
+      store.workspace = createWorkspace(
+        'restored-session',
+        ids('restored-tab', 'restored-pane'),
+        options.title,
+      );
+    });
+
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+    expect(store.openTab).toHaveBeenCalledWith({ shell: '/bin/zsh', title: 'Project' });
   });
 
   it('continues restoring later tabs when one saved credential is unavailable', async () => {
@@ -1248,6 +1303,64 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[data-testid="ai-update-setting"]').trigger('click');
 
     expect(appSettings.terminalSettings.value.fontSize).toBe(16);
+  });
+
+  it('lets AI application actions update every application setting group', async () => {
+    const appSettings = useAppSettingsStore();
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          AIPanel: {
+            props: ['runAppAction'],
+            template:
+              "<button data-testid=\"ai-update-all-settings\" @click=\"runAppAction({ type: 'settings.update', patch: { startup: { openTerminalOnStartup: true }, appearance: { themeMode: 'light' }, terminal: { fontSize: 17 }, ai: { model: 'new-model' } } })\">Apply</button>",
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+    await wrapper.get('[data-testid="ai-update-all-settings"]').trigger('click');
+
+    expect(appSettings.startupSettings.value.openTerminalOnStartup).toBe(true);
+    expect(appSettings.appearanceSettings.value.themeMode).toBe('light');
+    expect(document.documentElement.dataset.themeMode).toBe('light');
+    expect(appSettings.terminalSettings.value.fontSize).toBe(17);
+    expect(appSettings.aiSettings.value.model).toBe('new-model');
+  });
+
+  it('blocks AI application actions from changing the endpoint and token', async () => {
+    const appSettings = useAppSettingsStore();
+    appSettings.updateAiSettings({
+      baseUrl: 'https://original.example.com/v1',
+      token: 'original-token',
+    });
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          AIPanel: {
+            props: ['runAppAction'],
+            template: [
+              '<div>',
+              "<button data-testid=\"ai-update-sensitive-settings\" @click=\"runAppAction({ type: 'settings.update', patch: { ai: { baseUrl: 'https://blocked.example.com/v1', token: 'blocked-token' } } })\">Apply</button>",
+              "<button data-testid=\"ai-update-sensitive-settings-legacy\" @click=\"runAppAction({ type: 'settings.updateAi', patch: { baseUrl: 'https://legacy-blocked.example.com/v1', token: 'legacy-blocked-token' } })\">Apply legacy</button>",
+              '</div>',
+            ].join(''),
+          },
+        },
+      },
+    });
+
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+    await wrapper.get('[data-testid="ai-update-sensitive-settings"]').trigger('click');
+
+    expect(appSettings.aiSettings.value.baseUrl).toBe('https://original.example.com/v1');
+    expect(appSettings.aiSettings.value.token).toBe('original-token');
+
+    await wrapper.get('[data-testid="ai-update-sensitive-settings-legacy"]').trigger('click');
+
+    expect(appSettings.aiSettings.value.baseUrl).toBe('https://original.example.com/v1');
+    expect(appSettings.aiSettings.value.token).toBe('original-token');
   });
 
   it('lets AI application actions open an SSH terminal', async () => {

@@ -8,6 +8,8 @@ import { setLocale } from '@/i18n/locale';
 import { settingsClient } from '@/services/settingsClient';
 import {
   defaultAiSettings,
+  defaultAppearanceSettings,
+  defaultStartupSettings,
   defaultTerminalSettings,
   defaultUpdateSettings,
   useAppSettingsStore,
@@ -26,6 +28,8 @@ describe('SettingsView', () => {
     setLocale('en-US');
     useAppSettingsStore().replaceRuntimeSettings({
       ai: defaultAiSettings,
+      appearance: defaultAppearanceSettings,
+      startup: defaultStartupSettings,
       terminal: defaultTerminalSettings,
       update: defaultUpdateSettings,
     });
@@ -227,6 +231,18 @@ describe('SettingsView', () => {
 
     expect(automaticUpdateSetting.text()).toContain('自动下载更新');
     expect(automaticUpdateSetting.text()).toContain('在后台下载新版本，并在重启前征求你的确认。');
+  });
+
+  it('persists the startup terminal toggle and removes the close-to-tray option', async () => {
+    const wrapper = mount(SettingsView);
+
+    expect(wrapper.text()).not.toContain('Close to tray');
+    await wrapper.get('[data-testid="settings-open-terminal-on-startup"]').trigger('click');
+
+    expect(useAppSettingsStore().startupSettings.value.openTerminalOnStartup).toBe(true);
+    expect(JSON.parse(localStorage.getItem('fleurterm.runtimeSettings') ?? '{}').startup).toEqual({
+      openTerminalOnStartup: true,
+    });
   });
 
   it('does not read saved passwords when the settings page opens', async () => {

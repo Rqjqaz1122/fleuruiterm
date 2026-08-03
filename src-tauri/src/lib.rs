@@ -31,7 +31,7 @@ use std::{
 };
 use tauri::{
     Emitter, Manager, Runtime,
-    menu::{AboutMetadataBuilder, Menu, MenuBuilder, MenuItem, SubmenuBuilder},
+    menu::{AboutMetadataBuilder, Menu, MenuBuilder, MenuItem, PredefinedMenuItem, SubmenuBuilder},
 };
 use zeroize::Zeroize;
 
@@ -54,6 +54,110 @@ const MENU_PREVIOUS_TAB: &str = "previous-tab";
 const MENU_OPEN_SETTINGS: &str = "open-settings";
 const MENU_TOGGLE_AI: &str = "toggle-ai";
 const MENU_CLEAR_TERMINAL: &str = "clear-terminal";
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+enum ApplicationMenuLocale {
+    #[serde(rename = "en-US")]
+    English,
+    #[serde(rename = "zh-CN")]
+    Chinese,
+}
+
+struct ApplicationMenuLabels {
+    file: &'static str,
+    edit: &'static str,
+    view: &'static str,
+    window: &'static str,
+    help: &'static str,
+    settings: &'static str,
+    new_terminal: &'static str,
+    close_tab: &'static str,
+    next_tab: &'static str,
+    previous_tab: &'static str,
+    toggle_ai: &'static str,
+    clear_terminal: &'static str,
+    undo: &'static str,
+    redo: &'static str,
+    cut: &'static str,
+    copy: &'static str,
+    paste: &'static str,
+    select_all: &'static str,
+    fullscreen: &'static str,
+    minimize: &'static str,
+    maximize: &'static str,
+    bring_all_to_front: &'static str,
+    about: &'static str,
+    services: &'static str,
+    hide: &'static str,
+    hide_others: &'static str,
+    show_all: &'static str,
+    quit: &'static str,
+}
+
+fn application_menu_labels(locale: ApplicationMenuLocale) -> ApplicationMenuLabels {
+    match locale {
+        ApplicationMenuLocale::English => ApplicationMenuLabels {
+            file: "File",
+            edit: "Edit",
+            view: "View",
+            window: "Window",
+            help: "Help",
+            settings: "Settings…",
+            new_terminal: "New Terminal",
+            close_tab: "Close Tab",
+            next_tab: "Next Tab",
+            previous_tab: "Previous Tab",
+            toggle_ai: "Toggle AI Assistant",
+            clear_terminal: "Clear Terminal",
+            undo: "Undo",
+            redo: "Redo",
+            cut: "Cut",
+            copy: "Copy",
+            paste: "Paste",
+            select_all: "Select All",
+            fullscreen: "Enter Full Screen",
+            minimize: "Minimize",
+            maximize: "Zoom",
+            bring_all_to_front: "Bring All to Front",
+            about: "About FleurTerm",
+            services: "Services",
+            hide: "Hide FleurTerm",
+            hide_others: "Hide Others",
+            show_all: "Show All",
+            quit: "Quit FleurTerm",
+        },
+        ApplicationMenuLocale::Chinese => ApplicationMenuLabels {
+            file: "文件",
+            edit: "编辑",
+            view: "显示",
+            window: "窗口",
+            help: "帮助",
+            settings: "设置…",
+            new_terminal: "新建终端",
+            close_tab: "关闭标签",
+            next_tab: "下一个标签",
+            previous_tab: "上一个标签",
+            toggle_ai: "切换 AI 助手",
+            clear_terminal: "清空终端",
+            undo: "撤销",
+            redo: "重做",
+            cut: "剪切",
+            copy: "复制",
+            paste: "粘贴",
+            select_all: "全选",
+            fullscreen: "进入全屏幕",
+            minimize: "最小化",
+            maximize: "缩放",
+            bring_all_to_front: "前置全部窗口",
+            about: "关于 FleurTerm",
+            services: "服务",
+            hide: "隐藏 FleurTerm",
+            hide_others: "隐藏其他",
+            show_all: "全部显示",
+            quit: "退出 FleurTerm",
+        },
+    }
+}
 
 #[cfg(any(not(target_os = "macos"), test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -696,7 +800,11 @@ fn device_identifier_for_vault(identifier_result: Result<String, CredentialVault
     }
 }
 
-fn build_application_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+fn build_application_menu<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    locale: ApplicationMenuLocale,
+) -> tauri::Result<Menu<R>> {
+    let labels = application_menu_labels(locale);
     let about_metadata = AboutMetadataBuilder::new()
         .name(Some("FleurTerm"))
         .version(Some(app.package_info().version.to_string()))
@@ -706,73 +814,99 @@ fn build_application_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Resul
         .build();
 
     let settings_item =
-        MenuItem::with_id(app, MENU_OPEN_SETTINGS, "Settings…", true, None::<&str>)?;
-    let new_terminal_item =
-        MenuItem::with_id(app, MENU_NEW_TERMINAL, "New Terminal", true, None::<&str>)?;
-    let close_tab_item = MenuItem::with_id(app, MENU_CLOSE_TAB, "Close Tab", true, None::<&str>)?;
-    let next_tab_item = MenuItem::with_id(app, MENU_NEXT_TAB, "Next Tab", true, None::<&str>)?;
-    let previous_tab_item =
-        MenuItem::with_id(app, MENU_PREVIOUS_TAB, "Previous Tab", true, None::<&str>)?;
-    let toggle_ai_item = MenuItem::with_id(
+        MenuItem::with_id(app, MENU_OPEN_SETTINGS, labels.settings, true, None::<&str>)?;
+    let new_terminal_item = MenuItem::with_id(
         app,
-        MENU_TOGGLE_AI,
-        "Toggle AI Assistant",
+        MENU_NEW_TERMINAL,
+        labels.new_terminal,
         true,
         None::<&str>,
     )?;
+    let close_tab_item =
+        MenuItem::with_id(app, MENU_CLOSE_TAB, labels.close_tab, true, None::<&str>)?;
+    let next_tab_item = MenuItem::with_id(app, MENU_NEXT_TAB, labels.next_tab, true, None::<&str>)?;
+    let previous_tab_item = MenuItem::with_id(
+        app,
+        MENU_PREVIOUS_TAB,
+        labels.previous_tab,
+        true,
+        None::<&str>,
+    )?;
+    let toggle_ai_item =
+        MenuItem::with_id(app, MENU_TOGGLE_AI, labels.toggle_ai, true, None::<&str>)?;
     let clear_terminal_item = MenuItem::with_id(
         app,
         MENU_CLEAR_TERMINAL,
-        "Clear Terminal",
+        labels.clear_terminal,
         true,
         None::<&str>,
     )?;
 
+    let about_item =
+        PredefinedMenuItem::about(app, Some(labels.about), Some(about_metadata.clone()))?;
+    let services_item = PredefinedMenuItem::services(app, Some(labels.services))?;
+    let hide_item = PredefinedMenuItem::hide(app, Some(labels.hide))?;
+    let hide_others_item = PredefinedMenuItem::hide_others(app, Some(labels.hide_others))?;
+    let show_all_item = PredefinedMenuItem::show_all(app, Some(labels.show_all))?;
+    let quit_item = PredefinedMenuItem::quit(app, Some(labels.quit))?;
+    let undo_item = PredefinedMenuItem::undo(app, Some(labels.undo))?;
+    let redo_item = PredefinedMenuItem::redo(app, Some(labels.redo))?;
+    let cut_item = PredefinedMenuItem::cut(app, Some(labels.cut))?;
+    let copy_item = PredefinedMenuItem::copy(app, Some(labels.copy))?;
+    let paste_item = PredefinedMenuItem::paste(app, Some(labels.paste))?;
+    let select_all_item = PredefinedMenuItem::select_all(app, Some(labels.select_all))?;
+    let fullscreen_item = PredefinedMenuItem::fullscreen(app, Some(labels.fullscreen))?;
+    let minimize_item = PredefinedMenuItem::minimize(app, Some(labels.minimize))?;
+    let maximize_item = PredefinedMenuItem::maximize(app, Some(labels.maximize))?;
+    let bring_all_to_front_item =
+        PredefinedMenuItem::bring_all_to_front(app, Some(labels.bring_all_to_front))?;
+
     let application_menu = SubmenuBuilder::new(app, "FleurTerm")
-        .about(Some(about_metadata.clone()))
+        .item(&about_item)
         .separator()
         .item(&settings_item)
         .separator()
-        .services()
+        .item(&services_item)
         .separator()
-        .hide()
-        .hide_others()
-        .show_all()
+        .item(&hide_item)
+        .item(&hide_others_item)
+        .item(&show_all_item)
         .separator()
-        .quit()
+        .item(&quit_item)
         .build()?;
-    let file_menu = SubmenuBuilder::new(app, "File")
+    let file_menu = SubmenuBuilder::new(app, labels.file)
         .item(&new_terminal_item)
         .separator()
         .item(&close_tab_item)
         .build()?;
-    let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
+    let edit_menu = SubmenuBuilder::new(app, labels.edit)
+        .item(&undo_item)
+        .item(&redo_item)
         .separator()
-        .cut()
-        .copy()
-        .paste()
+        .item(&cut_item)
+        .item(&copy_item)
+        .item(&paste_item)
         .separator()
-        .select_all()
+        .item(&select_all_item)
         .build()?;
-    let view_menu = SubmenuBuilder::new(app, "View")
+    let view_menu = SubmenuBuilder::new(app, labels.view)
         .item(&clear_terminal_item)
         .item(&toggle_ai_item)
         .separator()
-        .fullscreen()
+        .item(&fullscreen_item)
         .build()?;
-    let window_menu = SubmenuBuilder::new(app, "Window")
-        .minimize()
-        .maximize()
+    let window_menu = SubmenuBuilder::new(app, labels.window)
+        .item(&minimize_item)
+        .item(&maximize_item)
         .separator()
         .item(&next_tab_item)
         .item(&previous_tab_item)
         .separator()
-        .bring_all_to_front()
+        .item(&bring_all_to_front_item)
         .build()?;
-    let help_menu = SubmenuBuilder::new(app, "Help")
-        .about_with_text("About FleurTerm", Some(about_metadata))
+    let help_about_item = PredefinedMenuItem::about(app, Some(labels.about), Some(about_metadata))?;
+    let help_menu = SubmenuBuilder::new(app, labels.help)
+        .item(&help_about_item)
         .build()?;
 
     MenuBuilder::new(app)
@@ -785,6 +919,17 @@ fn build_application_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Resul
             &help_menu,
         ])
         .build()
+}
+
+#[tauri::command]
+fn set_application_menu_locale(
+    app: tauri::AppHandle,
+    locale: ApplicationMenuLocale,
+) -> Result<(), String> {
+    let menu = build_application_menu(&app, locale).map_err(|error| error.to_string())?;
+    app.set_menu(menu)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn menu_command(menu_item_id: &str) -> Option<&'static str> {
@@ -860,7 +1005,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .menu(build_application_menu)
+        .menu(|app| build_application_menu(app, ApplicationMenuLocale::English))
         .on_menu_event(|app, event| {
             if let Some(command) = menu_command(event.id().as_ref()) {
                 if let Err(error) = app.emit(MENU_ACTION_EVENT, command) {
@@ -907,7 +1052,8 @@ pub fn run() {
             set_window_opacity,
             minimize_window,
             toggle_window_zoom,
-            close_window
+            close_window,
+            set_application_menu_locale
         ])
         .build(tauri::generate_context!())
         .expect("failed to build FleurTerm desktop application");
@@ -940,10 +1086,11 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApplicationExitState, MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL, PersistedTerminalLaunch,
-        PersistedTerminalTab, PersistedTerminalWorkspace, WindowZoomAction,
-        credential_vault::CredentialVaultError, device_identifier_for_vault, menu_command,
-        next_window_zoom_action, normalize_window_opacity, should_intercept_application_exit,
+        ApplicationExitState, ApplicationMenuLocale, MENU_CLEAR_TERMINAL, MENU_NEW_TERMINAL,
+        PersistedTerminalLaunch, PersistedTerminalTab, PersistedTerminalWorkspace,
+        WindowZoomAction, application_menu_labels, credential_vault::CredentialVaultError,
+        device_identifier_for_vault, menu_command, next_window_zoom_action,
+        normalize_window_opacity, should_intercept_application_exit,
     };
     #[cfg(target_os = "macos")]
     use super::{
@@ -1068,6 +1215,19 @@ mod tests {
         assert_eq!(menu_command(MENU_NEW_TERMINAL), Some("new-terminal"));
         assert_eq!(menu_command(MENU_CLEAR_TERMINAL), Some("clear-terminal"));
         assert_eq!(menu_command("copy"), None);
+    }
+
+    #[test]
+    fn application_menu_labels_follow_the_selected_locale() {
+        let english = application_menu_labels(ApplicationMenuLocale::English);
+        let chinese = application_menu_labels(ApplicationMenuLocale::Chinese);
+
+        assert_eq!(english.file, "File");
+        assert_eq!(english.settings, "Settings…");
+        assert_eq!(chinese.file, "文件");
+        assert_eq!(chinese.settings, "设置…");
+        assert_eq!(chinese.new_terminal, "新建终端");
+        assert_eq!(chinese.copy, "复制");
     }
 
     #[test]

@@ -26,16 +26,22 @@ import {
 import { settingsClient } from '@/services/settingsClient';
 import {
   defaultTerminalSettings,
+  defaultAppearanceSettings,
   defaultsForAiProvider,
   sanitizeAiSettings,
   sanitizeTerminalSettings,
+  sanitizeUpdateSettings,
   useAppSettingsStore,
   type AiCommandPolicy,
   type AiProvider,
   type AiSettings,
+  type TerminalColorPalette,
   type TerminalSettings,
+  type ThemeMode,
+  type ThemeTone,
+  type StartupSettings,
+  type UpdateSettings,
 } from '@/stores/appSettingsStore';
-import { TERMINAL_THEME_CHANGED_EVENT } from '@/terminal/terminalTheme';
 
 type SettingsSectionId =
   'general' | 'appearance' | 'terminal' | 'connections' | 'hotkeys' | 'ai' | 'advanced';
@@ -49,8 +55,6 @@ type ConnectionMethod = 'ssh' | 'telnet' | 'serial' | 'local';
 type AuthMethod = 'auto' | 'password' | 'publicKey' | 'agent' | 'keyboardInteractive';
 type SessionEndBehavior = 'auto' | 'keep' | 'reconnect' | 'close';
 type ColorScheme = 'auto' | 'green' | 'amber' | 'blue' | 'monochrome';
-type ThemeMode = 'system' | 'dark' | 'light';
-type ThemeTone = 'dark' | 'light';
 type ConnectionDialogIntent = 'create' | 'edit';
 type ConnectionFormTabId = 'general' | 'authentication' | 'ports' | 'advanced';
 
@@ -91,10 +95,6 @@ type ConnectionDraft = Omit<
   'id' | 'status' | 'latency' | 'lastSeen' | 'tags' | 'adapter'
 >;
 type WindowAppearanceConfig = { transparency: { enabled: boolean; opacity: number; blur: number } };
-type TerminalColorPalette = {
-  terminalForeground: string;
-  terminalMuted: string;
-};
 type ThemeConfigFile = {
   palettes: Record<ThemeTone, TerminalColorPalette>;
 };
@@ -120,18 +120,12 @@ const emit = defineEmits<{
 
 const defaultTheme: ThemeConfigFile = {
   palettes: {
-    dark: {
-      terminalForeground: '#eef3f8',
-      terminalMuted: '#8a98a8',
-    },
-    light: {
-      terminalForeground: '#1f2937',
-      terminalMuted: '#667085',
-    },
+    dark: { ...defaultAppearanceSettings.palettes.dark },
+    light: { ...defaultAppearanceSettings.palettes.light },
   },
 };
 const defaultWindowAppearance: WindowAppearanceConfig = {
-  transparency: { enabled: false, opacity: 100, blur: 0 },
+  transparency: { ...defaultAppearanceSettings.transparency },
 };
 const connectionTextInputAttributes = {
   autocomplete: 'off',
@@ -176,13 +170,39 @@ const collapsedGroups = ref<Record<string, boolean>>({});
 const connectionFilter = ref('');
 const settingsReady = ref(!settingsClient.available);
 const appSettings = useAppSettingsStore();
-const { aiSettings, shortcutSettings, terminalSettings, updateSettings } = appSettings;
+if (hasLegacyAppearanceSettings()) {
+  appSettings.updateAppearanceSettings({
+    themeMode: loadThemeMode(),
+    palettes: loadThemeConfig().palettes,
+    transparency: loadWindowAppearance().transparency,
+  });
+}
+const {
+  aiSettings,
+  appearanceSettings,
+  shortcutSettings,
+  startupSettings,
+  terminalSettings,
+  updateSettings,
+} = appSettings;
 const connections = ref<WorkbenchConnection[]>(loadConnections());
 const recentConnectionIds = ref<string[]>(loadRecentConnectionIds(connections.value));
-const themeMode = ref<ThemeMode>(loadThemeMode());
-const configTheme = ref<ThemeConfigFile>(loadThemeConfig());
+const themeMode = computed<ThemeMode>({
+  get: () => appearanceSettings.value.themeMode,
+  set: (nextThemeMode) => appSettings.updateAppearanceSettings({ themeMode: nextThemeMode }),
+});
+const configTheme = computed<ThemeConfigFile>({
+  get: () => ({ palettes: appearanceSettings.value.palettes }),
+  set: (nextTheme) => appSettings.updateAppearanceSettings({ palettes: nextTheme.palettes }),
+});
 const terminalPaletteTone = ref<ThemeTone>(themeMode.value === 'light' ? 'light' : 'dark');
-const windowAppearance = ref<WindowAppearanceConfig>(loadWindowAppearance());
+const windowAppearance = computed<WindowAppearanceConfig>({
+  get: () => ({ transparency: appearanceSettings.value.transparency }),
+  set: (nextWindowAppearance) =>
+    appSettings.updateAppearanceSettings({
+      transparency: nextWindowAppearance.transparency,
+    }),
+});
 const settingsEditorValue = ref('');
 const settingsEditorStatus = ref<{ kind: 'success' | 'error'; message: string } | null>(null);
 const dialogIntent = ref<ConnectionDialogIntent | null>(null);
@@ -385,12 +405,14 @@ watch(
     connections,
     recentConnectionIds,
     selectedLocale,
+    startupSettings,
     themeMode,
     configTheme,
     windowAppearance,
     terminalSettings,
     aiSettings,
     shortcutSettings,
+    updateSettings,
   ],
   () => {
     if (!settingsReady.value) {
@@ -398,7 +420,6 @@ watch(
     }
     persistAll();
     settingsEditorValue.value = buildSettingsEditorValue();
-    applyCssTheme();
   },
   { deep: true, immediate: true },
 );
@@ -439,26 +460,28 @@ async function hydrateSettings(): Promise<void> {
   const theme = payload?.settings?.theme as
     { mode?: ThemeMode; config?: ThemeConfigFile } | undefined;
   const windowConfig = payload?.settings?.window as WindowAppearanceConfig | undefined;
+  const startupConfig = payload?.settings?.startup as Partial<StartupSettings> | undefined;
   const terminalConfig = payload?.settings?.terminal as Partial<TerminalSettings> | undefined;
   const aiConfig = payload?.settings?.ai as Partial<AiSettings> | undefined;
   const shortcutConfig = payload?.settings?.shortcuts;
+  const updateConfig = payload?.settings?.update as Partial<UpdateSettings> | undefined;
 
   if (savedLocale === 'en-US' || savedLocale === 'zh-CN') {
     setLocale(savedLocale);
   }
-  if (isThemeMode(theme?.mode)) {
-    themeMode.value = theme.mode;
-  }
-  if (theme?.config) {
-    configTheme.value = normalizeThemeConfig(theme.config);
-  }
-  if (windowConfig) {
-    windowAppearance.value = sanitizeWindowAppearance(windowConfig);
-  }
   appSettings.replaceRuntimeSettings({
+    startup: startupConfig,
+    appearance: {
+      ...(isThemeMode(theme?.mode) ? { themeMode: theme.mode } : {}),
+      ...(theme?.config ? { palettes: normalizeThemeConfig(theme.config).palettes } : {}),
+      ...(windowConfig
+        ? { transparency: sanitizeWindowAppearance(windowConfig).transparency }
+        : {}),
+    },
     terminal: terminalConfig,
     ai: aiConfig,
     shortcuts: shortcutConfig,
+    update: updateConfig,
   });
   if (Array.isArray(workbench?.connections)) {
     connections.value = normalizeConnectionList(workbench.connections);
@@ -871,13 +894,17 @@ function applySettingsEditor(): void {
   try {
     const parsed = parseSettingsEditorValue(settingsEditorValue.value);
     setLocale(parsed.locale);
-    themeMode.value = parsed.theme.mode;
-    configTheme.value = parsed.theme.config;
-    windowAppearance.value = parsed.window;
     appSettings.replaceRuntimeSettings({
+      startup: parsed.startup,
+      appearance: {
+        themeMode: parsed.theme.mode,
+        palettes: parsed.theme.config.palettes,
+        transparency: parsed.window.transparency,
+      },
       terminal: parsed.terminal,
       ai: parsed.ai,
       shortcuts: parsed.shortcuts,
+      update: parsed.update,
     });
     connections.value = normalizeConnectionList(parsed.workbench.connections);
     recentConnectionIds.value = parsed.workbench.recentConnectionIds.filter((connectionId) =>
@@ -1062,6 +1089,7 @@ function buildSettingsEditorValue(): string {
   return JSON.stringify(
     {
       locale: locale.value,
+      startup: startupSettings.value,
       theme: {
         mode: themeMode.value,
         config: configTheme.value,
@@ -1070,6 +1098,7 @@ function buildSettingsEditorValue(): string {
       terminal: terminalSettings.value,
       ai: toAdvancedAiSettings(aiSettings.value),
       shortcuts: shortcutSettings.value,
+      update: updateSettings.value,
       workbench: {
         recentConnectionIds: recentConnectionIds.value,
         connections: redactConnectionPasswords(connections.value),
@@ -1082,11 +1111,13 @@ function buildSettingsEditorValue(): string {
 
 function parseSettingsEditorValue(source: string): {
   locale: AppLocale;
+  startup: StartupSettings;
   theme: { mode: ThemeMode; config: ThemeConfigFile };
   window: WindowAppearanceConfig;
   terminal: TerminalSettings;
   ai: AiSettings;
   shortcuts: ShortcutSettings;
+  update: UpdateSettings;
   workbench: { connections: WorkbenchConnection[]; recentConnectionIds: string[] };
 } {
   const parsed = JSON.parse(source) as Record<string, unknown>;
@@ -1109,6 +1140,11 @@ function parseSettingsEditorValue(source: string): {
   }
   return {
     locale: parsed.locale,
+    startup: {
+      openTerminalOnStartup: Boolean(
+        (parsed.startup as Partial<StartupSettings> | undefined)?.openTerminalOnStartup,
+      ),
+    },
     theme: {
       mode: theme?.mode ?? themeMode.value,
       config: normalizeThemeConfig(theme?.config ?? configTheme.value),
@@ -1125,6 +1161,7 @@ function parseSettingsEditorValue(source: string): {
       token: aiSettings.value.token,
     }),
     shortcuts: sanitizeShortcutSettings(parsed.shortcuts ?? shortcutSettings.value),
+    update: sanitizeUpdateSettings(parsed.update ?? updateSettings.value),
     workbench: {
       connections: normalizeConnectionList(workbench.connections),
       recentConnectionIds: workbench.recentConnectionIds.filter(
@@ -1173,6 +1210,7 @@ function persistAll(): void {
   void settingsClient
     .save({
       locale: locale.value,
+      startup: startupSettings.value,
       theme: {
         mode: themeMode.value,
         config: configTheme.value,
@@ -1181,6 +1219,7 @@ function persistAll(): void {
       terminal: terminalSettings.value,
       ai: aiSettings.value,
       shortcuts: shortcutSettings.value,
+      update: updateSettings.value,
       workbench: {
         connections: redactConnectionPasswords(connections.value),
         recentConnectionIds: recentConnectionIds.value,
@@ -1237,6 +1276,14 @@ function loadThemeMode(): ThemeMode {
   } catch {
     return 'dark';
   }
+}
+
+function hasLegacyAppearanceSettings(): boolean {
+  return (
+    typeof localStorage !== 'undefined' &&
+    (localStorage.getItem(THEME_STORAGE_KEY) !== null ||
+      localStorage.getItem(WINDOW_STORAGE_KEY) !== null)
+  );
 }
 
 function loadThemeConfig(): ThemeConfigFile {
@@ -1307,81 +1354,6 @@ function sanitizeWindowAppearance(config: WindowAppearanceConfig): WindowAppeara
       blur: clamp(Number(config?.transparency?.blur ?? 0), 0, 32),
     },
   };
-}
-
-function applyCssTheme(): void {
-  if (typeof document === 'undefined') {
-    return;
-  }
-  const prefersLight =
-    themeMode.value === 'system' &&
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-color-scheme: light)').matches;
-  const resolvedTone: ThemeTone = themeMode.value === 'light' || prefersLight ? 'light' : 'dark';
-  const colors =
-    resolvedTone === 'light'
-      ? {
-          canvas: '#f4f6f8',
-          surface: '#ffffff',
-          raised: '#edf1f5',
-          hover: 'rgb(20 34 48 / 9%)',
-          terminal: '#ffffff',
-          border: 'rgb(20 34 48 / 12%)',
-          strongBorder: 'rgb(20 34 48 / 22%)',
-          text: '#17202a',
-          muted: 'rgb(23 32 42 / 58%)',
-          subtle: 'rgb(23 32 42 / 42%)',
-          less: '#2d3a46',
-          card: 'rgb(20 34 48 / 5%)',
-          cardSoft: 'rgb(20 34 48 / 3.5%)',
-        }
-      : {
-          canvas: '#000000',
-          surface: '#111111',
-          raised: '#202020',
-          hover: 'rgb(144 144 144 / 32%)',
-          terminal: '#202020',
-          border: 'rgb(255 255 255 / 9%)',
-          strongBorder: 'rgb(255 255 255 / 15%)',
-          text: '#f1f1f1',
-          muted: 'rgb(255 255 255 / 56%)',
-          subtle: 'rgb(255 255 255 / 42%)',
-          less: '#dddddd',
-          card: '#1c1c1c',
-          cardSoft: '#181818',
-        };
-  const rootStyle = document.documentElement.style;
-  rootStyle.setProperty('--color-canvas', colors.canvas);
-  rootStyle.setProperty('--color-surface', colors.surface);
-  rootStyle.setProperty('--color-surface-raised', colors.raised);
-  rootStyle.setProperty('--color-surface-hover', colors.hover);
-  rootStyle.setProperty('--color-terminal', colors.terminal);
-  rootStyle.setProperty('--color-border', colors.border);
-  rootStyle.setProperty('--color-border-strong', colors.strongBorder);
-  rootStyle.setProperty('--color-text', colors.text);
-  rootStyle.setProperty('--color-text-muted', colors.muted);
-  rootStyle.setProperty('--color-surface-card', colors.card);
-  rootStyle.setProperty('--color-surface-card-soft', colors.cardSoft);
-  rootStyle.setProperty('--theme-fg-less', colors.less);
-  rootStyle.setProperty('--theme-fg-subtle', colors.subtle);
-  rootStyle.setProperty('--terminal-bg', colors.terminal);
-  rootStyle.setProperty('--app-layer-blur', `${windowAppearance.value.transparency.blur}px`);
-  rootStyle.setProperty(
-    '--app-overlay-blur',
-    `${Math.max(8, windowAppearance.value.transparency.blur)}px`,
-  );
-  const activeTerminalPalette = configTheme.value.palettes[resolvedTone];
-  rootStyle.setProperty('--theme-terminal-fg', activeTerminalPalette.terminalForeground);
-  rootStyle.setProperty('--theme-terminal-muted', activeTerminalPalette.terminalMuted);
-  document.documentElement.dataset.themeMode = themeMode.value;
-  document.documentElement.dataset.themeTone = resolvedTone;
-  const opacity = windowAppearance.value.transparency.enabled
-    ? windowAppearance.value.transparency.opacity / 100
-    : 1;
-  void settingsClient.setWindowOpacity(opacity).catch(() => undefined);
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event(TERMINAL_THEME_CHANGED_EVENT));
-  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -1456,8 +1428,6 @@ const enLabels = {
   startupCardTitle: 'Startup',
   startupOpenTerminalTitle: 'Open terminal on startup',
   startupOpenTerminalDescription: 'Show a local shell when FleurTerm launches.',
-  startupTrayTitle: 'Close to tray',
-  startupTrayDescription: 'Keep the terminal workspace available in the background.',
   connectionsSectionTitle: 'Profiles & connections',
   filterConnections: 'Filter connections',
   addConnection: 'Add connection',
@@ -1675,8 +1645,6 @@ const zhLabels: typeof enLabels = {
   startupCardTitle: '启动',
   startupOpenTerminalTitle: '启动时打开终端',
   startupOpenTerminalDescription: 'FleurTerm 启动后显示本地 Shell。',
-  startupTrayTitle: '关闭到托盘',
-  startupTrayDescription: '让终端工作区在后台保持可用。',
   connectionsSectionTitle: '配置与连接',
   filterConnections: '筛选连接',
   addConnection: '添加连接',
@@ -1962,24 +1930,24 @@ const zhLabels: typeof enLabels = {
                     <span>{{ labels.startupOpenTerminalDescription }}</span>
                   </div>
                   <div class="settings-control">
-                    <span
-                      class="settings-readonly-toggle is-active"
-                      :aria-label="labels.statusEnabled"
+                    <button
+                      class="connection-toggle"
+                      :class="{ 'is-active': startupSettings.openTerminalOnStartup }"
+                      data-testid="settings-open-terminal-on-startup"
+                      :aria-label="
+                        startupSettings.openTerminalOnStartup
+                          ? labels.statusEnabled
+                          : labels.statusDisabled
+                      "
+                      type="button"
+                      @click="
+                        appSettings.updateStartupSettings({
+                          openTerminalOnStartup: !startupSettings.openTerminalOnStartup,
+                        })
+                      "
                     >
                       <span />
-                    </span>
-                  </div>
-                </div>
-
-                <div class="settings-form-line">
-                  <div class="settings-form-copy">
-                    <strong>{{ labels.startupTrayTitle }}</strong>
-                    <span>{{ labels.startupTrayDescription }}</span>
-                  </div>
-                  <div class="settings-control">
-                    <span class="settings-readonly-toggle" :aria-label="labels.statusDisabled">
-                      <span />
-                    </span>
+                    </button>
                   </div>
                 </div>
               </div>

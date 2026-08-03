@@ -49,7 +49,7 @@ const runner =
   createAiConversationRunner({
     sendChat: sendAiChat,
     conversation,
-    settings,
+    settings: { ...settings, locale },
     terminalRunner,
     runAppAction: (action) => runApplicationAction(action),
     listSavedConnections: props.listSavedConnections,
@@ -258,6 +258,7 @@ function appActionLabel(action: AiAppAction): string {
       return labels.value.openSsh;
     case 'settings.updateTerminal':
     case 'settings.updateAi':
+    case 'settings.update':
     case 'settings.setLocale':
       return labels.value.apply;
     case 'settings.open':

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import AppDialog from '@/components/AppDialog.vue';
-import { t, type TranslationKey } from '@/i18n/locale';
+import { locale, t, type TranslationKey } from '@/i18n/locale';
 import { SftpClient, SftpClientError, type SftpDirectoryEntry } from '@/services/sftpClient';
 
 type PanelState = 'connecting' | 'ready' | 'failed';
@@ -122,7 +122,7 @@ async function uploadFiles(): Promise<void> {
   try {
     transferMessage.value = t('sftp.uploading');
     errorMessage.value = null;
-    const transferred = await client.uploadFiles(sessionId, currentPath.value);
+    const transferred = await client.uploadFiles(sessionId, currentPath.value, locale.value);
     if (!transferred || disposed) {
       return;
     }
@@ -147,7 +147,7 @@ async function downloadFile(entry: SftpDirectoryEntry): Promise<void> {
   try {
     transferMessage.value = t('sftp.downloading');
     errorMessage.value = null;
-    const transferred = await client.downloadFile(sessionId, entry.path, entry.name);
+    const transferred = await client.downloadFile(sessionId, entry.path, entry.name, locale.value);
     if (!transferred || disposed) {
       return;
     }

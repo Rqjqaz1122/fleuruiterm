@@ -2,8 +2,11 @@ import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionSnapshot } from '@/domain/session';
+import type { AppLocale } from '@/i18n/locale';
 import {
   defaultAiSettings,
+  defaultAppearanceSettings,
+  defaultStartupSettings,
   defaultTerminalSettings,
   type AiCommandPolicy,
 } from '@/stores/appSettingsStore';
@@ -209,7 +212,7 @@ describe('AI conversation runner', () => {
     );
   });
 
-  it('provides the terminal settings action contract and current values to the model', async () => {
+  it('provides the complete settings action contract and current non-secret values to the model', async () => {
     const { runner, sendChat } = createRunner('ask');
     sendChat.mockResolvedValueOnce('Ready.');
 
@@ -220,8 +223,52 @@ describe('AI conversation runner', () => {
       .filter((message) => message.role === 'system')
       .map((message) => message.content)
       .join('\n');
-    expect(systemContext).toContain('settings.updateTerminal');
+    expect(systemContext).toContain('settings.update');
     expect(systemContext).toContain(JSON.stringify(defaultTerminalSettings));
+    expect(systemContext).toContain(JSON.stringify(defaultStartupSettings));
+    expect(systemContext).toContain(JSON.stringify(defaultAppearanceSettings));
+    expect(systemContext).toContain('ai.baseUrl and ai.token are read-only');
+    expect(systemContext).not.toContain('"token":"token"');
+  });
+
+  it('applies complete setting actions immediately in ask mode', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"settings.update","patch":{"startup":{"openTerminalOnStartup":true},"appearance":{"themeMode":"light"}}}</fleurterm-action>',
+      )
+      .mockResolvedValueOnce('Startup and appearance settings were updated.');
+
+    await runner.send('launch a terminal on startup and use light mode', snapshot());
+
+    expect(runAppAction).toHaveBeenCalledWith({
+      type: 'settings.update',
+      patch: {
+        appearance: { themeMode: 'light' },
+        startup: { openTerminalOnStartup: true },
+      },
+    });
+    expect(conversation.messages.value[1]?.appActions).toEqual([]);
+  });
+
+  it('applies legacy non-sensitive AI setting actions immediately in ask mode', async () => {
+    const { runner, runAppAction, sendChat } = createRunner('ask');
+    sendChat
+      .mockResolvedValueOnce(
+        '<fleurterm-action>{"type":"settings.updateAi","patch":{"model":"new-model","streamingEnabled":false}}</fleurterm-action>',
+      )
+      .mockResolvedValueOnce('The AI endpoint and token were updated.');
+
+    await runner.send('set the AI model and disable streaming', snapshot());
+
+    expect(runAppAction).toHaveBeenCalledWith({
+      type: 'settings.updateAi',
+      patch: {
+        model: 'new-model',
+        streamingEnabled: false,
+      },
+    });
+    expect(conversation.messages.value[1]?.appActions).toEqual([]);
   });
 
   it('applies terminal setting actions immediately in ask mode', async () => {
@@ -428,6 +475,10 @@ function createRunner(
         commandPolicy,
       }),
       terminalSettings: ref({ ...defaultTerminalSettings }),
+      appearanceSettings: ref(structuredClone(defaultAppearanceSettings)),
+      locale: ref<AppLocale>('en-US'),
+      shortcutSettings: ref({}),
+      startupSettings: ref({ ...defaultStartupSettings }),
     },
     terminalRunner,
     runAppAction,

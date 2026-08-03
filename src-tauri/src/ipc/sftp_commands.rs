@@ -14,6 +14,32 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq)]
+pub enum SftpDialogLocale {
+    #[serde(rename = "en-US")]
+    English,
+    #[serde(rename = "zh-CN")]
+    Chinese,
+}
+
+struct SftpDialogLabels {
+    upload_files: &'static str,
+    download_file: &'static str,
+}
+
+fn sftp_dialog_labels(locale: SftpDialogLocale) -> SftpDialogLabels {
+    match locale {
+        SftpDialogLocale::English => SftpDialogLabels {
+            upload_files: "Upload files",
+            download_file: "Download file",
+        },
+        SftpDialogLocale::Chinese => SftpDialogLabels {
+            upload_files: "上传文件",
+            download_file: "下载文件",
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn sftp_open(
     app: AppHandle,
@@ -82,12 +108,18 @@ pub async fn sftp_upload_files(
     app: AppHandle,
     sftp_session_id: String,
     remote_directory: String,
+    locale: SftpDialogLocale,
     state: State<'_, AppState>,
 ) -> Result<bool, PublicSftpError> {
-    let selected_paths =
-        tauri::async_runtime::spawn_blocking(move || app.dialog().file().blocking_pick_files())
-            .await
-            .map_err(|_| PublicSftpError::from(SftpError::WorkerFailed))?;
+    let labels = sftp_dialog_labels(locale);
+    let selected_paths = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(labels.upload_files)
+            .blocking_pick_files()
+    })
+    .await
+    .map_err(|_| PublicSftpError::from(SftpError::WorkerFailed))?;
     let Some(selected_paths) = selected_paths else {
         return Ok(false);
     };
@@ -110,12 +142,15 @@ pub async fn sftp_download_file(
     sftp_session_id: String,
     remote_path: String,
     suggested_file_name: String,
+    locale: SftpDialogLocale,
     state: State<'_, AppState>,
 ) -> Result<bool, PublicSftpError> {
     validate_suggested_file_name(&suggested_file_name).map_err(PublicSftpError::from)?;
+    let labels = sftp_dialog_labels(locale);
     let selected_path = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
+            .set_title(labels.download_file)
             .set_file_name(suggested_file_name)
             .blocking_save_file()
     })
@@ -194,5 +229,21 @@ fn load_connection_password(
         let _ = connection_id;
         let _ = vault;
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SftpDialogLocale, sftp_dialog_labels};
+
+    #[test]
+    fn file_dialog_titles_follow_the_selected_locale() {
+        let english = sftp_dialog_labels(SftpDialogLocale::English);
+        let chinese = sftp_dialog_labels(SftpDialogLocale::Chinese);
+
+        assert_eq!(english.upload_files, "Upload files");
+        assert_eq!(english.download_file, "Download file");
+        assert_eq!(chinese.upload_files, "上传文件");
+        assert_eq!(chinese.download_file, "下载文件");
     }
 }
