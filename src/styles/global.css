@@ -1310,7 +1310,7 @@ select:focus-visible {
 
 .ai-panel-composer-shell {
   display: grid;
-  overflow: hidden;
+  overflow: visible;
   border-radius: 12px;
   background: var(--color-surface-raised);
   box-shadow: inset 0 0 0 1px var(--color-border);
@@ -1367,6 +1367,7 @@ select:focus-visible {
 }
 
 .ai-panel-composer-actions > span {
+  flex: 1;
   overflow: hidden;
   color: var(--color-text-muted);
   font-size: 10px;
@@ -1374,25 +1375,76 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.ai-panel-send {
-  min-width: 84px;
+.ai-panel-composer-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+}
+
+.ai-reasoning-effort-select {
+  width: 96px;
+}
+
+.ai-reasoning-effort-select .app-select-button {
+  min-height: 32px;
   height: 32px;
+  padding: 0 28px 0 11px;
+  border-color: color-mix(in srgb, var(--color-border) 86%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface-raised) 88%, transparent);
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.ai-reasoning-effort-select .app-select-arrow {
+  right: 11px;
+}
+
+.ai-reasoning-effort-select .app-select-menu {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+}
+
+.ai-panel-send {
+  display: grid;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
   border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
-  border-radius: var(--radius-small);
-  background: color-mix(in srgb, var(--color-accent) 16%, var(--color-surface-raised));
-  color: var(--color-text);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-accent) 82%, var(--color-surface-raised));
+  color: var(--color-canvas);
   cursor: default;
-  font-size: 12px;
-  font-weight: 700;
+}
+
+.ai-panel-send svg {
+  width: 17px;
+  height: 17px;
+}
+
+.ai-panel-send path {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
 }
 
 .ai-panel-stop {
   border-color: color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
-  background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface-raised));
+  background: color-mix(in srgb, var(--color-danger) 82%, var(--color-surface-raised));
+  color: var(--color-canvas);
 }
 
 .ai-panel-send:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-accent) 24%, var(--color-surface-raised));
+  background: color-mix(in srgb, var(--color-accent) 94%, var(--color-surface-raised));
+}
+
+.ai-panel-stop:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 94%, var(--color-surface-raised));
 }
 
 .ai-panel-send:disabled {
