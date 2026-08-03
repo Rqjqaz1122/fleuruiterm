@@ -19,13 +19,7 @@ describe('AppContextMenu', () => {
   });
 
   it('teleports accessible actions and separators to the document body', async () => {
-    mount(AppContextMenu, {
-      global: {
-        stubs: {
-          transition: false,
-        },
-      },
-    });
+    mount(AppContextMenu);
 
     await openMenu([
       { kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() },
@@ -34,7 +28,7 @@ describe('AppContextMenu', () => {
     ]);
 
     const menu = getMenu();
-    expect(menu.parentElement).toBe(document.body);
+    expect(menu.closest('body')).toBe(document.body);
     expect(menu.getAttribute('role')).toBe('menu');
     expect(menu.querySelectorAll('[role="menuitem"]')).toHaveLength(2);
     expect(menu.querySelector('[role="separator"]')).not.toBeNull();
