@@ -17,11 +17,15 @@ const left = ref(0);
 const top = ref(0);
 const maxWidth = ref(0);
 const maxHeight = ref(0);
+const transformOriginX = ref(0);
+const transformOriginY = ref(0);
 const menuStyle = computed(() => ({
   left: `${left.value}px`,
   top: `${top.value}px`,
   maxWidth: `${maxWidth.value}px`,
   maxHeight: `${maxHeight.value}px`,
+  '--context-menu-origin-x': `${transformOriginX.value}px`,
+  '--context-menu-origin-y': `${transformOriginY.value}px`,
   overflow: 'auto',
 }));
 
@@ -49,6 +53,8 @@ async function positionMenu(nextRequest: ContextMenuRequest | null): Promise<voi
   captureInvoker(nextRequest);
   left.value = nextRequest.x;
   top.value = nextRequest.y;
+  transformOriginX.value = 0;
+  transformOriginY.value = 0;
   maxWidth.value = availableViewportSize(window.innerWidth);
   maxHeight.value = availableViewportSize(window.innerHeight);
   await nextTick();
@@ -59,16 +65,20 @@ async function positionMenu(nextRequest: ContextMenuRequest | null): Promise<voi
   }
 
   const bounds = element.getBoundingClientRect();
+  const menuWidth = Math.min(element.offsetWidth || bounds.width, maxWidth.value);
+  const menuHeight = Math.min(element.offsetHeight || bounds.height, maxHeight.value);
   left.value = clampCoordinate(
     nextRequest.x,
-    Math.min(bounds.width, maxWidth.value),
+    menuWidth,
     window.innerWidth,
   );
   top.value = clampCoordinate(
     nextRequest.y,
-    Math.min(bounds.height, maxHeight.value),
+    menuHeight,
     window.innerHeight,
   );
+  transformOriginX.value = clampTransformOrigin(nextRequest.x - left.value, menuWidth);
+  transformOriginY.value = clampTransformOrigin(nextRequest.y - top.value, menuHeight);
   await nextTick();
   const firstEnabledAction = enabledActionButtons()[0];
   if (firstEnabledAction === undefined) {
@@ -97,6 +107,10 @@ function clampCoordinate(
 ): number {
   const maximumCoordinate = Math.max(VIEWPORT_PADDING, viewportSize - menuSize - VIEWPORT_PADDING);
   return Math.min(Math.max(pointerCoordinate, VIEWPORT_PADDING), maximumCoordinate);
+}
+
+function clampTransformOrigin(originCoordinate: number, menuSize: number): number {
+  return Math.min(Math.max(originCoordinate, 0), menuSize);
 }
 
 function closeFromOutsidePointer(event: PointerEvent): void {
@@ -233,35 +247,37 @@ function enabledActionButtons(): HTMLButtonElement[] {
 
 <template>
   <Teleport to="body">
-    <div
-      v-if="request"
-      ref="menuElement"
-      class="app-context-menu"
-      role="menu"
-      tabindex="-1"
-      :style="menuStyle"
-      @keydown="handleKeyDown"
-    >
-      <template v-for="entry in request.entries" :key="entry.id">
-        <div
-          v-if="entry.kind === 'separator'"
-          class="app-context-menu-separator"
-          role="separator"
-        />
-        <button
-          v-else
-          class="app-context-menu-action"
-          :class="{ danger: entry.danger }"
-          type="button"
-          role="menuitem"
-          tabindex="-1"
-          :data-context-action="entry.id"
-          :disabled="entry.disabled"
-          @click="runEntry(entry)"
-        >
-          {{ entry.label }}
-        </button>
-      </template>
-    </div>
+    <Transition name="app-context-menu-motion" appear>
+      <div
+        v-if="request"
+        ref="menuElement"
+        class="app-context-menu"
+        role="menu"
+        tabindex="-1"
+        :style="menuStyle"
+        @keydown="handleKeyDown"
+      >
+        <template v-for="entry in request.entries" :key="entry.id">
+          <div
+            v-if="entry.kind === 'separator'"
+            class="app-context-menu-separator"
+            role="separator"
+          />
+          <button
+            v-else
+            class="app-context-menu-action"
+            :class="{ danger: entry.danger }"
+            type="button"
+            role="menuitem"
+            tabindex="-1"
+            :data-context-action="entry.id"
+            :disabled="entry.disabled"
+            @click="runEntry(entry)"
+          >
+            {{ entry.label }}
+          </button>
+        </template>
+      </div>
+    </Transition>
   </Teleport>
 </template>

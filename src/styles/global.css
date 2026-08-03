@@ -57,22 +57,32 @@ select:focus-visible {
   max-height: calc(100vh - 16px);
   flex-direction: column;
   overflow: auto;
-  padding: 4px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-small);
+  padding: 5px;
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: 10px;
   outline: none;
   background: var(--color-surface-raised);
-  box-shadow: var(--shadow-popover);
-  font-family: var(--font-mono);
+  background: color-mix(in srgb, var(--color-surface-raised) 93%, transparent);
+  box-shadow:
+    0 18px 44px rgb(0 0 0 / 42%),
+    0 2px 10px rgb(0 0 0 / 28%),
+    inset 0 1px 0 rgb(255 255 255 / 4%);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(18px) saturate(1.15);
+  font-family: var(--font-ui);
   font-size: 12px;
+  transform-origin: var(--context-menu-origin-x, 0) var(--context-menu-origin-y, 0);
   user-select: none;
 }
 
 .app-context-menu-action {
+  display: flex;
+  min-height: 30px;
   width: 100%;
-  padding: 6px 10px;
+  align-items: center;
+  padding: 6px 9px;
   border: 0;
-  border-radius: var(--radius-small);
+  border-radius: 6px;
   color: var(--color-text);
   background: transparent;
   cursor: default;
@@ -83,7 +93,7 @@ select:focus-visible {
 .app-context-menu-action:hover:not(:disabled),
 .app-context-menu-action:focus-visible {
   outline: none;
-  background: var(--color-surface-hover);
+  background: rgb(255 255 255 / 11%);
 }
 
 .app-context-menu-action.danger {
@@ -97,8 +107,45 @@ select:focus-visible {
 
 .app-context-menu-separator {
   height: 1px;
-  margin: 4px 6px;
-  background: var(--color-border-strong);
+  margin: 4px 7px;
+  background: rgb(255 255 255 / 9%);
+}
+
+.app-context-menu-motion-enter-active {
+  transition:
+    opacity 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.app-context-menu-motion-leave-active {
+  pointer-events: none;
+  transition:
+    opacity 110ms cubic-bezier(0.4, 0, 1, 1),
+    transform 110ms cubic-bezier(0.4, 0, 1, 1);
+  will-change: opacity, transform;
+}
+
+.app-context-menu-motion-enter-from {
+  opacity: 0;
+  transform: scale(0.82);
+}
+
+.app-context-menu-motion-leave-to {
+  opacity: 0;
+  transform: scale(0.94);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-context-menu-motion-enter-active,
+  .app-context-menu-motion-leave-active {
+    transition-duration: 1ms;
+  }
+
+  .app-context-menu-motion-enter-from,
+  .app-context-menu-motion-leave-to {
+    transform: none;
+  }
 }
 
 .app-shell {
