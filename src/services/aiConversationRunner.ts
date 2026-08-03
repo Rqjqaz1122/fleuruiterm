@@ -17,6 +17,7 @@ import { permitsTerminalExecution } from './aiTerminalExecutionPolicy';
 import {
   formatToolResultMessage,
   parseAssistantToolResponse,
+  stripAssistantToolMarkup,
   type AiAppAction,
   type AiTerminalToolCall,
   type AiToolResult,
@@ -120,6 +121,11 @@ async function runConversationTurn(
   let executedToolCallCount = 0;
   let pendingAssistantMessageId: string | null = null;
   const deniedCommandSignatures = new Set<string>();
+  const terminalCommandVisibility =
+    permitsTerminalExecution(prompt) &&
+    dependencies.settings.aiSettings.value.commandPolicy !== 'suggest'
+      ? 'hidden'
+      : 'code';
 
   try {
     for (let modelStep = 0; modelStep < MAX_MODEL_STEPS; modelStep += 1) {
@@ -138,13 +144,18 @@ async function runConversationTurn(
             }
             streamedContent += delta;
             dependencies.conversation.updateMessage(assistantMessage.id, {
-              content: streamedContent,
+              content:
+                terminalCommandVisibility === 'hidden'
+                  ? stripAssistantToolMarkup(streamedContent)
+                  : streamedContent,
             });
           },
         },
       );
       const responseContent = rawResponse || streamedContent;
-      const parsedResponse = parseAssistantToolResponse(responseContent);
+      const parsedResponse = parseAssistantToolResponse(responseContent, {
+        terminalCommandVisibility,
+      });
       const requestedToolCalls = permitsTerminalExecution(prompt) ? parsedResponse.toolCalls : [];
       const toolCalls = requestedToolCalls.map((toolCall, index) =>
         prepareToolCall(toolCall, turnId, modelStep, index, snapshot),

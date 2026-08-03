@@ -32,6 +32,20 @@ describe('AI tool protocol', () => {
     ]);
   });
 
+  it('hides terminal command markup while preserving adjacent assistant text', () => {
+    const response = parseAssistantToolResponse(
+      'I will inspect it.<terminal-command>docker ps -a</terminal-command>',
+      { terminalCommandVisibility: 'hidden' },
+    );
+
+    expect(response.displayContent).toBe('I will inspect it.');
+    expect(response.toolCalls).toEqual([
+      expect.objectContaining({
+        command: 'docker ps -a',
+      }),
+    ]);
+  });
+
   it('formats a result with the call id, outcome, command, and output', () => {
     const message = formatToolResultMessage({
       callId: 'call-1',

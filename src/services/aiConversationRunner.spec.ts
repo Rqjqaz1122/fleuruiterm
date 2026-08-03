@@ -98,6 +98,53 @@ describe('AI conversation runner', () => {
     expect(terminalRunner.execute).toHaveBeenCalledOnce();
   });
 
+  it('keeps an executed terminal command out of the assistant message', async () => {
+    const { runner, sendChat, terminalRunner } = createRunner('fullAccess');
+    sendChat
+      .mockResolvedValueOnce(
+        'I will inspect the containers.<terminal-command>docker ps -a</terminal-command>',
+      )
+      .mockResolvedValueOnce('The inspection completed.');
+    terminalRunner.execute.mockImplementation(async (call) => completedResult(call, 'container'));
+
+    await runner.send('inspect the Docker containers', snapshot());
+
+    expect(terminalRunner.execute).toHaveBeenCalledOnce();
+    expect(conversation.messages.value[1]?.content).toBe('I will inspect the containers.');
+    expect(conversation.messages.value[1]?.content).not.toContain('docker ps -a');
+    expect(conversation.toolCalls.value[0]?.command).toBe('docker ps -a');
+  });
+
+  it('does not expose partial terminal command markup while streaming', async () => {
+    const { runner, sendChat, terminalRunner } = createRunner('fullAccess');
+    const visibleContent: string[] = [];
+    sendChat
+      .mockImplementationOnce(async (_settings, _messages, options) => {
+        const deltas = [
+          'I will inspect the containers.',
+          '<terminal-',
+          'command>docker ps -a',
+          '</terminal-command>',
+        ];
+        for (const delta of deltas) {
+          options.onDelta?.(delta);
+          visibleContent.push(conversation.messages.value[1]?.content ?? '');
+        }
+        return deltas.join('');
+      })
+      .mockResolvedValueOnce('The inspection completed.');
+    terminalRunner.execute.mockImplementation(async (call) => completedResult(call, 'container'));
+
+    await runner.send('inspect the Docker containers', snapshot());
+
+    expect(visibleContent).toEqual([
+      'I will inspect the containers.',
+      'I will inspect the containers.',
+      'I will inspect the containers.',
+      'I will inspect the containers.',
+    ]);
+  });
+
   it('returns a denied result to the model without executing the command', async () => {
     const { runner, sendChat, terminalRunner } = createRunner('ask');
     sendChat
