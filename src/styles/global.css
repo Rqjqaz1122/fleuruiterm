@@ -48,6 +48,56 @@ select:focus-visible {
   outline-offset: -1px;
 }
 
+.app-context-menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  min-width: 180px;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-small);
+  outline: none;
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  user-select: none;
+}
+
+.app-context-menu-action {
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-small);
+  color: var(--color-text);
+  background: transparent;
+  cursor: default;
+  line-height: 18px;
+  text-align: left;
+}
+
+.app-context-menu-action:hover:not(:disabled),
+.app-context-menu-action:focus-visible {
+  outline: none;
+  background: var(--color-surface-hover);
+}
+
+.app-context-menu-action.danger {
+  color: var(--color-danger);
+}
+
+.app-context-menu-action:disabled {
+  color: var(--color-text-muted);
+  opacity: 0.55;
+}
+
+.app-context-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--color-border-strong);
+}
+
 .app-shell {
   display: grid;
   grid-template-rows: 34px auto minmax(0, 1fr) 28px;

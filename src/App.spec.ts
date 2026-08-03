@@ -84,6 +84,19 @@ describe('FleurTerm app shell', () => {
     vi.spyOn(workspacePersistenceClient, 'save').mockResolvedValue();
   });
 
+  it('mounts exactly one global context menu renderer', () => {
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          AppContextMenu: { template: '<div data-testid="global-context-menu" />' },
+          TerminalPane: true,
+        },
+      },
+    });
+
+    expect(wrapper.findAll('[data-testid="global-context-menu"]')).toHaveLength(1);
+  });
+
   it('restores saved terminal tabs and the previously active connection on startup', async () => {
     localStorage.setItem(
       'fleurterm.connections',

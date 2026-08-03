@@ -3,6 +3,7 @@ import { storeToRefs } from 'pinia';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import AIPanel from '@/components/AIPanel.vue';
+import AppContextMenu from '@/components/AppContextMenu.vue';
 import SettingsView from '@/components/SettingsView.vue';
 import StartPage from '@/components/StartPage.vue';
 import StatusBar from '@/components/StatusBar.vue';
@@ -952,5 +953,6 @@ function clampAiPanelWidth(width: number): number {
     </div>
 
     <StatusBar v-if="workspace.tabs.length > 0 || settingsTabOpen" :snapshot="activeSnapshot" />
+    <AppContextMenu />
   </main>
 </template>
