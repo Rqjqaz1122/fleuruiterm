@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setLocale } from '@/i18n/locale';
+import { contextMenu, type ContextMenuActionEntry } from '@/services/contextMenu';
 import { settingsClient } from '@/services/settingsClient';
 import {
   defaultAiSettings,
@@ -35,7 +36,43 @@ describe('SettingsView', () => {
     });
     useAppSettingsStore().resetShortcutSettings();
     document.documentElement.removeAttribute('style');
+    contextMenu.close();
     vi.restoreAllMocks();
+  });
+
+  it('prioritizes editable actions over the settings page context menu', async () => {
+    const wrapper = mount(SettingsView);
+    await wrapper.get('[data-section="advanced"]').trigger('click');
+
+    await wrapper.get('[data-testid="settings-json-editor"]').trigger('contextmenu');
+
+    expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual([
+      'cut',
+      'copy',
+      'paste',
+      'select-all',
+    ]);
+    expect(wrapper.emitted('createTerminal')).toBeUndefined();
+  });
+
+  it('offers a new terminal on the settings background and unsupported input types', async () => {
+    const wrapper = mount(SettingsView);
+
+    await wrapper.get('.settings-view').trigger('contextmenu');
+    expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual(['new-terminal']);
+    await contextAction('new-terminal').run();
+
+    await wrapper.get('[data-section="terminal"]').trigger('click');
+    for (const inputType of ['number', 'range']) {
+      await wrapper.get(`input[type="${inputType}"]`).trigger('contextmenu');
+      expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual(['new-terminal']);
+    }
+
+    await wrapper.get('[data-section="appearance"]').trigger('click');
+    await wrapper.get('input[type="color"]').trigger('contextmenu');
+    expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual(['new-terminal']);
+
+    expect(wrapper.emitted('createTerminal')).toEqual([[]]);
   });
 
   it('uses the FleurUI settings sections', () => {
@@ -803,3 +840,11 @@ describe('SettingsView', () => {
     expect(wrapper.text()).toContain('admin@Staging');
   });
 });
+
+function contextAction(id: string): ContextMenuActionEntry {
+  const entry = contextMenu.state.value?.entries.find((candidate) => candidate.id === id);
+  if (entry?.kind !== 'action') {
+    throw new Error(`Expected context-menu action: ${id}`);
+  }
+  return entry;
+}

@@ -653,6 +653,21 @@ async function closeAppTab(tabId: string): Promise<void> {
   }
 }
 
+async function closeOtherAppTabs(targetTabId: string): Promise<void> {
+  const currentTabs = appTabs.value;
+  if (!currentTabs.some((tab) => tab.id === targetTabId)) {
+    return;
+  }
+
+  const tabIdsToClose = currentTabs.filter((tab) => tab.id !== targetTabId).map((tab) => tab.id);
+  for (const tabId of tabIdsToClose) {
+    await closeAppTab(tabId);
+  }
+  if (appTabs.value.some((tab) => tab.id === targetTabId)) {
+    activateAppTab(targetTabId);
+  }
+}
+
 function closeSettingsTab(): void {
   if (workspaceClosing) {
     return;
@@ -867,6 +882,7 @@ function clampAiPanelWidth(width: number): number {
       :ai-open="aiPanelOpen"
       @activate="activateAppTab"
       @close="closeAppTab"
+      @close-other-tabs="closeOtherAppTabs"
       @new-terminal="openTerminal"
       @open-a-i="toggleAiPanel"
       @open-settings="openSettings"
@@ -913,7 +929,7 @@ function clampAiPanelWidth(width: number): number {
         aria-labelledby="app-tab-app-settings"
         :inert="!settingsActive"
       >
-        <SettingsView @open-connection="openWorkbenchConnection" />
+        <SettingsView @create-terminal="openTerminal" @open-connection="openWorkbenchConnection" />
       </section>
       <section
         class="workspace"

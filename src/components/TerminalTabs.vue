@@ -7,6 +7,7 @@ import { beginTabDrag, draggedTab, finishTabDrag } from '@/composables/tabDrag';
 import { SETTINGS_TAB_ID, type AppTab } from '@/domain/appTab';
 import type { TabDropPlacement } from '@/domain/workspace';
 import { t } from '@/i18n/locale';
+import { contextMenu, type ContextMenuEntry } from '@/services/contextMenu';
 import { detectDesktopPlatform, type DesktopPlatform } from '@/services/desktopPlatform';
 
 const props = defineProps<{
@@ -19,6 +20,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   activate: [tabId: string];
   close: [tabId: string];
+  closeOtherTabs: [targetTabId: string];
   newTerminal: [];
   openAI: [];
   openSettings: [];
@@ -220,6 +222,45 @@ function onTabClick(event: MouseEvent, tabId: string): void {
   emit('activate', tabId);
 }
 
+function openTabContextMenu(event: MouseEvent, targetTabId: string): void {
+  event.stopPropagation();
+  const entries: ContextMenuEntry[] = [
+    {
+      kind: 'action',
+      id: 'new-terminal',
+      label: t('contextMenu.newTerminal'),
+      run: () => emit('newTerminal'),
+    },
+    { kind: 'separator', id: 'tab-actions-separator' },
+    {
+      kind: 'action',
+      id: 'close-tab',
+      label: t('contextMenu.closeTab'),
+      run: () => emit('close', targetTabId),
+    },
+    {
+      kind: 'action',
+      id: 'close-other-tabs',
+      label: t('contextMenu.closeOtherTabs'),
+      disabled: props.tabs.length <= 1,
+      run: () => emit('closeOtherTabs', targetTabId),
+    },
+  ];
+  contextMenu.openAt(event, entries);
+}
+
+function openTabBarContextMenu(event: MouseEvent): void {
+  event.stopPropagation();
+  contextMenu.openAt(event, [
+    {
+      kind: 'action',
+      id: 'new-terminal',
+      label: t('contextMenu.newTerminal'),
+      run: () => emit('newTerminal'),
+    },
+  ]);
+}
+
 async function onTabBarPointerDown(event: PointerEvent): Promise<void> {
   if (event.button !== 0 || isInteractiveWindowChromeTarget(event.target)) {
     return;
@@ -317,6 +358,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
     :aria-label="t('tabs.openTabs')"
     @pointerdown="onTabBarPointerDown"
     @dblclick="onTabBarDoubleClick"
+    @contextmenu="openTabBarContextMenu"
   >
     <span
       v-if="desktopPlatform === 'macos'"
@@ -357,6 +399,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
         @dragleave="onTabDragLeave"
         @drop="onTabDrop($event, tab.id)"
         @dragend="onTabDragEnd"
+        @contextmenu="openTabContextMenu($event, tab.id)"
       >
         <button
           :id="`app-tab-${tab.id}`"

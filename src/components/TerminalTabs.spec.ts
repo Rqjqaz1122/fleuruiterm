@@ -1,6 +1,8 @@
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { contextMenu, type ContextMenuActionEntry } from '@/services/contextMenu';
+
 import TerminalTabs from './TerminalTabs.vue';
 
 const coreApi = vi.hoisted(() => ({
@@ -35,6 +37,7 @@ const tabs = [
 describe('TerminalTabs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    contextMenu.close();
   });
 
   it('uses a roving tab stop and links every app tab to its panel', () => {
@@ -182,6 +185,48 @@ describe('TerminalTabs', () => {
     expect(wrapper.emitted('openSettings')).toEqual([[]]);
   });
 
+  it('opens tab actions for the right-clicked tab instead of the active tab', async () => {
+    const wrapper = mount(TerminalTabs, { props: { tabs, activeTabId: 'tab-1' } });
+    const settingsTab = wrapper.get('[data-tab-id="app-settings"]');
+
+    await settingsTab.trigger('pointerdown', { button: 2, pointerId: 1 });
+    await settingsTab.trigger('contextmenu');
+
+    expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual([
+      'new-terminal',
+      'tab-actions-separator',
+      'close-tab',
+      'close-other-tabs',
+    ]);
+    await contextAction('close-tab').run();
+    await contextAction('close-other-tabs').run();
+
+    expect(wrapper.emitted('close')).toEqual([['app-settings']]);
+    expect(wrapper.emitted('closeOtherTabs')).toEqual([['app-settings']]);
+    expect(wrapper.emitted('activate')).toBeUndefined();
+    expect(windowApi.startDragging).not.toHaveBeenCalled();
+  });
+
+  it('opens only the new-terminal action from blank tab-bar space', async () => {
+    const wrapper = mount(TerminalTabs, { props: { tabs, activeTabId: 'tab-1' } });
+
+    await wrapper.get('.tabbar-drag-region').trigger('contextmenu');
+
+    expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual(['new-terminal']);
+    await contextAction('new-terminal').run();
+    expect(wrapper.emitted('newTerminal')).toEqual([[]]);
+  });
+
+  it('disables closing other tabs when the right-clicked tab is the only tab', async () => {
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs: [tabs[0]!], activeTabId: 'tab-1' },
+    });
+
+    await wrapper.get('[data-tab-id="tab-1"]').trigger('contextmenu');
+
+    expect(contextAction('close-other-tabs').disabled).toBe(true);
+  });
+
   it('reorders draggable tabs at the indicated side of the drop target', async () => {
     const wrapper = mount(TerminalTabs, { props: { tabs, activeTabId: 'tab-1' } });
     const dataTransfer = {
@@ -245,6 +290,14 @@ describe('TerminalTabs', () => {
     expect(wrapper.emitted('dragHover')).toEqual([['tab-2']]);
   });
 });
+
+function contextAction(id: string): ContextMenuActionEntry {
+  const entry = contextMenu.state.value?.entries.find((candidate) => candidate.id === id);
+  if (entry?.kind !== 'action') {
+    throw new Error(`Expected context-menu action: ${id}`);
+  }
+  return entry;
+}
 
 function rect(left: number, width: number): DOMRect {
   return {
