@@ -1,10 +1,19 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 
+import type { AppLocale } from '@/i18n/locale';
 import type { AppCommand } from '@/services/appShortcuts';
 
 const MENU_ACTION_EVENT = 'fleurterm://menu-action';
 
 export class DesktopMenuClient {
+  constructor(
+    private readonly invokeCommand: <T>(
+      command: string,
+      payload?: Record<string, unknown>,
+    ) => Promise<T> = invoke,
+  ) {}
+
   get available(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   }
@@ -18,6 +27,13 @@ export class DesktopMenuClient {
         commandHandler(event.payload);
       }
     });
+  }
+
+  async setLocale(locale: AppLocale): Promise<void> {
+    if (!this.available && this.invokeCommand === invoke) {
+      return;
+    }
+    await this.invokeCommand('set_application_menu_locale', { locale });
   }
 }
 

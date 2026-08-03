@@ -54,7 +54,7 @@ describe('SftpPanel', () => {
     await wrapper.get('[data-testid="sftp-upload"]').trigger('click');
     await flushPromises();
 
-    expect(client.uploadFiles).toHaveBeenCalledWith('sftp-1', '/home/root');
+    expect(client.uploadFiles).toHaveBeenCalledWith('sftp-1', '/home/root', 'en-US');
     expect(client.listDirectory).toHaveBeenCalledTimes(2);
   });
 
@@ -91,6 +91,7 @@ describe('SftpPanel', () => {
       'sftp-1',
       '/home/root/report.txt',
       'report.txt',
+      'en-US',
     );
   });
 

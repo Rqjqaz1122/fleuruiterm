@@ -15,8 +15,9 @@ import {
   type AppTab,
 } from '@/domain/appTab';
 import type { TabDropPlacement, TerminalTab } from '@/domain/workspace';
-import { t, terminalTitle, type TranslationKey } from '@/i18n/locale';
+import { locale, setLocale, t, terminalTitle, type TranslationKey } from '@/i18n/locale';
 import type { AiAppAction, AiToolResult } from '@/services/aiToolProtocol';
+import { validateAiManagedSettingsPatch } from '@/services/aiSettingsAccessPolicy';
 import { resolveAppShortcut, type AppCommand } from '@/services/appShortcuts';
 import { desktopMenuClient } from '@/services/desktopMenuClient';
 import { detectDesktopPlatform } from '@/services/desktopPlatform';
@@ -34,7 +35,6 @@ import {
   workspacePersistenceClient,
   type PersistedTerminalTab,
 } from '@/services/workspacePersistence';
-import { setLocale } from '@/i18n/locale';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useAppUpdateStore } from '@/stores/appUpdateStore';
 import {
@@ -89,6 +89,14 @@ watch(
     ];
   },
   { immediate: true, flush: 'sync' },
+);
+
+watch(
+  locale,
+  (nextLocale) => {
+    void desktopMenuClient.setLocale(nextLocale).catch(() => undefined);
+  },
+  { immediate: true },
 );
 
 watch(
@@ -205,6 +213,20 @@ async function openTerminal(): Promise<void> {
   });
 }
 
+async function openStartupTerminalIfNeeded(): Promise<void> {
+  if (!appSettings.startupSettings.value.openTerminalOnStartup || store.workspace.tabs.length > 0) {
+    return;
+  }
+  try {
+    await store.openTab();
+    activeAppTabId.value = store.workspace.activeTabId;
+    lastActiveTerminalTabId.value = store.workspace.activeTabId;
+  } catch {
+    errorCode.value = 'OPEN_TERMINAL_FAILED';
+    errorMessage.value = 'Unable to open startup terminal';
+  }
+}
+
 async function openWorkbenchConnection(connection: OpenableConnectionProfile): Promise<void> {
   await runAction(async () => {
     await workspaceRestorePromise;
@@ -270,6 +292,9 @@ function buildConnectionOpenOptions(connection: OpenableConnectionProfile): Open
 async function restoreTerminalWorkspace(): Promise<void> {
   const persistedWorkspace = await workspacePersistenceClient.load();
   if (persistedWorkspace === null) {
+    if (shouldOpenStartupTerminal()) {
+      await openStartupTerminalIfNeeded();
+    }
     return;
   }
 
@@ -328,6 +353,15 @@ async function restoreTerminalWorkspace(): Promise<void> {
   activeAppTabId.value = nextActiveTabId;
   lastActiveTerminalTabId.value =
     nextActiveTabId === SETTINGS_TAB_ID ? store.workspace.activeTabId : nextActiveTabId;
+  if (shouldOpenStartupTerminal()) {
+    await openStartupTerminalIfNeeded();
+  }
+}
+
+function shouldOpenStartupTerminal(): boolean {
+  return (
+    appSettings.startupSettings.value.openTerminalOnStartup && store.workspace.tabs.length === 0
+  );
 }
 
 async function buildRestoredTabOptions(
@@ -533,7 +567,15 @@ async function executeAiAppAction(action: AiAppAction): Promise<void> {
       appSettings.updateTerminalSettings(action.patch);
       return;
     case 'settings.updateAi':
+      validateAiManagedSettingsPatch(action.patch);
       appSettings.updateAiSettings(action.patch);
+      return;
+    case 'settings.update':
+      validateAiManagedSettingsPatch(action.patch.ai);
+      if (action.patch.locale === 'en-US' || action.patch.locale === 'zh-CN') {
+        setLocale(action.patch.locale);
+      }
+      appSettings.updateApplicationSettings(action.patch);
       return;
     case 'settings.setLocale':
       setLocale(action.locale);

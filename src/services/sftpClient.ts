@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
+import type { AppLocale } from '@/i18n/locale';
+
 export type SftpEntryKind = 'directory' | 'file' | 'symlink';
 
 export interface SftpDirectoryEntry {
@@ -44,8 +46,12 @@ export class SftpClient {
     return this.call('sftp_list_directory', { sftpSessionId, path }).then(parseDirectoryResult);
   }
 
-  async uploadFiles(sftpSessionId: string, remoteDirectory: string): Promise<boolean> {
-    return this.call('sftp_upload_files', { sftpSessionId, remoteDirectory }).then(
+  async uploadFiles(
+    sftpSessionId: string,
+    remoteDirectory: string,
+    locale: AppLocale,
+  ): Promise<boolean> {
+    return this.call('sftp_upload_files', { sftpSessionId, remoteDirectory, locale }).then(
       parseTransferred,
     );
   }
@@ -54,11 +60,13 @@ export class SftpClient {
     sftpSessionId: string,
     remotePath: string,
     suggestedFileName: string,
+    locale: AppLocale,
   ): Promise<boolean> {
     return this.call('sftp_download_file', {
       sftpSessionId,
       remotePath,
       suggestedFileName,
+      locale,
     }).then(parseTransferred);
   }
 

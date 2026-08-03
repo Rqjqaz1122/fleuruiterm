@@ -3108,35 +3108,6 @@ html[data-theme-tone='dark'] .app-select-menu {
   font-weight: 600;
 }
 
-.settings-tab .settings-readonly-toggle {
-  position: relative;
-  display: inline-flex;
-  width: 38px;
-  height: 22px;
-  border: 1px solid color-mix(in srgb, var(--theme-border-soft) 78%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--theme-surface-hover) 34%, transparent);
-}
-
-.settings-tab .settings-readonly-toggle span {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--theme-fg-subtle);
-}
-
-.settings-tab .settings-readonly-toggle.is-active {
-  background: color-mix(in srgb, var(--theme-primary) 28%, var(--theme-surface-hover));
-}
-
-.settings-tab .settings-readonly-toggle.is-active span {
-  background: var(--theme-fg);
-  transform: translate(16px);
-}
-
 .settings-tab .settings-hotkeys-layout {
   display: grid;
   gap: 24px;

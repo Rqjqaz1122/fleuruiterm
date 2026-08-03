@@ -1,3 +1,5 @@
+import type { ApplicationSettingsPatch } from '@/stores/appSettingsStore';
+
 export type AiToolCallStatus =
   'proposed' | 'approved' | 'denied' | 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled';
 
@@ -41,6 +43,7 @@ export type AiAppAction =
     }
   | { type: 'settings.updateTerminal'; patch: Record<string, unknown> }
   | { type: 'settings.updateAi'; patch: Record<string, unknown> }
+  | { type: 'settings.update'; patch: ApplicationSettingsPatch }
   | { type: 'settings.setLocale'; locale: 'en-US' | 'zh-CN' }
   | { type: 'settings.open' };
 
@@ -181,6 +184,10 @@ function parseAppAction(source: string): AiAppAction | null {
       case 'settings.updateAi':
         return isObjectRecord(parsed.patch)
           ? { type: 'settings.updateAi', patch: parsed.patch }
+          : null;
+      case 'settings.update':
+        return isObjectRecord(parsed.patch)
+          ? { type: 'settings.update', patch: parsed.patch as ApplicationSettingsPatch }
           : null;
       case 'settings.setLocale':
         return parsed.locale === 'en-US' || parsed.locale === 'zh-CN'

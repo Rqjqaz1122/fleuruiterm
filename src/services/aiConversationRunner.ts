@@ -1,7 +1,14 @@
 import type { Ref } from 'vue';
 
 import type { SessionSnapshot } from '@/domain/session';
-import type { AiSettings, TerminalSettings } from '@/stores/appSettingsStore';
+import type { AppLocale } from '@/i18n/locale';
+import type {
+  AiSettings,
+  AppearanceSettings,
+  StartupSettings,
+  TerminalSettings,
+} from '@/stores/appSettingsStore';
+import type { ShortcutSettings } from '@/services/appShortcuts';
 import { type AiToolDecision, useAiConversationStore } from '@/stores/aiConversationStore';
 
 import { classifyTerminalCommand } from './aiCommandRisk';
@@ -30,7 +37,7 @@ const SYSTEM_PROMPT = [
   'Use <fleurterm-action>{"type":"terminal.activate","target":"tab title or id"}</fleurterm-action> to switch to an existing terminal tab.',
   'Use <fleurterm-action>{"type":"connection.open","target":"saved connection id, name, host, or user@host"}</fleurterm-action> when the user asks to open a saved connection. Emit the action instead of merely saying that the connection was requested.',
   'Use terminal.openLocal or terminal.openSsh only when the user explicitly asks to create a new terminal, never as a fallback when terminal.activate or connection.open reports that a target was not found.',
-  'Use <fleurterm-action>{"type":"settings.updateTerminal","patch":{"fontSize":16}}</fleurterm-action> when the user asks to change terminal settings. Supported patch fields are fontFamily (non-empty string), fontSize (10-24), lineHeight (1-1.8), scrollback (1000-100000), scrollOnInput (boolean), and cursorBlink (boolean). Include only fields requested by the user. This action applies immediately.',
+  'Use <fleurterm-action>{"type":"settings.update","patch":{"terminal":{"fontSize":16}}}</fleurterm-action> whenever the user asks to change application settings. Include only requested fields. Supported groups: locale (en-US or zh-CN); startup.openTerminalOnStartup; appearance.themeMode (system, dark, light), appearance.palettes.dark/light.terminalForeground/terminalMuted (six-digit hex colors), appearance.transparency.enabled/opacity (0-100)/blur (0-32); terminal.fontFamily/fontSize (10-24)/lineHeight (1-1.8)/scrollback (1000-100000)/scrollOnInput/cursorBlink; ai.provider/model/tokenHeaderName/tokenPrefix/streamingEnabled/contextEnabled/includeWorkingDirectory/commandPolicy; and shortcuts keyed by application command. ai.baseUrl and ai.token are read-only and must never be included in an action. This action applies immediately.',
   'Use <fleurterm-action>{"type":"settings.open"}</fleurterm-action> to open settings.',
   'After a terminal command is denied, do not request the same command again in the current turn. Explain the denial or choose a materially different safe action.',
   'Do not claim an action succeeded until a labeled tool result confirms it.',
@@ -47,6 +54,10 @@ export interface AiConversationRunnerDependencies {
   conversation: ConversationStore;
   settings: {
     aiSettings: Ref<AiSettings>;
+    appearanceSettings: Ref<AppearanceSettings>;
+    locale: Ref<AppLocale>;
+    shortcutSettings: Ref<ShortcutSettings>;
+    startupSettings: Ref<StartupSettings>;
     terminalSettings: Ref<TerminalSettings>;
   };
   terminalRunner: TerminalToolRunner;
@@ -96,6 +107,10 @@ async function runConversationTurn(
   const requestMessages = buildRequestMessages(
     dependencies.conversation,
     dependencies.settings.aiSettings.value,
+    dependencies.settings.appearanceSettings.value,
+    dependencies.settings.locale.value,
+    dependencies.settings.shortcutSettings.value,
+    dependencies.settings.startupSettings.value,
     dependencies.settings.terminalSettings.value,
     snapshot,
     dependencies.listSavedConnections?.() ?? [],
@@ -239,14 +254,26 @@ async function runConversationTurn(
 function buildRequestMessages(
   conversation: ConversationStore,
   aiSettings: AiSettings,
+  appearanceSettings: AppearanceSettings,
+  locale: AppLocale,
+  shortcutSettings: ShortcutSettings,
+  startupSettings: StartupSettings,
   terminalSettings: TerminalSettings,
   snapshot: SessionSnapshot | null,
   savedConnections: SavedConnectionSummary[],
 ): AiChatMessage[] {
   const messages: AiChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+  const nonSecretAiSettings = { ...aiSettings, token: undefined };
   messages.push({
     role: 'system',
-    content: `Current terminal settings: ${JSON.stringify(terminalSettings)}`,
+    content: `Current application settings: ${JSON.stringify({
+      locale,
+      startup: startupSettings,
+      appearance: appearanceSettings,
+      terminal: terminalSettings,
+      ai: nonSecretAiSettings,
+      shortcuts: shortcutSettings,
+    })}`,
   });
   if (savedConnections.length > 0) {
     messages.push({
@@ -360,7 +387,11 @@ function canRunAppActionAutomatically(
   action: AiAppAction,
   policy: AiSettings['commandPolicy'],
 ): boolean {
-  if (action.type === 'settings.updateTerminal') {
+  if (
+    action.type === 'settings.updateTerminal' ||
+    action.type === 'settings.updateAi' ||
+    action.type === 'settings.update'
+  ) {
     return true;
   }
   if (action.type === 'terminal.activate' || action.type === 'connection.open') {
@@ -370,7 +401,12 @@ function canRunAppActionAutomatically(
 }
 
 function interactiveAppActions(actions: ParsedAiAppAction[]): ParsedAiAppAction[] {
-  return actions.filter(({ action }) => action.type !== 'settings.updateTerminal');
+  return actions.filter(
+    ({ action }) =>
+      action.type !== 'settings.updateTerminal' &&
+      action.type !== 'settings.updateAi' &&
+      action.type !== 'settings.update',
+  );
 }
 
 function terminalCommandSignature(command: string): string {

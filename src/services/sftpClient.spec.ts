@@ -55,10 +55,10 @@ describe('SftpClient', () => {
     const invoke = vi.fn(async (command: string) => command !== 'sftp_download_file');
     const client = new SftpClient(invoke);
 
-    await expect(client.uploadFiles('sftp-1', '/tmp')).resolves.toBe(true);
-    await expect(client.downloadFile('sftp-1', '/tmp/report.txt', 'report.txt')).resolves.toBe(
-      false,
-    );
+    await expect(client.uploadFiles('sftp-1', '/tmp', 'zh-CN')).resolves.toBe(true);
+    await expect(
+      client.downloadFile('sftp-1', '/tmp/report.txt', 'report.txt', 'zh-CN'),
+    ).resolves.toBe(false);
     await client.close('sftp-1');
 
     expect(invoke.mock.calls).toEqual([
@@ -67,6 +67,7 @@ describe('SftpClient', () => {
         {
           sftpSessionId: 'sftp-1',
           remoteDirectory: '/tmp',
+          locale: 'zh-CN',
         },
       ],
       [
@@ -75,6 +76,7 @@ describe('SftpClient', () => {
           sftpSessionId: 'sftp-1',
           remotePath: '/tmp/report.txt',
           suggestedFileName: 'report.txt',
+          locale: 'zh-CN',
         },
       ],
       ['sftp_close', { sftpSessionId: 'sftp-1' }],

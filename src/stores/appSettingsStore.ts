@@ -6,10 +6,14 @@ import {
   type ShortcutBinding,
   type ShortcutSettings,
 } from '@/services/appShortcuts';
+import { applyApplicationAppearance } from '@/services/applicationAppearance';
+import { validateAiManagedSettingsPatch } from '@/services/aiSettingsAccessPolicy';
 
 export type SupportedAppLocale = 'en-US' | 'zh-CN';
 export type AiProvider = 'none' | 'openai' | 'anthropic' | 'local' | 'custom';
 export type AiCommandPolicy = 'ask' | 'suggest' | 'auto' | 'fullAccess';
+export type ThemeMode = 'system' | 'dark' | 'light';
+export type ThemeTone = 'dark' | 'light';
 
 export interface TerminalSettings {
   fontFamily: string;
@@ -33,6 +37,40 @@ export interface AiSettings {
   commandPolicy: AiCommandPolicy;
 }
 
+export interface StartupSettings {
+  openTerminalOnStartup: boolean;
+}
+
+export interface TerminalColorPalette {
+  terminalForeground: string;
+  terminalMuted: string;
+}
+
+export interface AppearanceSettings {
+  themeMode: ThemeMode;
+  palettes: Record<ThemeTone, TerminalColorPalette>;
+  transparency: {
+    enabled: boolean;
+    opacity: number;
+    blur: number;
+  };
+}
+
+export interface AppearanceSettingsPatch {
+  themeMode?: unknown;
+  palettes?: Partial<Record<ThemeTone, Partial<TerminalColorPalette>>>;
+  transparency?: Partial<AppearanceSettings['transparency']>;
+}
+
+export interface ApplicationSettingsPatch {
+  locale?: SupportedAppLocale;
+  startup?: Partial<StartupSettings>;
+  appearance?: AppearanceSettingsPatch;
+  terminal?: Partial<TerminalSettings>;
+  ai?: Partial<AiSettings>;
+  shortcuts?: unknown;
+}
+
 export interface LanguageOption {
   value: SupportedAppLocale;
   label: string;
@@ -40,6 +78,8 @@ export interface LanguageOption {
 }
 
 const RUNTIME_SETTINGS_STORAGE_KEY = 'fleurterm.runtimeSettings';
+const LEGACY_THEME_STORAGE_KEY = 'fleurterm.theme';
+const LEGACY_WINDOW_STORAGE_KEY = 'fleurterm.window';
 
 export const defaultTerminalSettings: TerminalSettings = {
   fontFamily: 'Source Code Pro, JetBrains Mono, Consolas, monospace',
@@ -63,6 +103,29 @@ export const defaultAiSettings: AiSettings = {
   commandPolicy: 'ask',
 };
 
+export const defaultStartupSettings: StartupSettings = {
+  openTerminalOnStartup: false,
+};
+
+export const defaultAppearanceSettings: AppearanceSettings = {
+  themeMode: 'dark',
+  palettes: {
+    dark: {
+      terminalForeground: '#eef3f8',
+      terminalMuted: '#8a98a8',
+    },
+    light: {
+      terminalForeground: '#1f2937',
+      terminalMuted: '#667085',
+    },
+  },
+  transparency: {
+    enabled: false,
+    opacity: 100,
+    blur: 0,
+  },
+};
+
 export function defaultsForAiProvider(
   provider: AiProvider,
 ): Pick<AiSettings, 'baseUrl' | 'tokenHeaderName' | 'tokenPrefix'> {
@@ -81,18 +144,26 @@ const languageOptions = computed<LanguageOption[]>(() => [
 const terminalSettings = ref<TerminalSettings>(loadTerminalSettings());
 const aiSettings = ref<AiSettings>(loadAiSettings());
 const shortcutSettings = ref<ShortcutSettings>(loadShortcutSettings());
+const startupSettings = ref<StartupSettings>(loadStartupSettings());
+const appearanceSettings = ref<AppearanceSettings>(loadAppearanceSettings());
+applyApplicationAppearance(appearanceSettings.value);
 
 export function useAppSettingsStore() {
   return {
     aiSettings,
+    appearanceSettings,
     languageOptions,
     shortcutSettings,
+    startupSettings,
     terminalSettings,
     resetShortcutSettings,
     serializeRuntimeSettings,
     replaceRuntimeSettings,
     updateAiSettings,
+    updateAppearanceSettings,
+    updateApplicationSettings,
     updateShortcutSetting,
+    updateStartupSettings,
     updateTerminalSettings,
   };
 }
@@ -145,6 +216,36 @@ export function sanitizeAiSettings(raw: Partial<AiSettings> = {}): AiSettings {
   };
 }
 
+export function sanitizeStartupSettings(raw: Partial<StartupSettings> = {}): StartupSettings {
+  return {
+    openTerminalOnStartup:
+      typeof raw.openTerminalOnStartup === 'boolean'
+        ? raw.openTerminalOnStartup
+        : defaultStartupSettings.openTerminalOnStartup,
+  };
+}
+
+export function sanitizeAppearanceSettings(
+  raw: AppearanceSettingsPatch = {},
+  fallback: AppearanceSettings = defaultAppearanceSettings,
+): AppearanceSettings {
+  return {
+    themeMode: isThemeMode(raw.themeMode) ? raw.themeMode : fallback.themeMode,
+    palettes: {
+      dark: sanitizeTerminalPalette(raw.palettes?.dark, fallback.palettes.dark),
+      light: sanitizeTerminalPalette(raw.palettes?.light, fallback.palettes.light),
+    },
+    transparency: {
+      enabled:
+        typeof raw.transparency?.enabled === 'boolean'
+          ? raw.transparency.enabled
+          : fallback.transparency.enabled,
+      opacity: clampNumber(raw.transparency?.opacity, 0, 100, fallback.transparency.opacity),
+      blur: clampNumber(raw.transparency?.blur, 0, 32, fallback.transparency.blur),
+    },
+  };
+}
+
 function updateTerminalSettings(patch: Partial<TerminalSettings>): void {
   terminalSettings.value = sanitizeTerminalSettings({ ...terminalSettings.value, ...patch });
   persistRuntimeSettings();
@@ -152,6 +253,51 @@ function updateTerminalSettings(patch: Partial<TerminalSettings>): void {
 
 function updateAiSettings(patch: Partial<AiSettings>): void {
   aiSettings.value = sanitizeAiSettings({ ...aiSettings.value, ...patch });
+  persistRuntimeSettings();
+}
+
+function updateStartupSettings(patch: Partial<StartupSettings>): void {
+  startupSettings.value = sanitizeStartupSettings({ ...startupSettings.value, ...patch });
+  persistRuntimeSettings();
+}
+
+function updateAppearanceSettings(patch: AppearanceSettingsPatch): void {
+  appearanceSettings.value = sanitizeAppearanceSettings(patch, appearanceSettings.value);
+  applyApplicationAppearance(appearanceSettings.value);
+  persistRuntimeSettings();
+}
+
+function updateApplicationSettings(patch: ApplicationSettingsPatch): void {
+  validateAiManagedSettingsPatch(patch.ai);
+  if (patch.startup !== undefined) {
+    startupSettings.value = sanitizeStartupSettings({
+      ...startupSettings.value,
+      ...patch.startup,
+    });
+  }
+  if (patch.appearance !== undefined) {
+    appearanceSettings.value = sanitizeAppearanceSettings(
+      patch.appearance,
+      appearanceSettings.value,
+    );
+    applyApplicationAppearance(appearanceSettings.value);
+  }
+  if (patch.terminal !== undefined) {
+    terminalSettings.value = sanitizeTerminalSettings({
+      ...terminalSettings.value,
+      ...patch.terminal,
+    });
+  }
+  if (patch.ai !== undefined) {
+    aiSettings.value = sanitizeAiSettings({ ...aiSettings.value, ...patch.ai });
+  }
+  if (hasOwn(patch, 'shortcuts')) {
+    shortcutSettings.value = sanitizeShortcutSettings(
+      isRecord(patch.shortcuts)
+        ? { ...shortcutSettings.value, ...patch.shortcuts }
+        : patch.shortcuts,
+    );
+  }
   persistRuntimeSettings();
 }
 
@@ -169,10 +315,18 @@ function resetShortcutSettings(): void {
 }
 
 function replaceRuntimeSettings(settings: {
+  startup?: Partial<StartupSettings>;
+  appearance?: AppearanceSettingsPatch;
   terminal?: Partial<TerminalSettings>;
   ai?: Partial<AiSettings>;
   shortcuts?: unknown;
 }): void {
+  startupSettings.value = sanitizeStartupSettings(settings.startup ?? startupSettings.value);
+  appearanceSettings.value = sanitizeAppearanceSettings(
+    settings.appearance ?? appearanceSettings.value,
+    appearanceSettings.value,
+  );
+  applyApplicationAppearance(appearanceSettings.value);
   terminalSettings.value = sanitizeTerminalSettings(settings.terminal ?? terminalSettings.value);
   aiSettings.value = sanitizeAiSettings(settings.ai ?? aiSettings.value);
   if (Object.prototype.hasOwnProperty.call(settings, 'shortcuts')) {
@@ -182,11 +336,22 @@ function replaceRuntimeSettings(settings: {
 }
 
 function serializeRuntimeSettings(): {
+  startup: StartupSettings;
+  appearance: AppearanceSettings;
   terminal: TerminalSettings;
   ai: AiSettings;
   shortcuts: ShortcutSettings;
 } {
   return {
+    startup: { ...startupSettings.value },
+    appearance: {
+      themeMode: appearanceSettings.value.themeMode,
+      palettes: {
+        dark: { ...appearanceSettings.value.palettes.dark },
+        light: { ...appearanceSettings.value.palettes.light },
+      },
+      transparency: { ...appearanceSettings.value.transparency },
+    },
     terminal: { ...terminalSettings.value },
     ai: { ...aiSettings.value },
     shortcuts: Object.fromEntries(
@@ -210,7 +375,20 @@ function loadShortcutSettings(): ShortcutSettings {
   return sanitizeShortcutSettings(readRuntimeSettings().shortcuts);
 }
 
+function loadStartupSettings(): StartupSettings {
+  return sanitizeStartupSettings(readRuntimeSettings().startup);
+}
+
+function loadAppearanceSettings(): AppearanceSettings {
+  const runtimeAppearance = readRuntimeSettings().appearance;
+  return runtimeAppearance === undefined
+    ? readLegacyAppearanceSettings()
+    : sanitizeAppearanceSettings(runtimeAppearance);
+}
+
 function readRuntimeSettings(): {
+  startup?: Partial<StartupSettings>;
+  appearance?: AppearanceSettingsPatch;
   terminal?: Partial<TerminalSettings>;
   ai?: Partial<AiSettings>;
   shortcuts?: unknown;
@@ -222,6 +400,8 @@ function readRuntimeSettings(): {
     const stored = localStorage.getItem(RUNTIME_SETTINGS_STORAGE_KEY);
     return stored
       ? (JSON.parse(stored) as {
+          startup?: Partial<StartupSettings>;
+          appearance?: AppearanceSettingsPatch;
           terminal?: Partial<TerminalSettings>;
           ai?: Partial<AiSettings>;
           shortcuts?: unknown;
@@ -237,6 +417,39 @@ function persistRuntimeSettings(): void {
     return;
   }
   localStorage.setItem(RUNTIME_SETTINGS_STORAGE_KEY, JSON.stringify(serializeRuntimeSettings()));
+  localStorage.setItem(
+    LEGACY_THEME_STORAGE_KEY,
+    JSON.stringify({
+      mode: appearanceSettings.value.themeMode,
+      config: { palettes: appearanceSettings.value.palettes },
+    }),
+  );
+  localStorage.setItem(
+    LEGACY_WINDOW_STORAGE_KEY,
+    JSON.stringify({ transparency: appearanceSettings.value.transparency }),
+  );
+}
+
+function readLegacyAppearanceSettings(): AppearanceSettings {
+  if (typeof localStorage === 'undefined') {
+    return sanitizeAppearanceSettings();
+  }
+  try {
+    const theme = JSON.parse(localStorage.getItem(LEGACY_THEME_STORAGE_KEY) ?? '{}') as {
+      mode?: unknown;
+      config?: { palettes?: AppearanceSettingsPatch['palettes'] };
+    };
+    const windowAppearance = JSON.parse(
+      localStorage.getItem(LEGACY_WINDOW_STORAGE_KEY) ?? '{}',
+    ) as { transparency?: AppearanceSettingsPatch['transparency'] };
+    return sanitizeAppearanceSettings({
+      themeMode: theme.mode,
+      palettes: theme.config?.palettes,
+      transparency: windowAppearance.transparency,
+    });
+  } catch {
+    return sanitizeAppearanceSettings();
+  }
 }
 
 function normalizeString(value: unknown, fallback: string): string {
@@ -249,6 +462,10 @@ function normalizeOptionalString(value: unknown): string {
 
 function hasOwn<T extends object>(source: T, key: PropertyKey): boolean {
   return Object.prototype.hasOwnProperty.call(source, key);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function clampNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {
@@ -271,6 +488,28 @@ function isAiProvider(value: unknown): value is AiProvider {
 
 function isAiCommandPolicy(value: unknown): value is AiCommandPolicy {
   return value === 'ask' || value === 'suggest' || value === 'auto' || value === 'fullAccess';
+}
+
+function isThemeMode(value: unknown): value is ThemeMode {
+  return value === 'system' || value === 'dark' || value === 'light';
+}
+
+function sanitizeTerminalPalette(
+  raw: Partial<TerminalColorPalette> | undefined,
+  fallback: TerminalColorPalette,
+): TerminalColorPalette {
+  return {
+    terminalForeground: normalizeHexColor(raw?.terminalForeground) ?? fallback.terminalForeground,
+    terminalMuted: normalizeHexColor(raw?.terminalMuted) ?? fallback.terminalMuted,
+  };
+}
+
+function normalizeHexColor(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  return /^#[0-9a-f]{6}$/i.test(normalized) ? normalized.toLowerCase() : null;
 }
 
 function defaultBaseUrlForProvider(provider: AiProvider): string {
