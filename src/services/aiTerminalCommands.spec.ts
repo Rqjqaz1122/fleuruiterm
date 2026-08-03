@@ -19,11 +19,11 @@ describe('parseAiAssistantContent', () => {
 
   it('keeps generated terminal code fences separate from adjacent prose', () => {
     const parsed = parseAiAssistantContent(
-      '<terminal-command>dir</terminal-command>已请求在当前本地终端执行 `dir` 命令。',
+      '我将检查当前目录。<terminal-command>dir</terminal-command>已请求执行 `dir` 命令。',
     );
 
     expect(parsed.displayContent).toBe(
-      '```terminal\ndir\n```\n已请求在当前本地终端执行 `dir` 命令。',
+      '我将检查当前目录。\n```terminal\ndir\n```\n已请求执行 `dir` 命令。',
     );
   });
 

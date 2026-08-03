@@ -58,17 +58,28 @@ export interface ParsedAssistantToolResponse {
   appActions: ParsedAiAppAction[];
 }
 
+export interface ParseAssistantToolResponseOptions {
+  terminalCommandVisibility?: 'code' | 'hidden';
+}
+
 const TERMINAL_COMMAND_TAG_PATTERN = /<terminal-command>([\s\S]*?)<\/terminal-command>/gi;
 const APP_ACTION_TAG_PATTERN = /<fleurterm-action>([\s\S]*?)<\/fleurterm-action>/gi;
+const ASSISTANT_TOOL_OPENING_TAGS = ['<terminal-command>', '<fleurterm-action>'] as const;
 const MAX_TOOL_RESULT_OUTPUT_LENGTH = 12_000;
 
-export function parseAssistantToolResponse(content: string): ParsedAssistantToolResponse {
+export function parseAssistantToolResponse(
+  content: string,
+  options: ParseAssistantToolResponseOptions = {},
+): ParsedAssistantToolResponse {
   const toolCalls: AiTerminalToolCall[] = [];
   const appActions: ParsedAiAppAction[] = [];
   const displayContent = content
     .replace(TERMINAL_COMMAND_TAG_PATTERN, (_matchedTag, command) => {
       appendToolCall(toolCalls, command);
-      return `${commandBlockText(command)}\n`;
+      if (options.terminalCommandVisibility === 'hidden') {
+        return '\n';
+      }
+      return `\n${commandBlockText(command)}\n`;
     })
     .replace(APP_ACTION_TAG_PATTERN, (_matchedTag, source) => {
       appendAppAction(appActions, source);
@@ -76,6 +87,13 @@ export function parseAssistantToolResponse(content: string): ParsedAssistantTool
     });
 
   return { displayContent: displayContent.trim(), toolCalls, appActions };
+}
+
+export function stripAssistantToolMarkup(content: string): string {
+  const displayContent = content
+    .replace(TERMINAL_COMMAND_TAG_PATTERN, '\n')
+    .replace(APP_ACTION_TAG_PATTERN, '\n');
+  return stripTrailingIncompleteToolMarkup(displayContent).trimEnd();
 }
 
 export function formatToolResultMessage(result: AiToolResult): string {
@@ -123,6 +141,28 @@ function normalizeCommand(command: string): string {
 function commandBlockText(command: string): string {
   const normalizedCommand = normalizeCommand(command);
   return normalizedCommand ? `\`\`\`terminal\n${normalizedCommand}\n\`\`\`` : '';
+}
+
+function stripTrailingIncompleteToolMarkup(content: string): string {
+  const normalizedContent = content.toLowerCase();
+  let cutoffIndex = content.length;
+
+  for (const openingTag of ASSISTANT_TOOL_OPENING_TAGS) {
+    const openingTagIndex = normalizedContent.lastIndexOf(openingTag);
+    if (openingTagIndex !== -1) {
+      cutoffIndex = Math.min(cutoffIndex, openingTagIndex);
+    }
+  }
+
+  const partialTagIndex = normalizedContent.lastIndexOf('<');
+  if (partialTagIndex !== -1) {
+    const partialTag = normalizedContent.slice(partialTagIndex);
+    if (ASSISTANT_TOOL_OPENING_TAGS.some((openingTag) => openingTag.startsWith(partialTag))) {
+      cutoffIndex = Math.min(cutoffIndex, partialTagIndex);
+    }
+  }
+
+  return content.slice(0, cutoffIndex);
 }
 
 function hashCommand(command: string): string {
