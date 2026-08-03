@@ -95,6 +95,26 @@ describe('contextMenu', () => {
     button.remove();
   });
 
+  it('uses the focusable ancestor of a nested SVG path as the invoker', () => {
+    const activeInput = document.createElement('input');
+    const button = document.createElement('button');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    icon.append(path);
+    button.append(icon);
+    document.body.append(activeInput, button);
+    activeInput.focus();
+    button.addEventListener('contextmenu', (event) => {
+      contextMenu.openAt(event, [{ kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() }]);
+    });
+
+    path.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+
+    expect(contextMenu.state.value?.invoker).toBe(button);
+    activeInput.remove();
+    button.remove();
+  });
+
   it('keeps the active element when the event target is not focusable', () => {
     const activeInput = document.createElement('input');
     const row = document.createElement('div');

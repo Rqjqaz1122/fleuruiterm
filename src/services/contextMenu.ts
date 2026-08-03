@@ -60,9 +60,9 @@ function openAt(position: ContextMenuPosition | MouseEvent, entries: ContextMenu
 }
 
 function resolveInvoker(position: ContextMenuPosition | MouseEvent): HTMLElement | null {
-  if (position instanceof MouseEvent && position.target instanceof HTMLElement) {
-    const focusableTarget = position.target.closest<HTMLElement>(FOCUSABLE_INVOKER_SELECTOR);
-    if (focusableTarget !== null) {
+  if (position instanceof MouseEvent && position.target instanceof Element) {
+    const focusableTarget = position.target.closest(FOCUSABLE_INVOKER_SELECTOR);
+    if (focusableTarget instanceof HTMLElement) {
       return focusableTarget;
     }
   }
