@@ -217,6 +217,33 @@ describe('TerminalTabs', () => {
     expect(wrapper.emitted('newTerminal')).toEqual([[]]);
   });
 
+  it('does not open the blank-space menu from tab-bar commands or window controls', async () => {
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs, activeTabId: 'tab-1', platform: 'windows' },
+    });
+
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('contextmenu');
+    expect(contextMenu.state.value).toBeNull();
+
+    await wrapper.get('.window-controls').trigger('contextmenu');
+    expect(contextMenu.state.value).toBeNull();
+  });
+
+  it('disables terminal creation and closing while an application action is pending', async () => {
+    const wrapper = mount(TerminalTabs, {
+      props: { tabs, activeTabId: 'tab-1', pending: true },
+    });
+
+    expect(wrapper.get('[aria-label="New terminal"]').attributes()).toHaveProperty('disabled');
+    expect(wrapper.get('[aria-label="Close Local Terminal 1"]').attributes()).toHaveProperty(
+      'disabled',
+    );
+    await wrapper.get('[data-tab-id="tab-1"]').trigger('contextmenu');
+    expect(contextAction('new-terminal').disabled).toBe(true);
+    expect(contextAction('close-tab').disabled).toBe(true);
+    expect(contextAction('close-other-tabs').disabled).toBe(true);
+  });
+
   it('disables closing other tabs when the right-clicked tab is the only tab', async () => {
     const wrapper = mount(TerminalTabs, {
       props: { tabs: [tabs[0]!], activeTabId: 'tab-1' },

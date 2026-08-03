@@ -14,6 +14,7 @@ const props = defineProps<{
   tabs: AppTab[];
   activeTabId: string | null;
   aiOpen?: boolean;
+  pending?: boolean;
   platform?: DesktopPlatform;
 }>();
 
@@ -229,6 +230,7 @@ function openTabContextMenu(event: MouseEvent, targetTabId: string): void {
       kind: 'action',
       id: 'new-terminal',
       label: t('contextMenu.newTerminal'),
+      disabled: props.pending,
       run: () => emit('newTerminal'),
     },
     { kind: 'separator', id: 'tab-actions-separator' },
@@ -236,13 +238,14 @@ function openTabContextMenu(event: MouseEvent, targetTabId: string): void {
       kind: 'action',
       id: 'close-tab',
       label: t('contextMenu.closeTab'),
+      disabled: props.pending,
       run: () => emit('close', targetTabId),
     },
     {
       kind: 'action',
       id: 'close-other-tabs',
       label: t('contextMenu.closeOtherTabs'),
-      disabled: props.tabs.length <= 1,
+      disabled: props.pending || props.tabs.length <= 1,
       run: () => emit('closeOtherTabs', targetTabId),
     },
   ];
@@ -256,6 +259,7 @@ function openTabBarContextMenu(event: MouseEvent): void {
       kind: 'action',
       id: 'new-terminal',
       label: t('contextMenu.newTerminal'),
+      disabled: props.pending,
       run: () => emit('newTerminal'),
     },
   ]);
@@ -358,7 +362,6 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
     :aria-label="t('tabs.openTabs')"
     @pointerdown="onTabBarPointerDown"
     @dblclick="onTabBarDoubleClick"
-    @contextmenu="openTabBarContextMenu"
   >
     <span
       v-if="desktopPlatform === 'macos'"
@@ -369,6 +372,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       <button
         class="tabbar-command tabbar-command-square"
         type="button"
+        :disabled="pending"
         :aria-label="t('tabs.newTerminal')"
         @click="$emit('newTerminal')"
       >
@@ -419,6 +423,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
         <button
           class="icon-button tab-close"
           type="button"
+          :disabled="pending"
           :aria-label="`${t('tabs.close')} ${tab.title}`"
           @click.stop="$emit('close', tab.id)"
         >
@@ -427,7 +432,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       </div>
     </TransitionGroup>
 
-    <span class="tabbar-drag-region" aria-hidden="true" />
+    <span class="tabbar-drag-region" aria-hidden="true" @contextmenu="openTabBarContextMenu" />
     <button
       class="tabbar-command tabbar-ai"
       :class="{ active: aiOpen }"
@@ -444,6 +449,7 @@ function isInteractiveWindowChromeTarget(target: EventTarget | null): boolean {
       :class="{ active: activeTabId === SETTINGS_TAB_ID }"
       data-testid="tabbar-settings"
       type="button"
+      :disabled="pending"
       :aria-label="t('tabs.openSettings')"
       :aria-pressed="activeTabId === SETTINGS_TAB_ID"
       @click="$emit('openSettings')"

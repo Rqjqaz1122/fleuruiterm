@@ -55,7 +55,7 @@ describe('SettingsView', () => {
     expect(wrapper.emitted('createTerminal')).toBeUndefined();
   });
 
-  it('offers a new terminal on the settings background and unsupported input types', async () => {
+  it('offers a new terminal only on the settings page background', async () => {
     const wrapper = mount(SettingsView);
 
     await wrapper.get('.settings-view').trigger('contextmenu');
@@ -64,15 +64,34 @@ describe('SettingsView', () => {
 
     await wrapper.get('[data-section="terminal"]').trigger('click');
     for (const inputType of ['number', 'range']) {
+      contextMenu.close();
       await wrapper.get(`input[type="${inputType}"]`).trigger('contextmenu');
-      expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual(['new-terminal']);
+      expect(contextMenu.state.value).toBeNull();
     }
 
     await wrapper.get('[data-section="appearance"]').trigger('click');
+    contextMenu.close();
     await wrapper.get('input[type="color"]').trigger('contextmenu');
-    expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual(['new-terminal']);
+    expect(contextMenu.state.value).toBeNull();
+
+    contextMenu.close();
+    await wrapper.get('.settings-nav-button').trigger('contextmenu');
+    expect(contextMenu.state.value).toBeNull();
+
+    const nativeSelect = document.createElement('select');
+    wrapper.get('.settings-view').element.append(nativeSelect);
+    nativeSelect.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    expect(contextMenu.state.value).toBeNull();
 
     expect(wrapper.emitted('createTerminal')).toEqual([[]]);
+  });
+
+  it('disables settings terminal creation while an application action is pending', async () => {
+    const wrapper = mount(SettingsView, { props: { pending: true } });
+
+    await wrapper.get('.settings-view').trigger('contextmenu');
+
+    expect(contextAction('new-terminal').disabled).toBe(true);
   });
 
   it('uses the FleurUI settings sections', () => {

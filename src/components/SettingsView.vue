@@ -116,6 +116,10 @@ const COMMON_TERMINAL_FONT_OPTIONS = [
   { value: 'Consolas, monospace', label: 'Consolas' },
 ];
 
+const props = defineProps<{
+  pending?: boolean;
+}>();
+
 const emit = defineEmits<{
   createTerminal: [];
   openConnection: [connection: WorkbenchConnection];
@@ -132,6 +136,10 @@ function openSettingsContextMenu(event: MouseEvent): void {
     event.stopPropagation();
     return;
   }
+  if (isNativeContextMenuControl(event.target)) {
+    event.stopPropagation();
+    return;
+  }
 
   event.stopPropagation();
   contextMenu.openAt(event, [
@@ -139,9 +147,14 @@ function openSettingsContextMenu(event: MouseEvent): void {
       kind: 'action',
       id: 'new-terminal',
       label: t('contextMenu.newTerminal'),
+      disabled: props.pending,
       run: () => emit('createTerminal'),
     },
   ]);
+}
+
+function isNativeContextMenuControl(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('button, input, select') !== null;
 }
 
 const defaultTheme: ThemeConfigFile = {

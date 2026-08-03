@@ -67,12 +67,14 @@ describe('StartPage', () => {
     expect(wrapper.get('[data-testid="recent-entry"]').attributes('type')).toBe('button');
   });
 
-  it('disables terminal creation while a terminal action is pending', () => {
+  it('disables terminal creation while a terminal action is pending', async () => {
     const wrapper = mount(StartPage, { props: { pending: true } });
 
     expect(wrapper.get('[data-testid="start-new-terminal"]').attributes()).toHaveProperty(
       'disabled',
     );
+    await wrapper.get('.start-page').trigger('contextmenu');
+    expect(contextAction('new-terminal').disabled).toBe(true);
   });
 
   it('offers terminal and settings actions from the page background', async () => {

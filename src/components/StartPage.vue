@@ -4,7 +4,7 @@ import { contextMenu, type ContextMenuEntry } from '@/services/contextMenu';
 
 import appLogoUrl from '../../src-tauri/icons/app-icon-source.png';
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     pending: boolean;
     version?: string;
@@ -26,6 +26,7 @@ function openStartPageContextMenu(event: MouseEvent): void {
       kind: 'action',
       id: 'new-terminal',
       label: t('contextMenu.newTerminal'),
+      disabled: props.pending,
       run: () => emit('createTerminal'),
     },
     {
