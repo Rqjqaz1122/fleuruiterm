@@ -19,6 +19,26 @@ describe('application locale', () => {
     expect(localStorage.getItem('fleurterm.locale')).toBe('zh-CN');
   });
 
+  it('translates editing and terminal context actions in English and Chinese', () => {
+    expect([
+      t('contextMenu.cut'),
+      t('contextMenu.copy'),
+      t('contextMenu.paste'),
+      t('contextMenu.selectAll'),
+      t('contextMenu.clearTerminal'),
+    ]).toEqual(['Cut', 'Copy', 'Paste', 'Select All', 'Clear Terminal']);
+
+    setLocale('zh-CN');
+
+    expect([
+      t('contextMenu.cut'),
+      t('contextMenu.copy'),
+      t('contextMenu.paste'),
+      t('contextMenu.selectAll'),
+      t('contextMenu.clearTerminal'),
+    ]).toEqual(['剪切', '复制', '粘贴', '全选', '清空终端']);
+  });
+
   it('uses the system language when no locale was selected', async () => {
     vi.resetModules();
     localStorage.clear();

@@ -121,6 +121,24 @@ export class TerminalAdapter {
     this.terminal.focus();
   }
 
+  getSelection(): string {
+    return this.disposed ? '' : this.terminal.getSelection();
+  }
+
+  paste(text: string): void {
+    if (this.disposed) {
+      return;
+    }
+    this.terminal.paste(text);
+  }
+
+  selectAll(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.terminal.selectAll();
+  }
+
   writeSystemMessage(message: string): void {
     if (this.disposed) {
       return;
