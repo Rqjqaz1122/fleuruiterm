@@ -292,6 +292,47 @@ describe('TerminalPane', () => {
     paneHost.remove();
   });
 
+  it.each(['copy', 'clear-terminal'])(
+    'focuses immediately for a pending %s action without stealing focus when it settles',
+    async (actionId) => {
+      const deferredAction = createDeferred();
+      terminalAdapterMock.getSelection.mockReturnValue('selected output');
+      if (actionId === 'copy') {
+        clipboardMock.writeText.mockReturnValueOnce(deferredAction.promise);
+      } else {
+        workspace.writeToSession.mockReturnValueOnce(deferredAction.promise);
+      }
+      const paneHost = document.createElement('div');
+      const otherInput = document.createElement('input');
+      document.body.append(paneHost, otherInput);
+      const menuRenderer = mount(AppContextMenu);
+      const wrapper = mountPane(true, paneHost);
+      await flushPromises();
+      const terminalTextarea = document.createElement('textarea');
+      terminalTextarea.className = 'xterm-helper-textarea';
+      wrapper.get('.terminal-surface').element.append(terminalTextarea);
+      terminalAdapterMock.focus.mockImplementation(() => terminalTextarea.focus());
+      await wrapper.get('.terminal-surface').trigger('contextmenu');
+      await nextTick();
+      await nextTick();
+      terminalAdapterMock.focus.mockClear();
+
+      getRenderedAction(actionId).click();
+
+      expect(terminalAdapterMock.focus).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(terminalTextarea);
+      otherInput.focus();
+      deferredAction.resolve();
+      await flushPromises();
+      expect(terminalAdapterMock.focus).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(otherInput);
+      wrapper.unmount();
+      menuRenderer.unmount();
+      paneHost.remove();
+      otherInput.remove();
+    },
+  );
+
   it('does not clear a session from a stale menu entry after the pane unmounts', async () => {
     const wrapper = mountPane();
     await flushPromises();
@@ -435,4 +476,12 @@ function getRenderedAction(id: string): HTMLButtonElement {
     throw new Error(`Expected rendered terminal context action: ${id}`);
   }
   return actionElement;
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
 }

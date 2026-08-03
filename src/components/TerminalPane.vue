@@ -324,12 +324,12 @@ function openTerminalContextMenu(event: MouseEvent): void {
   contextMenu.openAt(event, entries);
 }
 
-async function runTerminalContextAction(action: () => void | Promise<void>): Promise<void> {
+function runTerminalContextAction(action: () => void | Promise<void>): void | Promise<void> {
+  if (disposed) {
+    return;
+  }
   try {
-    if (disposed) {
-      return;
-    }
-    await action();
+    return action();
   } finally {
     if (!disposed) {
       adapter?.focus();
