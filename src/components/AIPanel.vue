@@ -80,6 +80,12 @@ const configurationReady = computed(() => {
   return aiSettings.provider === 'local' || Boolean(aiSettings.token.trim());
 });
 const turnActive = computed(() => conversation.turnActive.value);
+const streamingCursorMessageId = computed(() => {
+  const latestAssistantMessage = [...conversation.messages.value]
+    .reverse()
+    .find((message) => message.role === 'assistant');
+  return latestAssistantMessage?.content.length === 0 ? latestAssistantMessage.id : null;
+});
 const canSend = computed(() => conversation.draft.value.trim().length > 0 && !turnActive.value);
 const sendButtonLabel = computed(() =>
   turnActive.value
@@ -389,9 +395,7 @@ const zhAiPanelLabels = {
         >
           <div class="ai-message-content">
             <span
-              v-if="
-                item.message.role === 'assistant' && item.message.content.length === 0 && turnActive
-              "
+              v-if="turnActive && item.message.id === streamingCursorMessageId"
               class="ai-message-cursor"
               aria-hidden="true"
             />

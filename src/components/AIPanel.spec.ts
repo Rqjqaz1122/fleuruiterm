@@ -148,6 +148,29 @@ describe('AIPanel', () => {
     expect(wrapper.findAll('.ai-message-assistant')).toHaveLength(1);
   });
 
+  it('shows a single streaming cursor when earlier assistant messages are empty', () => {
+    const conversation = useAiConversationStore();
+    conversation.appendAssistantMessage('');
+    conversation.appendAssistantMessage('');
+    conversation.beginTurn('turn-1');
+    const wrapper = mount(AIPanel, { props: { snapshot: null } });
+    const assistantMessages = wrapper.findAll('.ai-message-assistant');
+
+    expect(assistantMessages).toHaveLength(2);
+    expect(wrapper.findAll('.ai-message-cursor')).toHaveLength(1);
+    expect(assistantMessages[1]?.find('.ai-message-cursor').exists()).toBe(true);
+  });
+
+  it('does not move the streaming cursor back to an earlier empty message', () => {
+    const conversation = useAiConversationStore();
+    conversation.appendAssistantMessage('');
+    conversation.appendAssistantMessage('Streaming response');
+    conversation.beginTurn('turn-1');
+    const wrapper = mount(AIPanel, { props: { snapshot: null } });
+
+    expect(wrapper.findAll('.ai-message-cursor')).toHaveLength(0);
+  });
+
   it('keeps pending approval in a fixed dock until the decision is made', async () => {
     const conversation = useAiConversationStore();
     conversation.appendToolCall(createToolCall());
