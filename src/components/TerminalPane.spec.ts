@@ -2,10 +2,13 @@ import { readFileSync } from 'node:fs';
 
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
 
 import { setLocale } from '@/i18n/locale';
 import { CONNECTION_PROFILES_CHANGED_EVENT } from '@/services/connectionProfiles';
+import { contextMenu, type ContextMenuActionEntry } from '@/services/contextMenu';
 
+import AppContextMenu from './AppContextMenu.vue';
 import TerminalPane from './TerminalPane.vue';
 
 const globalStyles = readFileSync('src/styles/global.css', 'utf8');
@@ -14,6 +17,12 @@ const workspace = vi.hoisted(() => ({
   connectionProfileId: 'server-1' as string | null,
   reconnectPane: vi.fn(async () => undefined),
   state: 'ready' as string | null,
+  writeToSession: vi.fn(async () => undefined),
+}));
+
+const clipboardMock = vi.hoisted(() => ({
+  readText: vi.fn(async () => ''),
+  writeText: vi.fn(async () => undefined),
 }));
 
 interface MockTerminalAdapterOptions {
@@ -22,7 +31,10 @@ interface MockTerminalAdapterOptions {
 
 const terminalAdapterMock = vi.hoisted(() => ({
   focus: vi.fn(),
+  getSelection: vi.fn(() => ''),
   options: [] as MockTerminalAdapterOptions[],
+  paste: vi.fn(),
+  selectAll: vi.fn(),
   writeSystemMessage: vi.fn(),
 }));
 
@@ -33,6 +45,7 @@ vi.mock('@/stores/workspaceStore', () => ({
     sessionStateForSession: () => workspace.state,
     nextOutputSequence: () => 1,
     subscribeToSession: () => () => undefined,
+    writeToSession: workspace.writeToSession,
   }),
 }));
 
@@ -45,6 +58,9 @@ vi.mock('@/terminal/terminalAdapter', () => ({
     open() {}
     dispose() {}
     focus = terminalAdapterMock.focus;
+    getSelection = terminalAdapterMock.getSelection;
+    paste = terminalAdapterMock.paste;
+    selectAll = terminalAdapterMock.selectAll;
     updateTheme() {}
     writeSystemMessage = terminalAdapterMock.writeSystemMessage;
     async acceptChunk() {}
@@ -54,15 +70,30 @@ vi.mock('@/terminal/terminalAdapter', () => ({
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }));
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class {} }));
 
-describe('TerminalPane SFTP integration', () => {
+describe('TerminalPane', () => {
   beforeEach(() => {
     setLocale('en-US');
     workspace.connectionProfileId = 'server-1';
     workspace.reconnectPane.mockClear();
     workspace.state = 'ready';
+    workspace.writeToSession.mockClear();
+    clipboardMock.readText.mockReset();
+    clipboardMock.readText.mockResolvedValue('');
+    clipboardMock.writeText.mockReset();
+    clipboardMock.writeText.mockResolvedValue(undefined);
+    contextMenu.close();
     terminalAdapterMock.focus.mockClear();
+    terminalAdapterMock.focus.mockImplementation(() => undefined);
+    terminalAdapterMock.getSelection.mockReset();
+    terminalAdapterMock.getSelection.mockReturnValue('');
     terminalAdapterMock.options.length = 0;
+    terminalAdapterMock.paste.mockClear();
+    terminalAdapterMock.selectAll.mockClear();
     terminalAdapterMock.writeSystemMessage.mockClear();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: clipboardMock,
+    });
     localStorage.setItem(
       'fleurterm.connections',
       JSON.stringify([
@@ -134,6 +165,221 @@ describe('TerminalPane SFTP integration', () => {
     expect(terminalAdapterMock.focus).toHaveBeenCalledOnce();
   });
 
+  it('opens localized terminal actions after focusing the current pane and adapter', async () => {
+    const openMenu = vi.spyOn(contextMenu, 'openAt');
+    const wrapper = mountPane();
+    await flushPromises();
+    terminalAdapterMock.focus.mockClear();
+
+    await wrapper.get('.terminal-surface-frame').trigger('contextmenu', {
+      clientX: 20,
+      clientY: 30,
+    });
+
+    expect(wrapper.emitted('focus')?.at(-1)).toEqual(['pane-1']);
+    expect(terminalAdapterMock.focus).toHaveBeenCalledOnce();
+    expect(openMenu).toHaveBeenCalledOnce();
+    expect(terminalAdapterMock.focus.mock.invocationCallOrder[0]).toBeLessThan(
+      openMenu.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+    expect(contextMenu.state.value?.entries).toEqual([
+      expect.objectContaining({ kind: 'action', id: 'copy', label: 'Copy', disabled: true }),
+      expect.objectContaining({ kind: 'action', id: 'paste', label: 'Paste' }),
+      expect.objectContaining({ kind: 'action', id: 'select-all', label: 'Select All' }),
+      { kind: 'separator', id: 'terminal-separator' },
+      expect.objectContaining({ kind: 'action', id: 'clear-terminal', label: 'Clear Terminal' }),
+    ]);
+    openMenu.mockRestore();
+  });
+
+  it('copies the exact terminal selection and disables copy when it is empty', async () => {
+    const wrapper = mountPane();
+    await flushPromises();
+    terminalAdapterMock.getSelection.mockReturnValueOnce('').mockReturnValue('line 1\nline 2');
+
+    await wrapper.get('.terminal-surface').trigger('contextmenu');
+    expect(terminalAction('copy').disabled).toBe(true);
+
+    await wrapper.get('.terminal-surface').trigger('contextmenu');
+    expect(terminalAction('copy').disabled).toBe(false);
+    await terminalAction('copy').run();
+
+    expect(clipboardMock.writeText).toHaveBeenCalledWith('line 1\nline 2');
+  });
+
+  it('pastes clipboard text and selects the entire terminal buffer', async () => {
+    clipboardMock.readText.mockResolvedValue('printf "hello"\r');
+    const wrapper = mountPane();
+    await flushPromises();
+    await wrapper.get('.terminal-surface').trigger('contextmenu');
+
+    await terminalAction('paste').run();
+    await terminalAction('select-all').run();
+
+    expect(clipboardMock.readText).toHaveBeenCalledOnce();
+    expect(terminalAdapterMock.paste).toHaveBeenCalledWith('printf "hello"\r');
+    expect(terminalAdapterMock.selectAll).toHaveBeenCalledOnce();
+  });
+
+  it('clears the terminal through the existing session writer', async () => {
+    const wrapper = mountPane();
+    await flushPromises();
+    await wrapper.get('.terminal-surface').trigger('contextmenu');
+
+    await terminalAction('clear-terminal').run();
+
+    expect(workspace.writeToSession).toHaveBeenCalledWith('session-1', '\x0c');
+  });
+
+  it.each(['copy', 'paste', 'select-all', 'clear-terminal'])(
+    'refocuses the terminal after the rendered %s action is clicked',
+    async (actionId) => {
+      terminalAdapterMock.getSelection.mockReturnValue('selected output');
+      clipboardMock.readText.mockResolvedValue('pasted input');
+      const paneHost = document.createElement('div');
+      document.body.append(paneHost);
+      const menuRenderer = mount(AppContextMenu);
+      const wrapper = mountPane(true, paneHost);
+      await flushPromises();
+      const terminalTextarea = document.createElement('textarea');
+      terminalTextarea.className = 'xterm-helper-textarea';
+      wrapper.get('.terminal-surface').element.append(terminalTextarea);
+      terminalAdapterMock.focus.mockImplementation(() => terminalTextarea.focus());
+      await wrapper.get('.terminal-surface').trigger('contextmenu');
+      await nextTick();
+      await nextTick();
+      terminalAdapterMock.focus.mockClear();
+
+      getRenderedAction(actionId).click();
+      await flushPromises();
+
+      expect(terminalAdapterMock.focus).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(terminalTextarea);
+      wrapper.unmount();
+      menuRenderer.unmount();
+      paneHost.remove();
+    },
+  );
+
+  it('refocuses the terminal when a rendered asynchronous action fails', async () => {
+    const clipboardError = new Error('clipboard denied');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    clipboardMock.writeText.mockRejectedValueOnce(clipboardError);
+    terminalAdapterMock.getSelection.mockReturnValue('selected output');
+    const paneHost = document.createElement('div');
+    document.body.append(paneHost);
+    const menuRenderer = mount(AppContextMenu);
+    const wrapper = mountPane(true, paneHost);
+    await flushPromises();
+    const terminalTextarea = document.createElement('textarea');
+    terminalTextarea.className = 'xterm-helper-textarea';
+    wrapper.get('.terminal-surface').element.append(terminalTextarea);
+    terminalAdapterMock.focus.mockImplementation(() => terminalTextarea.focus());
+    await wrapper.get('.terminal-surface').trigger('contextmenu');
+    await nextTick();
+    await nextTick();
+    terminalAdapterMock.focus.mockClear();
+
+    getRenderedAction('copy').click();
+    await flushPromises();
+
+    expect(terminalAdapterMock.focus).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(terminalTextarea);
+    expect(consoleError).toHaveBeenCalledWith('Context menu action failed: copy', clipboardError);
+    consoleError.mockRestore();
+    wrapper.unmount();
+    menuRenderer.unmount();
+    paneHost.remove();
+  });
+
+  it.each(['copy', 'clear-terminal'])(
+    'focuses immediately for a pending %s action without stealing focus when it settles',
+    async (actionId) => {
+      const deferredAction = createDeferred();
+      terminalAdapterMock.getSelection.mockReturnValue('selected output');
+      if (actionId === 'copy') {
+        clipboardMock.writeText.mockReturnValueOnce(deferredAction.promise);
+      } else {
+        workspace.writeToSession.mockReturnValueOnce(deferredAction.promise);
+      }
+      const paneHost = document.createElement('div');
+      const otherInput = document.createElement('input');
+      document.body.append(paneHost, otherInput);
+      const menuRenderer = mount(AppContextMenu);
+      const wrapper = mountPane(true, paneHost);
+      await flushPromises();
+      const terminalTextarea = document.createElement('textarea');
+      terminalTextarea.className = 'xterm-helper-textarea';
+      wrapper.get('.terminal-surface').element.append(terminalTextarea);
+      terminalAdapterMock.focus.mockImplementation(() => terminalTextarea.focus());
+      await wrapper.get('.terminal-surface').trigger('contextmenu');
+      await nextTick();
+      await nextTick();
+      terminalAdapterMock.focus.mockClear();
+
+      getRenderedAction(actionId).click();
+
+      expect(terminalAdapterMock.focus).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(terminalTextarea);
+      otherInput.focus();
+      deferredAction.resolve();
+      await flushPromises();
+      expect(terminalAdapterMock.focus).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(otherInput);
+      wrapper.unmount();
+      menuRenderer.unmount();
+      paneHost.remove();
+      otherInput.remove();
+    },
+  );
+
+  it('does not clear a session from a stale menu entry after the pane unmounts', async () => {
+    const wrapper = mountPane();
+    await flushPromises();
+    await wrapper.get('.terminal-surface').trigger('contextmenu');
+    const clearAction = terminalAction('clear-terminal');
+    wrapper.unmount();
+
+    await clearAction.run();
+
+    expect(workspace.writeToSession).not.toHaveBeenCalled();
+  });
+
+  it('does not open the terminal menu from the SFTP drawer', async () => {
+    const wrapper = mountPane();
+    await flushPromises();
+    await wrapper.get('[data-testid="sftp-open"]').trigger('click');
+
+    await wrapper.get('sftp-panel-stub').trigger('contextmenu');
+
+    expect(contextMenu.state.value).toBeNull();
+  });
+
+  it('restores the xterm textarea when Escape closes the terminal menu', async () => {
+    const paneHost = document.createElement('div');
+    document.body.append(paneHost);
+    const menuRenderer = mount(AppContextMenu);
+    const wrapper = mountPane(true, paneHost);
+    await flushPromises();
+    const terminalTextarea = document.createElement('textarea');
+    terminalTextarea.className = 'xterm-helper-textarea';
+    wrapper.get('.terminal-surface').element.append(terminalTextarea);
+    terminalAdapterMock.focus.mockImplementation(() => terminalTextarea.focus());
+
+    await wrapper.get('.terminal-surface').trigger('contextmenu');
+    await nextTick();
+    await nextTick();
+    document
+      .querySelector<HTMLElement>('.app-context-menu')
+      ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await nextTick();
+
+    expect(document.activeElement).toBe(terminalTextarea);
+    wrapper.unmount();
+    menuRenderer.unmount();
+    paneHost.remove();
+  });
+
   it('opens the SFTP panel inside the current terminal pane', async () => {
     const wrapper = mountPane();
     await flushPromises();
@@ -198,7 +444,7 @@ describe('TerminalPane SFTP integration', () => {
   });
 });
 
-function mountPane(focused = true) {
+function mountPane(focused = true, attachTo?: Element) {
   return mount(TerminalPane, {
     props: {
       tabId: 'tab-1',
@@ -209,5 +455,33 @@ function mountPane(focused = true) {
     global: {
       stubs: { SftpPanel: true },
     },
+    ...(attachTo === undefined ? {} : { attachTo }),
   });
+}
+
+function terminalAction(id: string): ContextMenuActionEntry {
+  const entry = contextMenu.state.value?.entries.find(
+    (candidate): candidate is ContextMenuActionEntry =>
+      candidate.kind === 'action' && candidate.id === id,
+  );
+  if (entry === undefined) {
+    throw new Error(`Expected terminal context action: ${id}`);
+  }
+  return entry;
+}
+
+function getRenderedAction(id: string): HTMLButtonElement {
+  const actionElement = document.querySelector<HTMLButtonElement>(`[data-context-action="${id}"]`);
+  if (actionElement === null) {
+    throw new Error(`Expected rendered terminal context action: ${id}`);
+  }
+  return actionElement;
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
 }

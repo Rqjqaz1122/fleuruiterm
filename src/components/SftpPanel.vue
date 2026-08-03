@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import AppDialog from '@/components/AppDialog.vue';
 import { locale, t, type TranslationKey } from '@/i18n/locale';
+import { browserClipboard } from '@/services/clipboard';
+import { contextMenu, type ContextMenuEntry } from '@/services/contextMenu';
 import { SftpClient, SftpClientError, type SftpDirectoryEntry } from '@/services/sftpClient';
 
 type PanelState = 'connecting' | 'ready' | 'failed';
@@ -31,6 +33,10 @@ let listingRequest = 0;
 
 const operationBusy = computed(
   () => panelState.value === 'connecting' || loadingDirectory.value || transferActive.value,
+);
+const panelUnavailable = computed(() => operationBusy.value || panelState.value !== 'ready');
+const parentDirectoryUnavailable = computed(
+  () => panelUnavailable.value || currentPath.value === '/',
 );
 const breadcrumbs = computed(() => {
   const segments = currentPath.value.split('/').filter(Boolean);
@@ -174,6 +180,71 @@ function requestDelete(entry: SftpDirectoryEntry): void {
   }
 }
 
+function openEntryContextMenu(event: MouseEvent, entry: SftpDirectoryEntry): void {
+  event.stopPropagation();
+  const primaryEntry: ContextMenuEntry =
+    entry.kind === 'file'
+      ? {
+          kind: 'action',
+          id: 'download',
+          label: t('sftp.download'),
+          disabled: operationBusy.value,
+          run: () => downloadFile(entry),
+        }
+      : {
+          kind: 'action',
+          id: 'open',
+          label: t('contextMenu.open'),
+          disabled: operationBusy.value,
+          run: () => openEntry(entry),
+        };
+  contextMenu.openAt(event, [
+    primaryEntry,
+    {
+      kind: 'action',
+      id: 'copy-path',
+      label: t('contextMenu.copyPath'),
+      run: () => browserClipboard.writeText(entry.path),
+    },
+    { kind: 'separator', id: 'sftp-entry-actions-separator' },
+    {
+      kind: 'action',
+      id: 'delete',
+      label: t('sftp.delete'),
+      disabled: operationBusy.value,
+      danger: true,
+      run: () => requestDelete(entry),
+    },
+  ]);
+}
+
+function openSftpContextMenu(event: MouseEvent): void {
+  event.stopPropagation();
+  contextMenu.openAt(event, [
+    {
+      kind: 'action',
+      id: 'upload',
+      label: t('sftp.upload'),
+      disabled: panelUnavailable.value,
+      run: uploadFiles,
+    },
+    {
+      kind: 'action',
+      id: 'refresh',
+      label: t('sftp.refresh'),
+      disabled: panelUnavailable.value,
+      run: () => loadDirectory(currentPath.value),
+    },
+    {
+      kind: 'action',
+      id: 'parent-directory',
+      label: t('sftp.parent'),
+      disabled: parentDirectoryUnavailable.value,
+      run: openParentDirectory,
+    },
+  ]);
+}
+
 function cancelDelete(): void {
   if (!transferActive.value) {
     deleteTarget.value = null;
@@ -255,7 +326,12 @@ function formatModified(timestamp: number | null): string {
 </script>
 
 <template>
-  <section class="sftp-panel" :aria-label="t('sftp.title')" @pointerdown.stop>
+  <section
+    class="sftp-panel"
+    :aria-label="t('sftp.title')"
+    @pointerdown.stop
+    @contextmenu="openSftpContextMenu"
+  >
     <header class="sftp-header">
       <div class="sftp-heading">
         <strong>{{ t('sftp.title') }}</strong>
@@ -276,7 +352,7 @@ function formatModified(timestamp: number | null): string {
           type="button"
           :title="t('sftp.parent')"
           :aria-label="t('sftp.parent')"
-          :disabled="operationBusy || currentPath === '/'"
+          :disabled="parentDirectoryUnavailable"
           @click="openParentDirectory"
         >
           ↑
@@ -285,7 +361,7 @@ function formatModified(timestamp: number | null): string {
           type="button"
           :title="t('sftp.refresh')"
           :aria-label="t('sftp.refresh')"
-          :disabled="operationBusy || panelState !== 'ready'"
+          :disabled="panelUnavailable"
           @click="loadDirectory(currentPath)"
         >
           ↻
@@ -293,7 +369,7 @@ function formatModified(timestamp: number | null): string {
         <button
           data-testid="sftp-upload"
           type="button"
-          :disabled="operationBusy || panelState !== 'ready'"
+          :disabled="panelUnavailable"
           @click="uploadFiles"
         >
           ↑ {{ t('sftp.upload') }}
@@ -328,7 +404,12 @@ function formatModified(timestamp: number | null): string {
       <div v-if="loadingDirectory" class="sftp-state">{{ t('sftp.loading') }}</div>
       <div v-else-if="entries.length === 0" class="sftp-state">{{ t('sftp.empty') }}</div>
       <div v-else class="sftp-entry-list">
-        <div v-for="entry in entries" :key="entry.path" class="sftp-entry-row">
+        <div
+          v-for="entry in entries"
+          :key="entry.path"
+          class="sftp-entry-row"
+          @contextmenu="openEntryContextMenu($event, entry)"
+        >
           <button
             class="sftp-entry-name"
             :class="{ 'is-directory': entry.kind === 'directory' }"

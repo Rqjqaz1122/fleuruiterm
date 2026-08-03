@@ -5,13 +5,16 @@ import AIMarkdownInline from '@/components/AIMarkdownInline.vue';
 import AiToolCard from '@/components/AiToolCard.vue';
 import AppSelect from '@/components/AppSelect.vue';
 import type { SessionSnapshot } from '@/domain/session';
-import { locale } from '@/i18n/locale';
+import { locale, t } from '@/i18n/locale';
 import { sendAiChat } from '@/services/aiClient';
 import {
   createAiConversationRunner,
   type AiConversationRunner,
 } from '@/services/aiConversationRunner';
 import type { AiAppAction, AiToolResult } from '@/services/aiToolProtocol';
+import { browserClipboard } from '@/services/clipboard';
+import { contextMenu, type ContextMenuEntry } from '@/services/contextMenu';
+import { openEditableContextMenu } from '@/services/editableContextMenu';
 import {
   parseMarkdownBlocks,
   parseMarkdownInline,
@@ -170,6 +173,75 @@ function clearConversation(): void {
     runner.stop();
   }
   conversation.clearConversation();
+}
+
+function openMessageContextMenu(event: MouseEvent, message: AiConversationMessage): void {
+  event.stopPropagation();
+  const selectedText = selectionWithinMessage(event.currentTarget);
+  const entries: ContextMenuEntry[] = [
+    {
+      kind: 'action',
+      id: 'copy-selection',
+      label: t('contextMenu.copySelection'),
+      disabled: selectedText === null,
+      run: () => browserClipboard.writeText(selectedText ?? ''),
+    },
+    {
+      kind: 'action',
+      id: 'copy-message',
+      label: t('contextMenu.copyMessage'),
+      run: () => browserClipboard.writeText(message.content),
+    },
+    { kind: 'separator', id: 'message-actions-separator' },
+    clearConversationEntry(),
+  ];
+  contextMenu.openAt(event, entries);
+}
+
+function openThreadContextMenu(event: MouseEvent): void {
+  event.stopPropagation();
+  contextMenu.openAt(event, [clearConversationEntry()]);
+}
+
+function openComposerContextMenu(event: MouseEvent): void {
+  event.stopPropagation();
+  openEditableContextMenu(event, {
+    cut: t('contextMenu.cut'),
+    copy: t('contextMenu.copy'),
+    paste: t('contextMenu.paste'),
+    selectAll: t('contextMenu.selectAll'),
+  });
+}
+
+function clearConversationEntry(): ContextMenuEntry {
+  return {
+    kind: 'action',
+    id: 'clear-conversation',
+    label: t('contextMenu.clearConversation'),
+    disabled: !conversation.hasConversationHistory.value,
+    run: clearConversation,
+  };
+}
+
+function selectionWithinMessage(currentTarget: EventTarget | null): string | null {
+  if (!(currentTarget instanceof HTMLElement)) {
+    return null;
+  }
+  const selection = window.getSelection();
+  if (selection === null || selection.isCollapsed || selection.rangeCount === 0) {
+    return null;
+  }
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    const range = selection.getRangeAt(index);
+    if (
+      !currentTarget.contains(range.startContainer) ||
+      !currentTarget.contains(range.endContainer)
+    ) {
+      return null;
+    }
+  }
+  const selectedText = selection.toString();
+  return selectedText.length > 0 ? selectedText : null;
 }
 
 function handlePrimaryAction(): void {
@@ -416,15 +488,17 @@ const zhAiPanelLabels = {
       {{ turnStatusLabel }}
     </div>
 
-    <div ref="threadElement" class="ai-panel-thread">
+    <div ref="threadElement" class="ai-panel-thread" @contextmenu="openThreadContextMenu">
       <template v-for="item in timeline" :key="`${item.kind}-${item.id}`">
         <section
           v-if="item.kind === 'message'"
           class="ai-message"
+          :data-message-id="item.message.id"
           :class="[
             `ai-message-${item.message.role}`,
             { 'is-failed': item.message.status === 'failed' },
           ]"
+          @contextmenu="openMessageContextMenu($event, item.message)"
         >
           <div class="ai-message-content">
             <span
@@ -557,6 +631,7 @@ const zhAiPanelLabels = {
             :aria-label="labels.composerAria"
             :disabled="turnActive"
             @keydown="handleComposerKeyDown"
+            @contextmenu="openComposerContextMenu"
           />
           <div class="ai-panel-composer-actions">
             <span>{{ turnStatusLabel }}</span>

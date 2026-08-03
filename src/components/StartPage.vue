@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { t } from '@/i18n/locale';
+import { contextMenu, type ContextMenuEntry } from '@/services/contextMenu';
 
 import appLogoUrl from '../../src-tauri/icons/app-icon-source.png';
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     pending: boolean;
     version?: string;
@@ -13,14 +14,38 @@ withDefaults(
   },
 );
 
-defineEmits<{
+const emit = defineEmits<{
   createTerminal: [];
   openSettings: [];
 }>();
+
+function openStartPageContextMenu(event: MouseEvent): void {
+  event.stopPropagation();
+  const entries: ContextMenuEntry[] = [
+    {
+      kind: 'action',
+      id: 'new-terminal',
+      label: t('contextMenu.newTerminal'),
+      disabled: props.pending,
+      run: () => emit('createTerminal'),
+    },
+    {
+      kind: 'action',
+      id: 'open-settings',
+      label: t('contextMenu.openSettings'),
+      run: () => emit('openSettings'),
+    },
+  ];
+  contextMenu.openAt(event, entries);
+}
 </script>
 
 <template>
-  <section class="start-page" aria-labelledby="start-page-title">
+  <section
+    class="start-page"
+    aria-labelledby="start-page-title"
+    @contextmenu="openStartPageContextMenu"
+  >
     <div class="start-page-main">
       <div class="start-page-content">
         <header class="start-brand">

@@ -1,10 +1,15 @@
 import { mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import appLogoUrl from '../../src-tauri/icons/app-icon-source.png';
+import { contextMenu, type ContextMenuActionEntry } from '@/services/contextMenu';
 import StartPage from './StartPage.vue';
 
 describe('StartPage', () => {
+  beforeEach(() => {
+    contextMenu.close();
+  });
+
   it('shows the FleurTerm brand with the project logo and supplied version', () => {
     const wrapper = mount(StartPage, { props: { pending: false, version: '0.0.6' } });
 
@@ -62,11 +67,37 @@ describe('StartPage', () => {
     expect(wrapper.get('[data-testid="recent-entry"]').attributes('type')).toBe('button');
   });
 
-  it('disables terminal creation while a terminal action is pending', () => {
+  it('disables terminal creation while a terminal action is pending', async () => {
     const wrapper = mount(StartPage, { props: { pending: true } });
 
     expect(wrapper.get('[data-testid="start-new-terminal"]').attributes()).toHaveProperty(
       'disabled',
     );
+    await wrapper.get('.start-page').trigger('contextmenu');
+    expect(contextAction('new-terminal').disabled).toBe(true);
+  });
+
+  it('offers terminal and settings actions from the page background', async () => {
+    const wrapper = mount(StartPage, { props: { pending: false } });
+
+    await wrapper.get('.start-page').trigger('contextmenu');
+
+    expect(contextMenu.state.value?.entries.map((entry) => entry.id)).toEqual([
+      'new-terminal',
+      'open-settings',
+    ]);
+    await contextAction('new-terminal').run();
+    await contextAction('open-settings').run();
+
+    expect(wrapper.emitted('createTerminal')).toEqual([[]]);
+    expect(wrapper.emitted('openSettings')).toEqual([[]]);
   });
 });
+
+function contextAction(id: string): ContextMenuActionEntry {
+  const entry = contextMenu.state.value?.entries.find((candidate) => candidate.id === id);
+  if (entry?.kind !== 'action') {
+    throw new Error(`Expected context-menu action: ${id}`);
+  }
+  return entry;
+}

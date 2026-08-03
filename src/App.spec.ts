@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { enableAutoUnmount, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { addTab, createWorkspace } from '@/domain/workspace';
+import { addTab, closeTab as closeWorkspaceTab, createWorkspace } from '@/domain/workspace';
 import { setLocale } from '@/i18n/locale';
 import { settingsClient } from '@/services/settingsClient';
 import { workspacePersistenceClient } from '@/services/workspacePersistence';
@@ -82,6 +82,19 @@ describe('FleurTerm app shell', () => {
     appSettings.resetShortcutSettings();
     vi.spyOn(workspacePersistenceClient, 'load').mockResolvedValue(null);
     vi.spyOn(workspacePersistenceClient, 'save').mockResolvedValue();
+  });
+
+  it('mounts exactly one global context menu renderer', () => {
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          AppContextMenu: { template: '<div data-testid="global-context-menu" />' },
+          TerminalPane: true,
+        },
+      },
+    });
+
+    expect(wrapper.findAll('[data-testid="global-context-menu"]')).toHaveLength(1);
   });
 
   it('restores saved terminal tabs and the previously active connection on startup', async () => {
@@ -795,6 +808,252 @@ describe('FleurTerm app shell', () => {
     await wrapper.get('[aria-label="Close Settings"]').trigger('click');
 
     expect(wrapper.get('[aria-label="FleurTerm start page"]').exists()).toBe(true);
+  });
+
+  it('closes every terminal tab except a settings context-menu target', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    store.closeTab = vi.fn(async (tabId: string) => {
+      store.workspace = closeWorkspaceTab(store.workspace, tabId);
+    });
+    const wrapper = mount(App, {
+      attachTo: document.body,
+      global: { stubs: { TerminalPane: true } },
+    });
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[data-tab-id="tab-2"] .tab-button').trigger('click');
+    expect(wrapper.get('#settings-panel').attributes('aria-hidden')).toBe('true');
+
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('closeOtherTabs', 'app-settings');
+
+    await vi.waitFor(() => expect(store.workspace.tabs).toHaveLength(0));
+    expect(store.closeTab).toHaveBeenNthCalledWith(1, 'tab-1');
+    expect(store.closeTab).toHaveBeenNthCalledWith(2, 'tab-2');
+    expect(store.closeTab).not.toHaveBeenCalledWith('app-settings');
+    expect(wrapper.get('[data-tab-id="app-settings"]').exists()).toBe(true);
+    expect(wrapper.get('#settings-panel').attributes('aria-hidden')).toBe('false');
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(wrapper.get('#app-tab-app-settings').element),
+    );
+  });
+
+  it('closes other app tabs sequentially while preserving a terminal target', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    const closeOrder: string[] = [];
+    store.closeTab = vi.fn(async (tabId: string) => {
+      closeOrder.push(tabId);
+      store.workspace = closeWorkspaceTab(store.workspace, tabId);
+    });
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('closeOtherTabs', 'tab-1');
+
+    await vi.waitFor(() =>
+      expect(wrapper.findAll('.tab-item').map((tab) => tab.attributes('data-tab-id'))).toEqual([
+        'tab-1',
+      ]),
+    );
+    expect(closeOrder).toEqual(['tab-2']);
+    expect(store.closeTab).not.toHaveBeenCalledWith('tab-1');
+    expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(false);
+    expect(wrapper.get('#terminal-panel-tab-1').attributes('aria-hidden')).toBe('false');
+  });
+
+  it('waits for each tab close before starting the next close', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const second = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    store.workspace = addTab(second, 'session-c', ids('tab-3', 'pane-3'));
+    const firstClose = deferredPromise<void>();
+    store.closeTab = vi.fn(async (tabId: string) => {
+      if (tabId === 'tab-2') {
+        await firstClose.promise;
+      }
+      store.workspace = closeWorkspaceTab(store.workspace, tabId);
+    });
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('closeOtherTabs', 'tab-1');
+
+    await vi.waitFor(() => expect(store.closeTab).toHaveBeenCalledTimes(1));
+    expect(store.closeTab).toHaveBeenLastCalledWith('tab-2');
+    expect(wrapper.get('[data-testid="tabbar-settings"]').attributes()).toHaveProperty('disabled');
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    expect(wrapper.find('#settings-panel').exists()).toBe(false);
+    firstClose.resolve(undefined);
+    await vi.waitFor(() => expect(store.closeTab).toHaveBeenCalledTimes(2));
+    expect(store.closeTab).toHaveBeenLastCalledWith('tab-3');
+  });
+
+  it('skips a second close-others request while the first transaction is pending', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    const pendingClose = deferredPromise<void>();
+    store.closeTab = vi.fn(async (tabId: string) => {
+      await pendingClose.promise;
+      store.workspace = closeWorkspaceTab(store.workspace, tabId);
+    });
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    const outsideInput = document.createElement('input');
+    document.body.append(outsideInput);
+    outsideInput.focus();
+
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('closeOtherTabs', 'tab-1');
+    await vi.waitFor(() => expect(store.closeTab).toHaveBeenCalledOnce());
+    expect(wrapper.get('[aria-label="New terminal"]').attributes()).toHaveProperty('disabled');
+    expect(wrapper.getComponent({ name: 'SettingsView' }).props('pending')).toBe(true);
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('closeOtherTabs', 'tab-1');
+    await new Promise((resolve) => window.setTimeout(resolve));
+
+    expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(true);
+    expect(document.activeElement).toBe(outsideInput);
+    pendingClose.resolve(undefined);
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(false),
+    );
+    outsideInput.remove();
+  });
+
+  it('skips AI terminal opens while close-others is pending', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    store.workspace = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    const pendingClose = deferredPromise<void>();
+    store.closeTab = vi.fn(async (tabId: string) => {
+      await pendingClose.promise;
+      store.workspace = closeWorkspaceTab(store.workspace, tabId);
+    });
+    store.openTab = vi.fn(async () => {
+      store.workspace = addTab(store.workspace, 'session-c', ids('tab-3', 'pane-3'));
+    });
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          TerminalPane: true,
+          AIPanel: {
+            props: ['runAppAction'],
+            template:
+              '<button data-testid="ai-open-during-close" @click="runAppAction({ type: \'terminal.openLocal\' })">Open</button>',
+          },
+        },
+      },
+    });
+    await wrapper.get('[data-testid="tabbar-ai"]').trigger('click');
+
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('closeOtherTabs', 'tab-1');
+    await vi.waitFor(() => expect(store.closeTab).toHaveBeenCalledOnce());
+    await wrapper.get('[data-testid="ai-open-during-close"]').trigger('click');
+    await new Promise((resolve) => window.setTimeout(resolve));
+
+    expect(store.openTab).not.toHaveBeenCalled();
+    pendingClose.resolve(undefined);
+    await vi.waitFor(() => expect(store.workspace.tabs.map((tab) => tab.id)).toEqual(['tab-1']));
+  });
+
+  it('stops on the first close failure and retries only the remaining tabs', async () => {
+    const store = useWorkspaceStore();
+    const first = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const second = addTab(first, 'session-b', ids('tab-2', 'pane-2'));
+    store.workspace = addTab(second, 'session-c', ids('tab-3', 'pane-3'));
+    let thirdTabAttempts = 0;
+    store.closeTab = vi.fn(async (tabId: string) => {
+      if (tabId === 'tab-3' && thirdTabAttempts === 0) {
+        thirdTabAttempts += 1;
+        throw new Error('batch close failed');
+      }
+      store.workspace = closeWorkspaceTab(store.workspace, tabId);
+    });
+    const wrapper = mount(App, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          TerminalPane: {
+            emits: ['focus'],
+            template: '<textarea class="xterm-helper-textarea" />',
+          },
+        },
+      },
+    });
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    const targetTextarea = wrapper.get<HTMLTextAreaElement>(
+      '#terminal-panel-tab-1 .xterm-helper-textarea',
+    ).element;
+    const outsideInput = document.createElement('input');
+    document.body.append(outsideInput);
+    outsideInput.focus();
+
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('closeOtherTabs', 'tab-1');
+
+    await vi.waitFor(() =>
+      expect(wrapper.get('[role="alert"]').text()).toContain('batch close failed'),
+    );
+    expect(store.closeTab).toHaveBeenCalledTimes(2);
+    expect(store.closeTab).toHaveBeenNthCalledWith(1, 'tab-2');
+    expect(store.closeTab).toHaveBeenNthCalledWith(2, 'tab-3');
+    expect(wrapper.find('[data-tab-id="app-settings"]').exists()).toBe(true);
+    expect(document.activeElement).toBe(outsideInput);
+
+    store.openTab = vi.fn(async () => undefined);
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('newTerminal');
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+    expect(wrapper.get('[role="alert"]').text()).toContain('batch close failed');
+    expect(wrapper.get('[data-testid="retry-action"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="retry-action"]').trigger('click');
+
+    await vi.waitFor(() =>
+      expect(wrapper.findAll('.tab-item').map((tab) => tab.attributes('data-tab-id'))).toEqual([
+        'tab-1',
+      ]),
+    );
+    expect(store.closeTab).toHaveBeenCalledTimes(3);
+    expect(store.closeTab).toHaveBeenLastCalledWith('tab-3');
+    await vi.waitFor(() => expect(wrapper.find('[role="alert"]').exists()).toBe(false));
+    await vi.waitFor(() => expect(document.activeElement).toBe(targetTextarea));
+    outsideInput.remove();
+  });
+
+  it('restores focus to the current terminal target after closing settings', async () => {
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace('session-a', ids('tab-1', 'pane-1'));
+    const wrapper = mount(App, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          TerminalPane: {
+            emits: ['focus'],
+            template: '<textarea class="xterm-helper-textarea" />',
+          },
+        },
+      },
+    });
+    await wrapper.get('[data-testid="tabbar-settings"]').trigger('click');
+    await wrapper.get('[data-tab-id="tab-1"] .tab-button').trigger('click');
+    const targetTextarea = wrapper.get<HTMLTextAreaElement>(
+      '#terminal-panel-tab-1 .xterm-helper-textarea',
+    ).element;
+
+    wrapper.getComponent({ name: 'TerminalTabs' }).vm.$emit('closeOtherTabs', 'tab-1');
+
+    await vi.waitFor(() => expect(wrapper.find('#settings-panel').exists()).toBe(false));
+    await vi.waitFor(() => expect(document.activeElement).toBe(targetTextarea));
+  });
+
+  it('wires settings terminal creation through the application shell', async () => {
+    const store = useWorkspaceStore();
+    store.openTab = vi.fn(async () => undefined);
+    const wrapper = mount(App, { global: { stubs: { TerminalPane: true } } });
+    await wrapper.get('[data-testid="start-settings"]').trigger('click');
+
+    wrapper.getComponent({ name: 'SettingsView' }).vm.$emit('createTerminal');
+
+    await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
   });
 
   it('uses the start-page footer as the only bottom bar when no terminal exists', () => {

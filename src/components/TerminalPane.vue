@@ -3,11 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import SftpPanel from '@/components/SftpPanel.vue';
 import { t } from '@/i18n/locale';
+import { browserClipboard } from '@/services/clipboard';
 import {
   CONNECTION_PROFILES_CHANGED_EVENT,
   loadSavedConnectionProfiles,
   type OpenableConnectionProfile,
 } from '@/services/connectionProfiles';
+import { contextMenu, type ContextMenuEntry } from '@/services/contextMenu';
 import { SessionClient } from '@/services/sessionClient';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
@@ -28,7 +30,7 @@ const props = defineProps<{
   focused: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   close: [paneId: string];
   focus: [paneId: string];
 }>();
@@ -283,6 +285,58 @@ async function reconnectTerminal(): Promise<void> {
   }
 }
 
+function openTerminalContextMenu(event: MouseEvent): void {
+  emit('focus', props.paneId);
+  adapter?.focus();
+  const selection = adapter?.getSelection() ?? '';
+  const entries: ContextMenuEntry[] = [
+    {
+      kind: 'action',
+      id: 'copy',
+      label: t('contextMenu.copy'),
+      disabled: selection.length === 0,
+      run: () => runTerminalContextAction(() => browserClipboard.writeText(selection)),
+    },
+    {
+      kind: 'action',
+      id: 'paste',
+      label: t('contextMenu.paste'),
+      run: () =>
+        runTerminalContextAction(async () => {
+          const clipboardText = await browserClipboard.readText();
+          adapter?.paste(clipboardText);
+        }),
+    },
+    {
+      kind: 'action',
+      id: 'select-all',
+      label: t('contextMenu.selectAll'),
+      run: () => runTerminalContextAction(() => adapter?.selectAll()),
+    },
+    { kind: 'separator', id: 'terminal-separator' },
+    {
+      kind: 'action',
+      id: 'clear-terminal',
+      label: t('contextMenu.clearTerminal'),
+      run: () => runTerminalContextAction(() => store.writeToSession(props.sessionId, '\x0c')),
+    },
+  ];
+  contextMenu.openAt(event, entries);
+}
+
+function runTerminalContextAction(action: () => void | Promise<void>): void | Promise<void> {
+  if (disposed) {
+    return;
+  }
+  try {
+    return action();
+  } finally {
+    if (!disposed) {
+      adapter?.focus();
+    }
+  }
+}
+
 onMounted(async () => {
   window.addEventListener(CONNECTION_PROFILES_CHANGED_EVENT, handleConnectionProfilesChanged);
   const element = terminalElement.value;
@@ -397,7 +451,7 @@ onBeforeUnmount(() => {
     <p v-if="visibleTerminalError" class="pane-error" role="alert">
       {{ visibleTerminalError }}
     </p>
-    <div class="terminal-surface-frame">
+    <div class="terminal-surface-frame" @contextmenu="openTerminalContextMenu">
       <div ref="terminalElement" class="terminal-surface" />
       <div
         ref="scrollbarTrackElement"

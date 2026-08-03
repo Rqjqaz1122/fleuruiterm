@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import AIPanel from '@/components/AIPanel.vue';
+import AppContextMenu from '@/components/AppContextMenu.vue';
 import SettingsView from '@/components/SettingsView.vue';
 import StartPage from '@/components/StartPage.vue';
 import StatusBar from '@/components/StatusBar.vue';
@@ -47,6 +48,13 @@ const AI_PANEL_WIDTH_STORAGE_KEY = 'fleurterm.aiPanelWidth';
 const DEFAULT_AI_PANEL_WIDTH = 380;
 const MIN_AI_PANEL_WIDTH = 320;
 const MAX_AI_PANEL_WIDTH = 720;
+type ActionRunOutcome = 'completed' | 'failed' | 'skipped';
+interface RetryableAppAction {
+  run: () => Promise<void>;
+  onSuccess?: () => Promise<void>;
+  errorCode: WorkspaceErrorCode | null;
+  errorMessage: string;
+}
 
 const store = useWorkspaceStore();
 const appSettings = useAppSettingsStore();
@@ -54,7 +62,7 @@ const appUpdate = useAppUpdateStore();
 const shortcutPlatform = detectDesktopPlatform() === 'macos' ? 'macos' : 'default';
 const { workspace, activeSnapshot, errorMessage, errorCode } = storeToRefs(store);
 const actionPending = ref(false);
-const retryAction = ref<(() => Promise<void>) | null>(null);
+const retryAction = ref<RetryableAppAction | null>(null);
 const settingsTabOpen = ref(false);
 const aiPanelOpen = ref(false);
 const aiPanelWidth = ref(loadAiPanelWidth());
@@ -239,18 +247,20 @@ async function openStartupTerminalIfNeeded(): Promise<void> {
 }
 
 async function openWorkbenchConnection(connection: OpenableConnectionProfile): Promise<void> {
-  await runAction(async () => {
-    await workspaceRestorePromise;
-    const openOptions = buildConnectionOpenOptions(connection);
-    await store.openTab({
-      ...openOptions,
-      connectionProfileId: connection.id,
-      ...(connection.method === 'ssh' ? { sftpConnectionProfileId: connection.id } : {}),
-    });
-    activeAppTabId.value = store.workspace.activeTabId;
-    lastActiveTerminalTabId.value = store.workspace.activeTabId;
-    settingsTabOpen.value = false;
+  await runAction(() => openWorkbenchConnectionDirect(connection));
+}
+
+async function openWorkbenchConnectionDirect(connection: OpenableConnectionProfile): Promise<void> {
+  await workspaceRestorePromise;
+  const openOptions = buildConnectionOpenOptions(connection);
+  await store.openTab({
+    ...openOptions,
+    connectionProfileId: connection.id,
+    ...(connection.method === 'ssh' ? { sftpConnectionProfileId: connection.id } : {}),
   });
+  activeAppTabId.value = store.workspace.activeTabId;
+  lastActiveTerminalTabId.value = store.workspace.activeTabId;
+  settingsTabOpen.value = false;
 }
 
 function buildConnectionOpenOptions(connection: OpenableConnectionProfile): OpenTerminalTabOptions {
@@ -428,7 +438,7 @@ function buildSshForwardArgs(forwardedPorts: string[]): string[] {
 }
 
 function openSettings(): void {
-  if (workspaceClosing) {
+  if (actionPending.value || workspaceClosing) {
     return;
   }
   if (!workspacePersistenceReady) {
@@ -501,14 +511,37 @@ function resizeAiPanel(width: number): void {
 
 async function runAiAppAction(action: AiAppAction): Promise<AiToolResult> {
   const callId = `app-${Date.now()}-${action.type}`;
+  let actionFailure: unknown = null;
   try {
-    await trackWorkspaceMutation(executeAiAppAction(action));
+    const outcome = await runAction(async () => {
+      try {
+        await executeAiAppAction(action);
+      } catch (error) {
+        actionFailure = error;
+        throw error;
+      }
+    });
+    if (outcome === 'completed') {
+      return {
+        callId,
+        outcome,
+        command: action.type,
+        output: 'Application action submitted successfully.',
+        truncated: false,
+      };
+    }
     return {
       callId,
-      outcome: 'completed',
+      outcome: 'failed',
       command: action.type,
-      output: 'Application action submitted successfully.',
+      output: '',
       truncated: false,
+      errorMessage:
+        outcome === 'skipped'
+          ? 'Another application action is in progress.'
+          : actionFailure instanceof Error
+            ? actionFailure.message
+            : 'Application action failed',
     };
   } catch (error) {
     return {
@@ -553,7 +586,7 @@ async function executeAiAppAction(action: AiAppAction): Promise<void> {
       if (connection === null) {
         throw new Error(`Saved connection "${action.target}" was not found.`);
       }
-      await openWorkbenchConnection(await loadConnectionPassword(connection));
+      await openWorkbenchConnectionDirect(await loadConnectionPassword(connection));
       return;
     }
     case 'terminal.openLocal':
@@ -640,16 +673,61 @@ async function closeAppTab(tabId: string): Promise<void> {
     return;
   }
   await workspaceRestorePromise;
+  await runAction(() => closeAppTabDirect(tabId));
+}
+
+async function closeAppTabDirect(tabId: string): Promise<void> {
   if (tabId === SETTINGS_TAB_ID) {
     closeSettingsTab();
     return;
   }
-  await runAction(() => store.closeTab(tabId));
+  await store.closeTab(tabId);
   const closedTabStillExists = workspace.value.tabs.some((tab) => tab.id === tabId);
   if (activeAppTabId.value === tabId && !closedTabStillExists) {
     activeAppTabId.value = store.workspace.activeTabId;
     lastActiveTerminalTabId.value = store.workspace.activeTabId;
   }
+}
+
+async function closeOtherAppTabs(targetTabId: string): Promise<ActionRunOutcome> {
+  if (workspaceClosing) {
+    return 'skipped';
+  }
+  await workspaceRestorePromise;
+  if (!appTabs.value.some((tab) => tab.id === targetTabId)) {
+    return 'skipped';
+  }
+  return runAction(
+    () => closeRemainingAppTabs(targetTabId),
+    () => activateAndFocusAppTab(targetTabId),
+  );
+}
+
+async function closeRemainingAppTabs(targetTabId: string): Promise<void> {
+  const tabIdsToClose = appTabs.value.filter((tab) => tab.id !== targetTabId).map((tab) => tab.id);
+  for (const tabId of tabIdsToClose) {
+    await closeAppTabDirect(tabId);
+  }
+}
+
+async function activateAndFocusAppTab(targetTabId: string): Promise<void> {
+  if (appTabs.value.some((tab) => tab.id === targetTabId)) {
+    activateAppTab(targetTabId);
+    await focusAppTab(targetTabId);
+  }
+}
+
+async function focusAppTab(tabId: string): Promise<void> {
+  await nextTick();
+  const tabButton = document.getElementById(`app-tab-${tabId}`);
+  if (tabId === SETTINGS_TAB_ID) {
+    tabButton?.focus();
+    return;
+  }
+  const terminalInput = document
+    .getElementById(`terminal-panel-${tabId}`)
+    ?.querySelector<HTMLElement>('.xterm-helper-textarea');
+  (terminalInput ?? tabButton)?.focus();
 }
 
 function closeSettingsTab(): void {
@@ -804,32 +882,64 @@ function cancelWorkspaceClose(): void {
 async function retryLastAction(): Promise<void> {
   const action = retryAction.value;
   if (action !== null) {
-    await runAction(action);
+    await runAction(action.run, action.onSuccess);
   }
 }
 
-async function runAction(action: () => Promise<void>): Promise<void> {
+async function runAction(
+  action: () => Promise<void>,
+  onSuccess?: () => Promise<void>,
+): Promise<ActionRunOutcome> {
   if (actionPending.value || workspaceClosing) {
-    return;
+    return 'skipped';
   }
   actionPending.value = true;
-  return trackWorkspaceMutation(
+  const outcome = await trackWorkspaceMutation(
     (async () => {
+      const existingRetryAction = retryAction.value;
+      const retryingFailedAction = existingRetryAction?.run === action;
       try {
         await action();
-        retryAction.value = null;
+        if (retryingFailedAction) {
+          errorCode.value = null;
+          errorMessage.value = null;
+          retryAction.value = null;
+        } else if (existingRetryAction !== null) {
+          restoreRetryFailure(existingRetryAction);
+        }
+        return 'completed';
       } catch (error) {
+        if (existingRetryAction !== null && !retryingFailedAction) {
+          restoreRetryFailure(existingRetryAction);
+          return 'failed';
+        }
         // Store actions publish a sanitized, user-visible error message.
         if (errorMessage.value === null) {
           errorCode.value = null;
           errorMessage.value = error instanceof Error ? error.message : 'Unable to open terminal';
         }
-        retryAction.value = action;
+        retryAction.value = {
+          run: action,
+          onSuccess,
+          errorCode: errorCode.value,
+          errorMessage: errorMessage.value,
+        };
+        return 'failed';
       } finally {
         actionPending.value = false;
       }
     })(),
   );
+  if (outcome === 'completed') {
+    await onSuccess?.();
+  }
+  return outcome;
+}
+
+function restoreRetryFailure(action: RetryableAppAction): void {
+  errorCode.value = action.errorCode;
+  errorMessage.value = action.errorMessage;
+  retryAction.value = action;
 }
 
 function loadAiPanelWidth(): number {
@@ -864,8 +974,10 @@ function clampAiPanelWidth(width: number): number {
       :tabs="appTabs"
       :active-tab-id="activeAppTabId"
       :ai-open="aiPanelOpen"
+      :pending="actionPending"
       @activate="activateAppTab"
       @close="closeAppTab"
+      @close-other-tabs="closeOtherAppTabs"
       @new-terminal="openTerminal"
       @open-a-i="toggleAiPanel"
       @open-settings="openSettings"
@@ -912,7 +1024,11 @@ function clampAiPanelWidth(width: number): number {
         aria-labelledby="app-tab-app-settings"
         :inert="!settingsActive"
       >
-        <SettingsView @open-connection="openWorkbenchConnection" />
+        <SettingsView
+          :pending="actionPending"
+          @create-terminal="openTerminal"
+          @open-connection="openWorkbenchConnection"
+        />
       </section>
       <section
         class="workspace"
@@ -952,5 +1068,6 @@ function clampAiPanelWidth(width: number): number {
     </div>
 
     <StatusBar v-if="workspace.tabs.length > 0 || settingsTabOpen" :snapshot="activeSnapshot" />
+    <AppContextMenu />
   </main>
 </template>

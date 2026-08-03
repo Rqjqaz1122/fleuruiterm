@@ -66,6 +66,45 @@ describe('TerminalAdapter', () => {
     expect(terminal.focus).toHaveBeenCalledOnce();
   });
 
+  it('returns the current terminal selection', () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+
+    expect(adapter.getSelection()).toBe('selected terminal text');
+    expect(terminal.getSelection).toHaveBeenCalledOnce();
+  });
+
+  it('forwards paste and select-all operations to the terminal', () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+
+    adapter.paste('pwd\r');
+    adapter.selectAll();
+
+    expect(terminal.paste).toHaveBeenCalledWith('pwd\r');
+    expect(terminal.selectAll).toHaveBeenCalledOnce();
+  });
+
+  it('ignores selection, paste, select-all, and focus operations after disposal', () => {
+    const terminal = new FakeTerminal();
+    const adapter = createAdapter(terminal, createSessionClient());
+    adapter.dispose();
+    terminal.getSelection.mockClear();
+    terminal.paste.mockClear();
+    terminal.selectAll.mockClear();
+    terminal.focus.mockClear();
+
+    expect(adapter.getSelection()).toBe('');
+    adapter.paste('pwd\r');
+    adapter.selectAll();
+    adapter.focus();
+
+    expect(terminal.getSelection).not.toHaveBeenCalled();
+    expect(terminal.paste).not.toHaveBeenCalled();
+    expect(terminal.selectAll).not.toHaveBeenCalled();
+    expect(terminal.focus).not.toHaveBeenCalled();
+  });
+
   it('scrolls to the bottom before forwarding terminal input', async () => {
     const terminal = new FakeTerminal();
     const sessionClient = createSessionClient();

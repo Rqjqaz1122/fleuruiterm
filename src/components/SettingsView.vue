@@ -19,10 +19,12 @@ import {
   type ShortcutSettings,
 } from '@/services/appShortcuts';
 import { detectDesktopPlatform } from '@/services/desktopPlatform';
+import { contextMenu } from '@/services/contextMenu';
 import {
   CONNECTIONS_STORAGE_KEY,
   notifySavedConnectionProfilesChanged,
 } from '@/services/connectionProfiles';
+import { openEditableContextMenu } from '@/services/editableContextMenu';
 import { settingsClient } from '@/services/settingsClient';
 import {
   defaultTerminalSettings,
@@ -114,9 +116,46 @@ const COMMON_TERMINAL_FONT_OPTIONS = [
   { value: 'Consolas, monospace', label: 'Consolas' },
 ];
 
+const props = defineProps<{
+  pending?: boolean;
+}>();
+
 const emit = defineEmits<{
+  createTerminal: [];
   openConnection: [connection: WorkbenchConnection];
 }>();
+
+function openSettingsContextMenu(event: MouseEvent): void {
+  const editableMenuOpened = openEditableContextMenu(event, {
+    cut: t('contextMenu.cut'),
+    copy: t('contextMenu.copy'),
+    paste: t('contextMenu.paste'),
+    selectAll: t('contextMenu.selectAll'),
+  });
+  if (editableMenuOpened) {
+    event.stopPropagation();
+    return;
+  }
+  if (isNativeContextMenuControl(event.target)) {
+    event.stopPropagation();
+    return;
+  }
+
+  event.stopPropagation();
+  contextMenu.openAt(event, [
+    {
+      kind: 'action',
+      id: 'new-terminal',
+      label: t('contextMenu.newTerminal'),
+      disabled: props.pending,
+      run: () => emit('createTerminal'),
+    },
+  ]);
+}
+
+function isNativeContextMenuControl(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('button, input, select') !== null;
+}
 
 const defaultTheme: ThemeConfigFile = {
   palettes: {
@@ -1835,7 +1874,11 @@ const zhLabels: typeof enLabels = {
 </script>
 
 <template>
-  <section class="settings-tab settings-view" :aria-label="t('settings.aria')">
+  <section
+    class="settings-tab settings-view"
+    :aria-label="t('settings.aria')"
+    @contextmenu="openSettingsContextMenu"
+  >
     <div class="settings-pane">
       <div class="settings-shell">
         <aside class="settings-sidebar">
