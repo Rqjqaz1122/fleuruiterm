@@ -217,6 +217,7 @@ impl BackendSession for LocalPtySession {
                 if !child_exited.load(Ordering::Acquire)
                     && let Err(error) = killer.kill()
                     && !child_exited.load(Ordering::Acquire)
+                    && !child_process_already_exited(&error)
                 {
                     return Err(backend_failure("kill PTY child", error));
                 }
@@ -494,6 +495,19 @@ fn backend_failure(operation: &'static str, error: impl std::fmt::Display) -> Se
     }
 }
 
+fn child_process_already_exited(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        const NO_SUCH_PROCESS_OS_ERROR: i32 = 3;
+        error.raw_os_error() == Some(NO_SUCH_PROCESS_OS_ERROR)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -501,7 +515,9 @@ mod tests {
     use async_trait::async_trait;
     use tokio::sync::mpsc;
 
-    use super::{LocalPtyBackend, SessionState, forward_output, resolve_shell};
+    use super::{
+        LocalPtyBackend, SessionState, child_process_already_exited, forward_output, resolve_shell,
+    };
     use crate::session::{
         backend::{BackendOpenContext, SessionBackend, TerminalOutputSink},
         error::SessionError,
@@ -793,6 +809,14 @@ mod tests {
             .unwrap();
         let event = lifecycle_receiver.recv().await.unwrap();
         assert_eq!(event.state, SessionState::Closed);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn missing_child_process_is_treated_as_already_exited() {
+        let error = std::io::Error::from_raw_os_error(3);
+
+        assert!(child_process_already_exited(&error));
     }
 
     fn test_shell() -> String {
