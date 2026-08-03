@@ -303,7 +303,7 @@ export function setLocale(nextLocale: AppLocale): void {
 }
 
 export function terminalTitle(index: number): string {
-  return activeLocale.value === 'zh-CN' ? `终端 ${index}` : `Terminal ${index}`;
+  return activeLocale.value === 'zh-CN' ? `本地终端 ${index}` : `Local Terminal ${index}`;
 }
 
 function readStoredLocale(): AppLocale {

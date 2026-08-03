@@ -5,6 +5,7 @@ import type { TerminalLaunch, WorkspaceState } from '@/domain/workspace';
 
 const LEGACY_WORKSPACE_SCHEMA_VERSION = 1;
 const WORKSPACE_SCHEMA_VERSION = 2;
+const MAX_PERSISTED_TERMINAL_TABS = 32;
 
 export interface PersistedTerminalTab {
   id: string;
@@ -81,7 +82,11 @@ export function createPersistedWorkspace(
 }
 
 export function parsePersistedWorkspace(value: unknown): PersistedWorkspace | null {
-  if (!isRecord(value) || !Array.isArray(value.tabs)) {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.tabs) ||
+    value.tabs.length > MAX_PERSISTED_TERMINAL_TABS
+  ) {
     return null;
   }
 

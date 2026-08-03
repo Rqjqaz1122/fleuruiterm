@@ -148,7 +148,7 @@ describe('FleurTerm app shell', () => {
     expect(store.openTab).toHaveBeenNthCalledWith(2, {
       shell: 'ssh',
       args: ['-p', '22', 'deploy@server.example.com'],
-      title: 'Production terminal',
+      title: 'Production',
       connectionProfileId: 'production',
       sftpConnectionProfileId: 'production',
     });
@@ -168,6 +168,35 @@ describe('FleurTerm app shell', () => {
     mount(App, { global: { stubs: { TerminalPane: true } } });
 
     await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
+  });
+
+  it('does not restore persisted tabs over an existing runtime workspace', async () => {
+    vi.mocked(workspacePersistenceClient.load).mockResolvedValue({
+      version: 2,
+      activeTabId: 'persisted-tab',
+      settingsTabIndex: null,
+      tabs: [
+        {
+          id: 'persisted-tab',
+          title: 'Persisted terminal',
+          launch: { type: 'local' },
+        },
+      ],
+    });
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace(
+      'runtime-session',
+      ids('runtime-tab', 'runtime-pane'),
+      'Runtime terminal',
+    );
+    store.openTab = vi.fn(async () => undefined);
+
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+    await Promise.resolve();
+
+    expect(workspacePersistenceClient.load).toHaveBeenCalledOnce();
+    expect(store.openTab).not.toHaveBeenCalled();
+    expect(store.workspace.tabs).toHaveLength(1);
   });
 
   it('does not add a startup terminal when restoration recreated a terminal session', async () => {
@@ -1094,7 +1123,7 @@ describe('FleurTerm app shell', () => {
       },
     });
 
-    expect(wrapper.get('[role="tab"]').text()).toContain('Terminal 1');
+    expect(wrapper.get('[role="tab"]').text()).toContain('Local Terminal 1');
     expect(wrapper.find('[data-testid="split-horizontal"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="split-vertical"]').exists()).toBe(false);
   });
@@ -1229,7 +1258,7 @@ describe('FleurTerm app shell', () => {
     expect(store.openTab).toHaveBeenCalledWith({
       shell: 'ssh',
       args: ['-p', '2222', 'deploy@server.example.com'],
-      title: 'SSH deploy@server.example.com',
+      title: 'Server',
       connectionProfileId: 'server',
       sftpConnectionProfileId: 'server',
     });
@@ -1315,7 +1344,7 @@ describe('FleurTerm app shell', () => {
         '9000:localhost:9000',
         'deploy@server.example.com',
       ],
-      title: 'SSH deploy@server.example.com',
+      title: 'Tunnel',
       connectionProfileId: 'tunnel',
       sftpConnectionProfileId: 'tunnel',
     });
@@ -1358,7 +1387,7 @@ describe('FleurTerm app shell', () => {
         'deploy@server.example.com',
       ],
       password: 'secret',
-      title: 'SSH deploy@server.example.com',
+      title: 'Password Host',
       connectionProfileId: 'password-host',
       sftpConnectionProfileId: 'password-host',
     });
@@ -1414,8 +1443,8 @@ describe('FleurTerm app shell', () => {
       'tab-1',
     ]);
     expect(wrapper.findAll('.tab-label').map((label) => label.text())).toEqual([
-      'Terminal 2',
-      'Terminal 1',
+      'Local Terminal 2',
+      'Local Terminal 1',
     ]);
     expect(store.workspace.tabs.map((tab) => tab.id)).toEqual(['tab-2', 'tab-1']);
   });
@@ -1736,7 +1765,7 @@ describe('FleurTerm app shell', () => {
         'root@10.7.121.72',
       ],
       password: 'secret',
-      title: 'SSH root@10.7.121.72',
+      title: 'root@10.7.121.72',
       connectionProfileId: 'root-10-7-121-72',
       sftpConnectionProfileId: 'root-10-7-121-72',
     });

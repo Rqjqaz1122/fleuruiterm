@@ -185,9 +185,17 @@ appUpdate.setBeforeRestart(flushWorkspaceBeforeClose);
 appUpdate.setRestartFailureHandler(cancelWorkspaceClose);
 
 const appTabs = computed<AppTab[]>(() => {
-  const terminalTabs = workspace.value.tabs.map((tab, index) =>
-    toTerminalAppTab(tab, terminalTitle(resolveTerminalSequence(tab, index + 1))),
-  );
+  let localTerminalSequence = 0;
+  const terminalTabs = workspace.value.tabs.map((tab) => {
+    if (tab.launch.type === 'savedConnection' || tab.launch.shell === 'ssh') {
+      return toTerminalAppTab(tab);
+    }
+    localTerminalSequence += 1;
+    return toTerminalAppTab(
+      tab,
+      terminalTitle(resolveTerminalSequence(tab, localTerminalSequence)),
+    );
+  });
   const availableTabs = settingsTabOpen.value
     ? [...terminalTabs, createSettingsAppTab(t('tabs.settings'))]
     : terminalTabs;
@@ -306,12 +314,17 @@ function buildConnectionOpenOptions(connection: OpenableConnectionProfile): Open
       ...(connection.loginScripts.trim() ? [connection.loginScripts.trim()] : []),
     ],
     ...(connection.password ? { password: connection.password } : {}),
-    title: `SSH ${target}`,
+    title: connection.name,
   };
 }
 
 async function restoreTerminalWorkspace(): Promise<void> {
   const persistedWorkspace = await workspacePersistenceClient.load();
+  if (store.workspace.tabs.length > 0) {
+    activeAppTabId.value = store.workspace.activeTabId;
+    lastActiveTerminalTabId.value = store.workspace.activeTabId;
+    return;
+  }
   if (persistedWorkspace === null) {
     if (shouldOpenStartupTerminal()) {
       await openStartupTerminalIfNeeded();
@@ -407,7 +420,6 @@ async function buildRestoredTabOptions(
   const connectionWithPassword = await loadConnectionPassword(connection);
   return {
     ...buildConnectionOpenOptions(connectionWithPassword),
-    title: tab.title,
     connectionProfileId: connection.id,
     ...(connection.method === 'ssh' ? { sftpConnectionProfileId: connection.id } : {}),
   };
