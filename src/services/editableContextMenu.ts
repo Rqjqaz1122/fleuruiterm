@@ -1,9 +1,5 @@
+import { browserClipboard, type ClipboardPort } from '@/services/clipboard';
 import { contextMenu, type ContextMenuActionEntry } from '@/services/contextMenu';
-
-export interface ClipboardPort {
-  readText(): Promise<string>;
-  writeText(text: string): Promise<void>;
-}
 
 export interface EditableContextMenuLabels {
   cut: string;
@@ -14,6 +10,38 @@ export interface EditableContextMenuLabels {
 
 type EditableTarget = HTMLInputElement | HTMLTextAreaElement | HTMLElement;
 type FormEditableTarget = HTMLInputElement | HTMLTextAreaElement;
+
+const SELECTION_CAPABLE_INPUT_TYPES = new Set(['password', 'search', 'tel', 'text', 'url']);
+const BLOCK_ELEMENT_NAMES = new Set([
+  'ADDRESS',
+  'ARTICLE',
+  'ASIDE',
+  'BLOCKQUOTE',
+  'DIV',
+  'DL',
+  'FIELDSET',
+  'FIGCAPTION',
+  'FIGURE',
+  'FOOTER',
+  'FORM',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'H5',
+  'H6',
+  'HEADER',
+  'LI',
+  'MAIN',
+  'NAV',
+  'OL',
+  'P',
+  'PRE',
+  'SECTION',
+  'TABLE',
+  'TR',
+  'UL',
+]);
 
 interface FormSelectionSnapshot {
   kind: 'form-control';
@@ -34,25 +62,6 @@ interface ContentEditableSelectionSnapshot {
 
 type EditableSelectionSnapshot = FormSelectionSnapshot | ContentEditableSelectionSnapshot;
 
-const CLIPBOARD_UNAVAILABLE_MESSAGE = 'Clipboard API is unavailable';
-
-export const browserClipboard: ClipboardPort = {
-  async readText(): Promise<string> {
-    const readText = resolveNavigatorClipboardMethod('readText');
-    if (readText === null) {
-      throw new Error(CLIPBOARD_UNAVAILABLE_MESSAGE);
-    }
-    return readText();
-  },
-  async writeText(text: string): Promise<void> {
-    const writeText = resolveNavigatorClipboardMethod('writeText');
-    if (writeText === null) {
-      throw new Error(CLIPBOARD_UNAVAILABLE_MESSAGE);
-    }
-    await writeText(text);
-  },
-};
-
 export function findEditableTarget(target: EventTarget | null): EditableTarget | null {
   const targetElement = resolveTargetElement(target);
   if (targetElement === null) {
@@ -60,7 +69,10 @@ export function findEditableTarget(target: EventTarget | null): EditableTarget |
   }
 
   const formControl = targetElement.closest('input, textarea');
-  if (formControl instanceof HTMLInputElement || formControl instanceof HTMLTextAreaElement) {
+  if (formControl instanceof HTMLInputElement) {
+    return SELECTION_CAPABLE_INPUT_TYPES.has(formControl.type) ? formControl : null;
+  }
+  if (formControl instanceof HTMLTextAreaElement) {
     return formControl;
   }
 
@@ -172,7 +184,7 @@ function captureSelection(target: EditableTarget): EditableSelectionSnapshot {
     kind: 'contenteditable',
     target,
     range,
-    text: range.toString(),
+    text: serializeRangePlainText(range),
   };
 }
 
@@ -245,24 +257,102 @@ function replaceSelection(
   replacement: string,
   inputType: 'deleteByCut' | 'insertFromPaste',
 ): void {
+  let inputData: string | null = inputType === 'deleteByCut' ? null : replacement;
   if (selection.kind === 'form-control') {
     selection.target.focus();
     selection.target.setRangeText(replacement, selection.start, selection.end, 'end');
   } else {
-    const replacementNode = document.createTextNode(replacement);
-    selection.range.deleteContents();
-    selection.range.insertNode(replacementNode);
-    selection.range.setStartAfter(replacementNode);
-    selection.range.collapse(true);
-    restoreSelection(selection);
+    inputData = replaceContentEditableSelection(selection, replacement, inputType);
   }
   selection.target.dispatchEvent(
     new InputEvent('input', {
       bubbles: true,
-      data: replacement,
+      data: inputData,
       inputType,
     }),
   );
+}
+
+function replaceContentEditableSelection(
+  selection: ContentEditableSelectionSnapshot,
+  replacement: string,
+  inputType: 'deleteByCut' | 'insertFromPaste',
+): string | null {
+  const normalizedReplacement = replacement.replace(/\r\n?/g, '\n');
+  const replacementFragment = createPlainTextFragment(normalizedReplacement);
+  const lastReplacementNode = replacementFragment.lastChild;
+  selection.range.deleteContents();
+  if (lastReplacementNode !== null) {
+    selection.range.insertNode(replacementFragment);
+    selection.range.setStartAfter(lastReplacementNode);
+  }
+  selection.range.collapse(true);
+  restoreSelection(selection);
+  return inputType === 'deleteByCut' ? null : normalizedReplacement;
+}
+
+function createPlainTextFragment(text: string): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  const lines = text.split('\n');
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      fragment.append(document.createElement('br'));
+    }
+    if (line.length > 0) {
+      fragment.append(document.createTextNode(line));
+    }
+  });
+  return fragment;
+}
+
+function serializeRangePlainText(range: Range): string {
+  return serializePlainTextFragment(range.cloneContents());
+}
+
+function serializePlainTextFragment(fragment: DocumentFragment): string {
+  let plainText = '';
+  let blockBoundaryPending = false;
+
+  const appendPendingBlockBoundary = (): void => {
+    if (blockBoundaryPending && plainText.length > 0 && !plainText.endsWith('\n')) {
+      plainText += '\n';
+    }
+    blockBoundaryPending = false;
+  };
+
+  const appendNode = (node: Node): void => {
+    if (node instanceof Text) {
+      if (node.data.length > 0) {
+        appendPendingBlockBoundary();
+        plainText += node.data;
+      }
+      return;
+    }
+    if (!(node instanceof Element)) {
+      node.childNodes.forEach(appendNode);
+      return;
+    }
+    if (node.tagName === 'BR') {
+      appendPendingBlockBoundary();
+      plainText += '\n';
+      return;
+    }
+
+    const blockElement = BLOCK_ELEMENT_NAMES.has(node.tagName);
+    if (blockElement) {
+      appendPendingBlockBoundary();
+      if (plainText.length > 0 && !plainText.endsWith('\n')) {
+        plainText += '\n';
+      }
+    }
+    node.childNodes.forEach(appendNode);
+    if (blockElement) {
+      blockBoundaryPending = true;
+    }
+  };
+
+  fragment.childNodes.forEach(appendNode);
+  return plainText;
 }
 
 function restoreSelection(selection: EditableSelectionSnapshot): void {
@@ -290,18 +380,4 @@ function selectAll(selection: EditableSelectionSnapshot): void {
   const browserSelection = window.getSelection();
   browserSelection?.removeAllRanges();
   browserSelection?.addRange(range);
-}
-
-function resolveNavigatorClipboardMethod(method: 'readText'): (() => Promise<string>) | null;
-function resolveNavigatorClipboardMethod(
-  method: 'writeText',
-): ((text: string) => Promise<void>) | null;
-function resolveNavigatorClipboardMethod(
-  method: 'readText' | 'writeText',
-): (() => Promise<string>) | ((text: string) => Promise<void>) | null {
-  if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
-    return null;
-  }
-  const clipboardMethod = navigator.clipboard[method];
-  return typeof clipboardMethod === 'function' ? clipboardMethod.bind(navigator.clipboard) : null;
 }

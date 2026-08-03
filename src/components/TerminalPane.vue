@@ -3,13 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import SftpPanel from '@/components/SftpPanel.vue';
 import { t } from '@/i18n/locale';
+import { browserClipboard } from '@/services/clipboard';
 import {
   CONNECTION_PROFILES_CHANGED_EVENT,
   loadSavedConnectionProfiles,
   type OpenableConnectionProfile,
 } from '@/services/connectionProfiles';
 import { contextMenu, type ContextMenuEntry } from '@/services/contextMenu';
-import { browserClipboard } from '@/services/editableContextMenu';
 import { SessionClient } from '@/services/sessionClient';
 import { useAppSettingsStore } from '@/stores/appSettingsStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
@@ -295,34 +295,46 @@ function openTerminalContextMenu(event: MouseEvent): void {
       id: 'copy',
       label: t('contextMenu.copy'),
       disabled: selection.length === 0,
-      run: () => browserClipboard.writeText(selection),
+      run: () => runTerminalContextAction(() => browserClipboard.writeText(selection)),
     },
     {
       kind: 'action',
       id: 'paste',
       label: t('contextMenu.paste'),
-      run: pasteClipboardIntoTerminal,
+      run: () =>
+        runTerminalContextAction(async () => {
+          const clipboardText = await browserClipboard.readText();
+          adapter?.paste(clipboardText);
+        }),
     },
     {
       kind: 'action',
       id: 'select-all',
       label: t('contextMenu.selectAll'),
-      run: () => adapter?.selectAll(),
+      run: () => runTerminalContextAction(() => adapter?.selectAll()),
     },
     { kind: 'separator', id: 'terminal-separator' },
     {
       kind: 'action',
       id: 'clear-terminal',
       label: t('contextMenu.clearTerminal'),
-      run: () => store.writeToSession(props.sessionId, '\x0c'),
+      run: () => runTerminalContextAction(() => store.writeToSession(props.sessionId, '\x0c')),
     },
   ];
   contextMenu.openAt(event, entries);
 }
 
-async function pasteClipboardIntoTerminal(): Promise<void> {
-  const clipboardText = await browserClipboard.readText();
-  adapter?.paste(clipboardText);
+async function runTerminalContextAction(action: () => void | Promise<void>): Promise<void> {
+  try {
+    if (disposed) {
+      return;
+    }
+    await action();
+  } finally {
+    if (!disposed) {
+      adapter?.focus();
+    }
+  }
 }
 
 onMounted(async () => {

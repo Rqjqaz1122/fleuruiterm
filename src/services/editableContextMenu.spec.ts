@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ClipboardPort } from './clipboard';
 import { contextMenu, type ContextMenuActionEntry } from './contextMenu';
 import {
   createEditableContextMenuEntries,
   findEditableTarget,
   openEditableContextMenu,
-  type ClipboardPort,
 } from './editableContextMenu';
 
 const labels = {
@@ -33,6 +33,37 @@ describe('editableContextMenu', () => {
     expect(findEditableTarget(textarea)).toBe(textarea);
     expect(findEditableTarget(editorChild)).toBe(editor);
     expect(findEditableTarget(document.createElement('button'))).toBeNull();
+  });
+
+  it.each(['text', 'search', 'tel', 'url', 'password'])(
+    'recognizes the selection-capable %s input type',
+    (inputType) => {
+      const input = document.createElement('input');
+      input.type = inputType;
+
+      expect(findEditableTarget(input)).toBe(input);
+    },
+  );
+
+  it.each(['number', 'range', 'color', 'file', 'checkbox', 'radio', 'date', 'email'])(
+    'leaves the %s input type for page-level context menus',
+    (inputType) => {
+      const input = document.createElement('input');
+      input.type = inputType;
+
+      expect(findEditableTarget(input)).toBeNull();
+    },
+  );
+
+  it('does not prevent the page fallback menu for a non-text input', () => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'target', { value: input });
+
+    expect(openEditableContextMenu(event, labels, createClipboard())).toBe(false);
+    expect(event.defaultPrevented).toBe(false);
+    expect(contextMenu.state.value).toBeNull();
   });
 
   it('opens the standard editing actions for a nested editable target', () => {
@@ -173,6 +204,57 @@ describe('editableContextMenu', () => {
     expect(window.getSelection()?.anchorOffset).toBe(2);
   });
 
+  it('copies structured contenteditable text with block and line-break newlines', async () => {
+    const editor = createStructuredEditor();
+    selectContents(editor);
+    const clipboard = createClipboard();
+
+    await runAction(createEditableContextMenuEntries(editor, labels, clipboard), 'copy');
+
+    expect(clipboard.writeText).toHaveBeenCalledWith('alpha\nbeta\ngamma');
+  });
+
+  it('cuts structured plaintext and dispatches deleteByCut with null data', async () => {
+    const editor = createStructuredEditor();
+    selectContents(editor);
+    const inputEvents: InputEvent[] = [];
+    editor.addEventListener('input', (event) => inputEvents.push(event as InputEvent));
+    const clipboard = createClipboard();
+
+    await runAction(createEditableContextMenuEntries(editor, labels, clipboard), 'cut');
+
+    expect(clipboard.writeText).toHaveBeenCalledWith('alpha\nbeta\ngamma');
+    expect(editor.childNodes).toHaveLength(0);
+    expect(inputEvents).toHaveLength(1);
+    expect(inputEvents[0]).toMatchObject({
+      bubbles: true,
+      data: null,
+      inputType: 'deleteByCut',
+    });
+  });
+
+  it('pastes multiline plaintext into contenteditable using text and br nodes', async () => {
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    document.body.append(editor);
+    selectText(editor, 0, 0);
+    const inputEvents: InputEvent[] = [];
+    editor.addEventListener('input', (event) => inputEvents.push(event as InputEvent));
+
+    await runAction(
+      createEditableContextMenuEntries(editor, labels, createClipboard('alpha\nbeta\r\ngamma')),
+      'paste',
+    );
+
+    expect(serializeEditorNodes(editor)).toBe('alpha\nbeta\ngamma');
+    expect(editor.querySelectorAll('br')).toHaveLength(2);
+    expect(inputEvents[0]).toMatchObject({
+      bubbles: true,
+      data: 'alpha\nbeta\ngamma',
+      inputType: 'insertFromPaste',
+    });
+  });
+
   it('does not mutate text when the default Clipboard API is unavailable', async () => {
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -219,4 +301,26 @@ function selectText(node: Node, start: number, end: number): void {
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
+}
+
+function createStructuredEditor(): HTMLDivElement {
+  const editor = document.createElement('div');
+  editor.contentEditable = 'true';
+  editor.innerHTML = '<div>alpha</div><div>beta<br>gamma</div>';
+  document.body.append(editor);
+  return editor;
+}
+
+function selectContents(element: HTMLElement): void {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function serializeEditorNodes(editor: HTMLElement): string {
+  return Array.from(editor.childNodes)
+    .map((node) => (node instanceof HTMLBRElement ? '\n' : node.textContent))
+    .join('');
 }
