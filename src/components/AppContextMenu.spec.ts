@@ -19,7 +19,13 @@ describe('AppContextMenu', () => {
   });
 
   it('teleports accessible actions and separators to the document body', async () => {
-    mount(AppContextMenu);
+    mount(AppContextMenu, {
+      global: {
+        stubs: {
+          transition: false,
+        },
+      },
+    });
 
     await openMenu([
       { kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() },
