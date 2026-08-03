@@ -116,7 +116,7 @@ describe('AIPanel', () => {
     expect(wrapper.get('[aria-label="AI 面板"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('助手');
     expect(wrapper.get('textarea').attributes('placeholder')).toBe('询问当前终端会话');
-    expect(wrapper.get('.ai-panel-send').text()).toBe('发送');
+    expect(wrapper.get('.ai-panel-send').attributes('aria-label')).toBe('发送');
   });
 
   it('emits resize updates when dragging the left edge', async () => {

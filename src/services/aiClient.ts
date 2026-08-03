@@ -66,6 +66,7 @@ async function sendOpenAiCompatibleChat(
     body: JSON.stringify({
       model: settings.model,
       messages,
+      reasoning_effort: settings.reasoningEffort,
       temperature: 0.2,
       stream: settings.streamingEnabled,
     }),
@@ -114,6 +115,7 @@ async function sendAnthropicChat(
       max_tokens: 1024,
       system: systemMessages || undefined,
       messages: chatMessages,
+      output_config: { effort: settings.reasoningEffort },
       stream: settings.streamingEnabled,
     }),
   });

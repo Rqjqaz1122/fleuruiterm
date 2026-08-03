@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 
 import AIMarkdownInline from '@/components/AIMarkdownInline.vue';
 import AiToolCard from '@/components/AiToolCard.vue';
+import AppSelect from '@/components/AppSelect.vue';
 import type { SessionSnapshot } from '@/domain/session';
 import { locale } from '@/i18n/locale';
 import { sendAiChat } from '@/services/aiClient';
@@ -24,7 +25,12 @@ import {
   type AiConversationStatus,
   useAiConversationStore,
 } from '@/stores/aiConversationStore';
-import { useAppSettingsStore } from '@/stores/appSettingsStore';
+import {
+  AI_REASONING_EFFORTS,
+  type AiReasoningEffort,
+  isAiReasoningEffort,
+  useAppSettingsStore,
+} from '@/stores/appSettingsStore';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 const props = defineProps<{
@@ -69,6 +75,12 @@ type TimelineItem =
     };
 
 const labels = computed(() => (locale.value === 'zh-CN' ? zhAiPanelLabels : enAiPanelLabels));
+const reasoningEffortOptions = computed(() =>
+  AI_REASONING_EFFORTS.map((reasoningEffort) => ({
+    value: reasoningEffort,
+    label: labels.value.reasoningEffortOptions[reasoningEffort],
+  })),
+);
 const configurationReady = computed(() => {
   const aiSettings = settings.aiSettings.value;
   if (aiSettings.provider === 'none') {
@@ -166,6 +178,13 @@ function handlePrimaryAction(): void {
     return;
   }
   void sendDraft();
+}
+
+function updateReasoningEffort(reasoningEffort: string): void {
+  if (!isAiReasoningEffort(reasoningEffort)) {
+    return;
+  }
+  settings.updateAiSettings({ reasoningEffort });
 }
 
 function handleComposerKeyDown(event: KeyboardEvent): void {
@@ -285,6 +304,13 @@ const enAiPanelLabels = {
   openSettings: 'Open settings',
   openSsh: 'Open SSH',
   openTerminal: 'Open terminal',
+  reasoningEffortAria: 'Reasoning effort',
+  reasoningEffortOptions: {
+    xhigh: 'Extra high',
+    high: 'High',
+    medium: 'Medium',
+    low: 'Low',
+  } satisfies Record<AiReasoningEffort, string>,
   retry: 'Retry',
   run: 'Run',
   send: 'Send',
@@ -317,6 +343,13 @@ const zhAiPanelLabels = {
   openSettings: '打开设置',
   openSsh: '打开 SSH',
   openTerminal: '打开终端',
+  reasoningEffortAria: '推理强度',
+  reasoningEffortOptions: {
+    xhigh: '极高',
+    high: '高',
+    medium: '中',
+    low: '低',
+  } satisfies Record<AiReasoningEffort, string>,
   retry: '重试',
   run: '运行',
   send: '发送',
@@ -527,14 +560,33 @@ const zhAiPanelLabels = {
           />
           <div class="ai-panel-composer-actions">
             <span>{{ turnStatusLabel }}</span>
-            <button
-              class="ai-panel-send"
-              type="button"
-              :disabled="!turnActive && (!canSend || !configurationReady)"
-              @click="handlePrimaryAction"
-            >
-              {{ sendButtonLabel }}
-            </button>
+            <div class="ai-panel-composer-controls">
+              <AppSelect
+                class="ai-reasoning-effort-select"
+                :model-value="settings.aiSettings.value.reasoningEffort"
+                :options="reasoningEffortOptions"
+                :aria-label="labels.reasoningEffortAria"
+                menu-placement="top"
+                test-id="ai-reasoning-effort"
+                @update:model-value="updateReasoningEffort"
+              />
+              <button
+                class="ai-panel-send"
+                :class="{ 'ai-panel-stop': turnActive }"
+                type="button"
+                :aria-label="sendButtonLabel"
+                :title="sendButtonLabel"
+                :disabled="!turnActive && (!canSend || !configurationReady)"
+                @click="handlePrimaryAction"
+              >
+                <svg v-if="turnActive" aria-hidden="true" viewBox="0 0 24 24">
+                  <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" />
+                </svg>
+                <svg v-else aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       </footer>

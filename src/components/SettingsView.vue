@@ -98,7 +98,7 @@ type WindowAppearanceConfig = { transparency: { enabled: boolean; opacity: numbe
 type ThemeConfigFile = {
   palettes: Record<ThemeTone, TerminalColorPalette>;
 };
-type AdvancedAiSettings = Omit<AiSettings, 'token'>;
+type AdvancedAiSettings = Omit<AiSettings, 'reasoningEffort' | 'token'>;
 
 const RECENT_CONNECTIONS_STORAGE_KEY = 'fleurterm.recentConnections';
 const THEME_STORAGE_KEY = 'fleurterm.theme';

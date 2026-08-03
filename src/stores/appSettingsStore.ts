@@ -12,6 +12,8 @@ import { validateAiManagedSettingsPatch } from '@/services/aiSettingsAccessPolic
 export type SupportedAppLocale = 'en-US' | 'zh-CN';
 export type AiProvider = 'none' | 'openai' | 'anthropic' | 'local' | 'custom';
 export type AiCommandPolicy = 'ask' | 'suggest' | 'auto' | 'fullAccess';
+export const AI_REASONING_EFFORTS = ['xhigh', 'high', 'medium', 'low'] as const;
+export type AiReasoningEffort = (typeof AI_REASONING_EFFORTS)[number];
 export type ThemeMode = 'system' | 'dark' | 'light';
 export type ThemeTone = 'dark' | 'light';
 
@@ -39,6 +41,7 @@ export interface AiSettings {
   contextEnabled: boolean;
   includeWorkingDirectory: boolean;
   commandPolicy: AiCommandPolicy;
+  reasoningEffort: AiReasoningEffort;
 }
 
 export interface StartupSettings {
@@ -110,6 +113,7 @@ export const defaultAiSettings: AiSettings = {
   contextEnabled: false,
   includeWorkingDirectory: true,
   commandPolicy: 'ask',
+  reasoningEffort: 'medium',
 };
 
 export const defaultStartupSettings: StartupSettings = {
@@ -225,6 +229,9 @@ export function sanitizeAiSettings(raw: Partial<AiSettings> = {}): AiSettings {
     commandPolicy: isAiCommandPolicy(raw.commandPolicy)
       ? raw.commandPolicy
       : defaultAiSettings.commandPolicy,
+    reasoningEffort: isAiReasoningEffort(raw.reasoningEffort)
+      ? raw.reasoningEffort
+      : defaultAiSettings.reasoningEffort,
   };
 }
 
@@ -547,6 +554,10 @@ function isAiProvider(value: unknown): value is AiProvider {
 
 function isAiCommandPolicy(value: unknown): value is AiCommandPolicy {
   return value === 'ask' || value === 'suggest' || value === 'auto' || value === 'fullAccess';
+}
+
+export function isAiReasoningEffort(value: unknown): value is AiReasoningEffort {
+  return AI_REASONING_EFFORTS.some((reasoningEffort) => reasoningEffort === value);
 }
 
 function isThemeMode(value: unknown): value is ThemeMode {
