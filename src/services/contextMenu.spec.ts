@@ -77,6 +77,40 @@ describe('contextMenu', () => {
     invoker.remove();
   });
 
+  it('uses the focusable ancestor of a nested event target as the invoker', () => {
+    const activeInput = document.createElement('input');
+    const button = document.createElement('button');
+    const label = document.createElement('span');
+    button.append(label);
+    document.body.append(activeInput, button);
+    activeInput.focus();
+    button.addEventListener('contextmenu', (event) => {
+      contextMenu.openAt(event, [{ kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() }]);
+    });
+
+    label.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+
+    expect(contextMenu.state.value?.invoker).toBe(button);
+    activeInput.remove();
+    button.remove();
+  });
+
+  it('keeps the active element when the event target is not focusable', () => {
+    const activeInput = document.createElement('input');
+    const row = document.createElement('div');
+    document.body.append(activeInput, row);
+    activeInput.focus();
+    row.addEventListener('contextmenu', (event) => {
+      contextMenu.openAt(event, [{ kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() }]);
+    });
+
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+
+    expect(contextMenu.state.value?.invoker).toBe(activeInput);
+    activeInput.remove();
+    row.remove();
+  });
+
   it('closes the active menu request', () => {
     contextMenu.openAt({ x: 20, y: 30 }, [
       { kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() },

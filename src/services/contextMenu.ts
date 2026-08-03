@@ -1,5 +1,15 @@
 import { readonly, shallowRef } from 'vue';
 
+const FOCUSABLE_INVOKER_SELECTOR = [
+  'button:not(:disabled)',
+  'a[href]',
+  'input:not(:disabled):not([type="hidden"])',
+  'select:not(:disabled)',
+  'textarea:not(:disabled)',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
+
 export interface ContextMenuActionEntry {
   kind: 'action';
   id: string;
@@ -51,12 +61,18 @@ function openAt(position: ContextMenuPosition | MouseEvent, entries: ContextMenu
 
 function resolveInvoker(position: ContextMenuPosition | MouseEvent): HTMLElement | null {
   if (position instanceof MouseEvent && position.target instanceof HTMLElement) {
-    return position.target;
+    const focusableTarget = position.target.closest<HTMLElement>(FOCUSABLE_INVOKER_SELECTOR);
+    if (focusableTarget !== null) {
+      return focusableTarget;
+    }
   }
   if (!(position instanceof MouseEvent) && state.value !== null) {
     return state.value.invoker;
   }
-  return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const activeElement = document.activeElement;
+  return activeElement instanceof HTMLElement && activeElement !== document.body
+    ? activeElement
+    : null;
 }
 
 function close(): void {

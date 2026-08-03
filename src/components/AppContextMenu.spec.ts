@@ -223,6 +223,30 @@ describe('AppContextMenu', () => {
     secondInvoker.remove();
   });
 
+  it('restores a terminal textarea after a non-focusable render node opens the menu', async () => {
+    const terminalTextarea = document.createElement('textarea');
+    terminalTextarea.className = 'xterm-helper-textarea';
+    const terminalScreen = document.createElement('div');
+    terminalScreen.className = 'xterm-screen';
+    document.body.append(terminalTextarea, terminalScreen);
+    mount(AppContextMenu);
+    terminalTextarea.focus();
+    terminalScreen.addEventListener('contextmenu', (event) => {
+      contextMenu.openAt(event, [{ kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() }]);
+    });
+
+    terminalScreen.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+    );
+    await flushMenuRender();
+    pressKey(getAction('copy'), 'Escape');
+    await nextTick();
+
+    expect(document.activeElement).toBe(terminalTextarea);
+    terminalTextarea.remove();
+    terminalScreen.remove();
+  });
+
   it('closes on an outside pointerdown but stays open for an inside pointerdown', async () => {
     mount(AppContextMenu);
     await openMenu([{ kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() }]);
