@@ -72,7 +72,7 @@ describe('appUpdateStore', () => {
 
   it('downloads, installs, and restarts an available update', async () => {
     const update = createUpdate({
-      downloadAndInstall: vi.fn(async (onProgress) => {
+      download: vi.fn(async (onProgress) => {
         onProgress({ downloadedBytes: 25, totalBytes: 100 });
         onProgress({ downloadedBytes: 100, totalBytes: 100 });
       }),
@@ -83,11 +83,65 @@ describe('appUpdateStore', () => {
 
     await store.installUpdate();
 
-    expect(update.downloadAndInstall).toHaveBeenCalledOnce();
+    expect(update.download).toHaveBeenCalledOnce();
+    expect(update.install).toHaveBeenCalledOnce();
     expect(store.downloadedBytes).toBe(100);
     expect(store.downloadProgressPercent).toBe(100);
     expect(store.status).toBe('installing');
     expect(client.restart).toHaveBeenCalledOnce();
+  });
+
+  it('prepares an available update without restarting the application', async () => {
+    const update = createUpdate();
+    const client = createClient({ check: vi.fn(async () => update) });
+    const store = createAppUpdateStore(client)();
+    await store.checkForUpdate();
+
+    await store.prepareUpdate();
+
+    expect(update.download).toHaveBeenCalledOnce();
+    expect(update.install).not.toHaveBeenCalled();
+    expect(store.status).toBe('readyToRestart');
+    expect(client.restart).not.toHaveBeenCalled();
+  });
+
+  it('restarts only after a prepared update is explicitly applied', async () => {
+    const update = createUpdate();
+    const client = createClient({ check: vi.fn(async () => update) });
+    const store = createAppUpdateStore(client)();
+    const beforeRestart = vi.fn(async () => true);
+    store.setBeforeRestart(beforeRestart);
+    await store.checkForUpdate();
+    await store.prepareUpdate();
+
+    await store.restartToApplyUpdate();
+
+    expect(beforeRestart).toHaveBeenCalledOnce();
+    expect(update.install).toHaveBeenCalledOnce();
+    expect(client.restart).toHaveBeenCalledOnce();
+  });
+
+  it('deduplicates simultaneous update preparation requests', async () => {
+    let resolveDownload: (() => void) | undefined;
+    const update = createUpdate({
+      download: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveDownload = resolve;
+          }),
+      ),
+    });
+    const client = createClient({ check: vi.fn(async () => update) });
+    const store = createAppUpdateStore(client)();
+    await store.checkForUpdate();
+
+    const firstPreparation = store.prepareUpdate();
+    const duplicatePreparation = store.prepareUpdate();
+    await vi.waitFor(() => expect(update.download).toHaveBeenCalledOnce());
+    resolveDownload?.();
+    await Promise.all([firstPreparation, duplicatePreparation]);
+
+    expect(store.status).toBe('readyToRestart');
   });
 
   it('flushes application state before an updater restart', async () => {
@@ -101,6 +155,12 @@ describe('appUpdateStore', () => {
     await store.installUpdate();
 
     expect(beforeRestart).toHaveBeenCalledOnce();
+    expect(beforeRestart.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(update.install).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+    expect(vi.mocked(update.install).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(client.restart).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
     expect(beforeRestart.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(client.restart).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
     );
@@ -116,17 +176,20 @@ describe('appUpdateStore', () => {
     await store.installUpdate();
 
     expect(client.restart).not.toHaveBeenCalled();
-    expect(store.status).toBe('error');
-    expect(store.errorCode).toBe('INSTALL_FAILED');
+    expect(update.install).not.toHaveBeenCalled();
+    expect(store.status).toBe('readyToRestart');
+    expect(store.errorCode).toBe('RESTART_FAILED');
   });
 
   it('notifies the application when relaunch fails after a successful flush', async () => {
     const update = createUpdate();
+    const restart = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('relaunch failed'))
+      .mockResolvedValueOnce(undefined);
     const client = createClient({
       check: vi.fn(async () => update),
-      restart: vi.fn(async () => {
-        throw new Error('relaunch failed');
-      }),
+      restart,
     });
     const store = createAppUpdateStore(client)();
     const restartFailureHandler = vi.fn();
@@ -137,7 +200,35 @@ describe('appUpdateStore', () => {
     await store.installUpdate();
 
     expect(restartFailureHandler).toHaveBeenCalledOnce();
-    expect(store.status).toBe('error');
+    expect(store.status).toBe('readyToRestart');
+    expect(store.errorCode).toBe('RESTART_FAILED');
+
+    await store.restartToApplyUpdate();
+
+    expect(update.install).toHaveBeenCalledOnce();
+    expect(restart).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a downloaded update ready when installation fails', async () => {
+    const update = createUpdate({
+      install: vi.fn(async () => {
+        throw new Error('installation failed');
+      }),
+    });
+    const client = createClient({ check: vi.fn(async () => update) });
+    const store = createAppUpdateStore(client)();
+    const restartFailureHandler = vi.fn();
+    store.setBeforeRestart(async () => true);
+    store.setRestartFailureHandler(restartFailureHandler);
+    await store.checkForUpdate();
+    await store.prepareUpdate();
+
+    await store.restartToApplyUpdate();
+
+    expect(restartFailureHandler).toHaveBeenCalledOnce();
+    expect(client.restart).not.toHaveBeenCalled();
+    expect(store.status).toBe('readyToRestart');
+    expect(store.errorCode).toBe('INSTALL_FAILED');
   });
 
   it('uses stable error codes for check and install failures', async () => {
@@ -155,7 +246,7 @@ describe('appUpdateStore', () => {
 
     setActivePinia(createPinia());
     const failingUpdate = createUpdate({
-      downloadAndInstall: vi.fn(async () => {
+      download: vi.fn(async () => {
         throw new Error('secret internal error');
       }),
     });
@@ -186,7 +277,8 @@ function createUpdate(patch: Partial<AvailableAppUpdate> = {}): AvailableAppUpda
     version: '0.2.0',
     date: null,
     body: null,
-    downloadAndInstall: vi.fn(async () => undefined),
+    download: vi.fn(async () => undefined),
+    install: vi.fn(async () => undefined),
     ...patch,
   };
 }

@@ -102,6 +102,17 @@ watch(
   { deep: true },
 );
 
+watch(
+  [() => appSettings.updateSettings.value.automaticDownloadEnabled, () => appUpdate.status],
+  ([automaticDownloadEnabled, updateStatus]) => {
+    if (!automaticDownloadEnabled || updateStatus !== 'available') {
+      return;
+    }
+    void appUpdate.prepareUpdate();
+  },
+  { immediate: true },
+);
+
 onMounted(() => {
   void appUpdate.checkAtStartup();
   workspaceRestorePromise = restoreTerminalWorkspace().finally(() => {

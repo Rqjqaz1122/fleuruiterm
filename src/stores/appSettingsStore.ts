@@ -20,6 +20,10 @@ export interface TerminalSettings {
   cursorBlink: boolean;
 }
 
+export interface UpdateSettings {
+  automaticDownloadEnabled: boolean;
+}
+
 export interface AiSettings {
   provider: AiProvider;
   baseUrl: string;
@@ -48,6 +52,10 @@ export const defaultTerminalSettings: TerminalSettings = {
   scrollback: 25_000,
   scrollOnInput: true,
   cursorBlink: true,
+};
+
+export const defaultUpdateSettings: UpdateSettings = {
+  automaticDownloadEnabled: false,
 };
 
 export const defaultAiSettings: AiSettings = {
@@ -81,6 +89,7 @@ const languageOptions = computed<LanguageOption[]>(() => [
 const terminalSettings = ref<TerminalSettings>(loadTerminalSettings());
 const aiSettings = ref<AiSettings>(loadAiSettings());
 const shortcutSettings = ref<ShortcutSettings>(loadShortcutSettings());
+const updateSettings = ref<UpdateSettings>(loadUpdateSettings());
 
 export function useAppSettingsStore() {
   return {
@@ -88,12 +97,14 @@ export function useAppSettingsStore() {
     languageOptions,
     shortcutSettings,
     terminalSettings,
+    updateSettings,
     resetShortcutSettings,
     serializeRuntimeSettings,
     replaceRuntimeSettings,
     updateAiSettings,
     updateShortcutSetting,
     updateTerminalSettings,
+    updateUpdateSettings,
   };
 }
 
@@ -145,6 +156,16 @@ export function sanitizeAiSettings(raw: Partial<AiSettings> = {}): AiSettings {
   };
 }
 
+export function sanitizeUpdateSettings(raw: unknown = {}): UpdateSettings {
+  const automaticDownloadEnabled = isRecord(raw) ? raw.automaticDownloadEnabled : undefined;
+  return {
+    automaticDownloadEnabled:
+      typeof automaticDownloadEnabled === 'boolean'
+        ? automaticDownloadEnabled
+        : defaultUpdateSettings.automaticDownloadEnabled,
+  };
+}
+
 function updateTerminalSettings(patch: Partial<TerminalSettings>): void {
   terminalSettings.value = sanitizeTerminalSettings({ ...terminalSettings.value, ...patch });
   persistRuntimeSettings();
@@ -152,6 +173,11 @@ function updateTerminalSettings(patch: Partial<TerminalSettings>): void {
 
 function updateAiSettings(patch: Partial<AiSettings>): void {
   aiSettings.value = sanitizeAiSettings({ ...aiSettings.value, ...patch });
+  persistRuntimeSettings();
+}
+
+function updateUpdateSettings(patch: Partial<UpdateSettings>): void {
+  updateSettings.value = sanitizeUpdateSettings({ ...updateSettings.value, ...patch });
   persistRuntimeSettings();
 }
 
@@ -172,9 +198,11 @@ function replaceRuntimeSettings(settings: {
   terminal?: Partial<TerminalSettings>;
   ai?: Partial<AiSettings>;
   shortcuts?: unknown;
+  update?: Partial<UpdateSettings>;
 }): void {
   terminalSettings.value = sanitizeTerminalSettings(settings.terminal ?? terminalSettings.value);
   aiSettings.value = sanitizeAiSettings(settings.ai ?? aiSettings.value);
+  updateSettings.value = sanitizeUpdateSettings(settings.update ?? updateSettings.value);
   if (Object.prototype.hasOwnProperty.call(settings, 'shortcuts')) {
     shortcutSettings.value = sanitizeShortcutSettings(settings.shortcuts);
   }
@@ -185,6 +213,7 @@ function serializeRuntimeSettings(): {
   terminal: TerminalSettings;
   ai: AiSettings;
   shortcuts: ShortcutSettings;
+  update: UpdateSettings;
 } {
   return {
     terminal: { ...terminalSettings.value },
@@ -195,6 +224,7 @@ function serializeRuntimeSettings(): {
         binding === null ? null : { ...binding },
       ]),
     ),
+    update: { ...updateSettings.value },
   };
 }
 
@@ -210,10 +240,15 @@ function loadShortcutSettings(): ShortcutSettings {
   return sanitizeShortcutSettings(readRuntimeSettings().shortcuts);
 }
 
+function loadUpdateSettings(): UpdateSettings {
+  return sanitizeUpdateSettings(readRuntimeSettings().update);
+}
+
 function readRuntimeSettings(): {
   terminal?: Partial<TerminalSettings>;
   ai?: Partial<AiSettings>;
   shortcuts?: unknown;
+  update?: Partial<UpdateSettings>;
 } {
   if (typeof localStorage === 'undefined') {
     return {};
@@ -225,6 +260,7 @@ function readRuntimeSettings(): {
           terminal?: Partial<TerminalSettings>;
           ai?: Partial<AiSettings>;
           shortcuts?: unknown;
+          update?: Partial<UpdateSettings>;
         })
       : {};
   } catch {
@@ -249,6 +285,10 @@ function normalizeOptionalString(value: unknown): string {
 
 function hasOwn<T extends object>(source: T, key: PropertyKey): boolean {
   return Object.prototype.hasOwnProperty.call(source, key);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function clampNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {

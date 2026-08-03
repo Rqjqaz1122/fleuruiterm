@@ -63,7 +63,9 @@ describe('FleurTerm app shell', () => {
     desktopWindowLifecycleMock.exitFailureHandler = null;
     desktopWindowLifecycleMock.listenForApplicationExitRequest.mockClear();
     desktopWindowLifecycleMock.listenForCloseRequest.mockClear();
-    useAppSettingsStore().resetShortcutSettings();
+    const appSettings = useAppSettingsStore();
+    appSettings.resetShortcutSettings();
+    appSettings.updateUpdateSettings({ automaticDownloadEnabled: false });
     vi.spyOn(workspacePersistenceClient, 'load').mockResolvedValue(null);
     vi.spyOn(workspacePersistenceClient, 'save').mockResolvedValue();
   });
@@ -586,6 +588,51 @@ describe('FleurTerm app shell', () => {
     await Promise.resolve();
 
     expect(updateStore.checkAtStartup).toHaveBeenCalledOnce();
+  });
+
+  it('automatically prepares a detected update when automatic downloads are enabled', async () => {
+    const appSettings = useAppSettingsStore();
+    appSettings.updateUpdateSettings({ automaticDownloadEnabled: true });
+    const updateStore = useAppUpdateStore();
+    updateStore.checkAtStartup = vi.fn(async () => {
+      updateStore.$patch({ status: 'available' });
+    });
+    updateStore.prepareUpdate = vi.fn(async () => undefined);
+    updateStore.restartToApplyUpdate = vi.fn(async () => undefined);
+
+    mount(App);
+
+    await vi.waitFor(() => expect(updateStore.prepareUpdate).toHaveBeenCalledOnce());
+    expect(updateStore.restartToApplyUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not prepare a detected update when automatic downloads are disabled', async () => {
+    const updateStore = useAppUpdateStore();
+    updateStore.checkAtStartup = vi.fn(async () => {
+      updateStore.$patch({ status: 'available' });
+    });
+    updateStore.prepareUpdate = vi.fn(async () => undefined);
+
+    mount(App);
+    await vi.waitFor(() => expect(updateStore.checkAtStartup).toHaveBeenCalledOnce());
+    await Promise.resolve();
+
+    expect(updateStore.prepareUpdate).not.toHaveBeenCalled();
+  });
+
+  it('prepares an available update when automatic downloads are enabled later', async () => {
+    const appSettings = useAppSettingsStore();
+    const updateStore = useAppUpdateStore();
+    updateStore.checkAtStartup = vi.fn(async () => {
+      updateStore.$patch({ status: 'available' });
+    });
+    updateStore.prepareUpdate = vi.fn(async () => undefined);
+    mount(App);
+    await vi.waitFor(() => expect(updateStore.checkAtStartup).toHaveBeenCalledOnce());
+
+    appSettings.updateUpdateSettings({ automaticDownloadEnabled: true });
+
+    await vi.waitFor(() => expect(updateStore.prepareUpdate).toHaveBeenCalledOnce());
   });
 
   it('opens a local terminal from the empty workspace', async () => {

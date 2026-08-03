@@ -10,7 +10,8 @@ export interface NativeUpdateLike {
   version: string;
   date?: string;
   body?: string;
-  downloadAndInstall(onEvent?: (event: NativeDownloadEvent) => void): Promise<void>;
+  download(onEvent?: (event: NativeDownloadEvent) => void): Promise<void>;
+  install(): Promise<void>;
 }
 
 export interface AppUpdaterRuntime {
@@ -29,7 +30,8 @@ export interface AvailableAppUpdate {
   version: string;
   date: string | null;
   body: string | null;
-  downloadAndInstall(onProgress: (progress: UpdateDownloadProgress) => void): Promise<void>;
+  download(onProgress: (progress: UpdateDownloadProgress) => void): Promise<void>;
+  install(): Promise<void>;
 }
 
 export interface AppUpdaterClient {
@@ -77,10 +79,10 @@ function normalizeAvailableUpdate(nativeUpdate: NativeUpdateLike): AvailableAppU
     version: nativeUpdate.version,
     date: nativeUpdate.date ?? null,
     body: nativeUpdate.body ?? null,
-    async downloadAndInstall(onProgress): Promise<void> {
+    async download(onProgress): Promise<void> {
       let downloadedBytes = 0;
       let totalBytes: number | null = null;
-      await nativeUpdate.downloadAndInstall((event) => {
+      await nativeUpdate.download((event) => {
         switch (event.event) {
           case 'Started':
             downloadedBytes = 0;
@@ -95,6 +97,9 @@ function normalizeAvailableUpdate(nativeUpdate: NativeUpdateLike): AvailableAppU
         }
         onProgress({ downloadedBytes, totalBytes });
       });
+    },
+    async install(): Promise<void> {
+      await nativeUpdate.install();
     },
   };
 }

@@ -22,7 +22,9 @@
 Add tests that import `defaultUpdateSettings`, `sanitizeUpdateSettings`, and `useAppSettingsStore`. Verify invalid or missing values become `false`, `updateUpdateSettings({ automaticDownloadEnabled: true })` changes the reactive setting, and `serializeRuntimeSettings()` contains:
 
 ```ts
-update: { automaticDownloadEnabled: true }
+update: {
+  automaticDownloadEnabled: true;
+}
 ```
 
 - [ ] **Step 2: Verify the settings tests fail for the missing API**
@@ -57,12 +59,14 @@ Expected: PASS.
 
 **Files:**
 
+- Modify: `src/services/appUpdater.spec.ts`
+- Modify: `src/services/appUpdater.ts`
 - Modify: `src/stores/appUpdateStore.spec.ts`
 - Modify: `src/stores/appUpdateStore.ts`
 
 - [ ] **Step 1: Write failing update-state tests**
 
-Add tests proving:
+Add service and store tests proving the native download and installation operations remain separate:
 
 ```ts
 await store.prepareUpdate();
@@ -73,21 +77,21 @@ await store.restartToApplyUpdate();
 expect(client.restart).toHaveBeenCalledOnce();
 ```
 
-Also verify two simultaneous preparation calls share one download, `installUpdate()` still prepares and restarts, and a failed relaunch returns to `readyToRestart` with `RESTART_FAILED` so the action can be retried.
+Also verify preparation does not call installation, two simultaneous preparation calls share one download, `installUpdate()` still downloads, installs, and restarts, and a failed relaunch returns to `readyToRestart` with `RESTART_FAILED`. A relaunch retry must skip an already successful installation.
 
 - [ ] **Step 2: Verify the new state tests fail**
 
-Run: `pnpm test src/stores/appUpdateStore.spec.ts`
+Run: `pnpm test src/services/appUpdater.spec.ts src/stores/appUpdateStore.spec.ts`
 
-Expected: FAIL because `prepareUpdate`, `restartToApplyUpdate`, and `readyToRestart` do not exist.
+Expected: FAIL because the updater service does not expose separate operations and `prepareUpdate`, `restartToApplyUpdate`, and `readyToRestart` do not exist.
 
 - [ ] **Step 3: Implement preparation and restart stages**
 
-Extend `AppUpdateStatus` with `readyToRestart` and `AppUpdateErrorCode` with `RESTART_FAILED`. Replace the single internal install promise with deduplicated preparation, restart, and composed manual-install promises. Preparation calls only `downloadAndInstall`; restart performs the existing workspace flush and relaunch.
+Expose `download()` and `install()` separately from the updater service. Extend `AppUpdateStatus` with `readyToRestart` and `AppUpdateErrorCode` with `RESTART_FAILED`. Replace the single internal install promise with deduplicated preparation, restart, and composed manual-install promises. Preparation calls only `download`; restart performs the existing workspace flush, installation, and relaunch. Track successful installation so a failed relaunch retry does not attempt to install consumed update bytes again.
 
 - [ ] **Step 4: Verify update-state tests pass**
 
-Run: `pnpm test src/stores/appUpdateStore.spec.ts`
+Run: `pnpm test src/services/appUpdater.spec.ts src/stores/appUpdateStore.spec.ts`
 
 Expected: PASS.
 
@@ -97,21 +101,23 @@ Expected: PASS.
 
 - Modify: `src/components/SoftwareUpdateCard.spec.ts`
 - Modify: `src/components/SoftwareUpdateCard.vue`
+- Modify: `src/components/SettingsView.spec.ts`
+- Modify: `src/components/SettingsView.vue`
 - Modify: `src/styles/global.css`
 
 - [ ] **Step 1: Write failing component tests**
 
-Verify the card renders `Automatically download updates` / `自动下载更新`, exposes `data-testid="automatic-update-toggle"`, persists a click through `updateUpdateSettings`, and shows `Restart and update` / `重启并更新` for `readyToRestart`. Verify clicking the restart action calls `restartToApplyUpdate()`.
+Verify General renders `Automatically download updates` / `自动下载更新` as a sibling of the software update and startup rows, exposes `data-testid="automatic-update-toggle"`, persists a click through `updateUpdateSettings`, and does not render On/Off state text. Verify the update card shows `Restart and update` / `重启并更新` for `readyToRestart` and calls `restartToApplyUpdate()`.
 
 - [ ] **Step 2: Verify the component tests fail**
 
 Run: `pnpm test src/components/SoftwareUpdateCard.spec.ts`
 
-Expected: FAIL because the toggle and ready-to-restart action are absent.
+Expected: FAIL because the separate preference row and ready-to-restart action are absent.
 
 - [ ] **Step 3: Implement the setting controls and localized states**
 
-Bind a semantic toggle button to `updateSettings.automaticDownloadEnabled`, add localized title, description, ready state, restart label, and restart error text, and reuse the existing `.connection-toggle` styling. Add only scoped update-card layout rules required to keep the preference and actions aligned.
+Bind a semantic Switch-only button to `updateSettings.automaticDownloadEnabled` in a dedicated General `settings-form-line` at the same hierarchy as the startup row. Add the localized title, description, ready state, restart label, and restart error text, and reuse the existing `.connection-toggle` styling.
 
 - [ ] **Step 4: Verify component tests pass**
 
@@ -141,10 +147,7 @@ Expected: FAIL because App does not coordinate the automatic preference.
 Watch:
 
 ```ts
-[
-  () => appSettings.updateSettings.value.automaticDownloadEnabled,
-  () => appUpdate.status,
-]
+[() => appSettings.updateSettings.value.automaticDownloadEnabled, () => appUpdate.status];
 ```
 
 Call `prepareUpdate()` only when the preference is enabled and status equals `available`. Do not call the restart action from automatic orchestration.

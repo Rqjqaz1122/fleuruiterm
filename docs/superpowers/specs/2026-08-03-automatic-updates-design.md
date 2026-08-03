@@ -8,7 +8,8 @@ Add a persistent **Automatically download updates** toggle to **Settings → Gen
 
 ## User Experience
 
-- The software update card displays the bilingual automatic-download toggle.
+- The General settings list displays the bilingual automatic-download preference as its own row, at the same hierarchy as **Open terminal on startup**.
+- The preference row displays only the Switch control on the right; it does not render separate On/Off state text.
 - Enabling the toggle persists the preference immediately.
 - If the startup check finds a newer version while the toggle is enabled, FleurTerm begins downloading it without another click.
 - Download progress remains visible in the existing software update card.
@@ -26,8 +27,8 @@ Add an `UpdateSettings` group to the existing application settings store with on
 
 Extend the update store with a `readyToRestart` status and split the current install flow into two reusable stages:
 
-1. `prepareUpdate()` calls Tauri Updater's existing `downloadAndInstall()` operation and ends in `readyToRestart` without relaunching.
-2. `restartToApplyUpdate()` saves the workspace and invokes the existing process relaunch operation.
+1. `prepareUpdate()` calls Tauri Updater's `download()` operation and ends in `readyToRestart` without installing or relaunching.
+2. `restartToApplyUpdate()` saves the workspace, calls `install()`, and invokes the existing process relaunch operation.
 
 The existing manual `installUpdate()` action composes these two stages so its behavior does not change. Promise deduplication prevents automatic and manual actions from starting parallel downloads or restarts.
 
@@ -41,14 +42,16 @@ The automatic path never calls relaunch. Only the explicit **Restart and update*
 
 - Check failures continue to use the existing non-blocking update error state.
 - Download or preparation failures display a localized error and do not retry in a loop.
-- Workspace-save or relaunch failures retain the prepared update state where possible and expose a retryable restart action.
+- Workspace-save, installation, or relaunch failures retain the prepared update state where possible and expose a retryable restart action.
+- If installation succeeds but relaunch fails, retrying skips the consumed installation step and retries only the relaunch.
 - Browser development mode remains `unsupported` and never invokes native updater APIs.
 
 ## Testing
 
 - Settings-store tests cover the default value, sanitization, persistence, and serialization of the automatic-download preference.
 - Update-store tests cover preparing without restart, explicit restart, retained manual behavior, error states, and concurrent-action deduplication.
-- Update-card tests cover the bilingual toggle, immediate setting updates, progress, and the restart action.
+- Settings-view tests cover the separate bilingual preference row, Switch-only presentation, and immediate setting updates.
+- Update-card tests cover progress and the restart action without owning the automatic-download preference.
 - App tests cover automatic preparation after detection, no automatic restart, disabled behavior, and enabling the toggle for an already available update.
 - Existing frontend tests, type checking, linting, production build, Rust tests, and diff checks remain required.
 
