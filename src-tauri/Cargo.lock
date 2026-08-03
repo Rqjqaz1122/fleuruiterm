@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "fleurterm"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "aes-gcm",
  "argon2",
