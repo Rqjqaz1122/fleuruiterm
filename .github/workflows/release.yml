@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -51,6 +53,30 @@ jobs:
       - name: Validate release version
         run: pnpm version:check
 
+      - name: Read annotated tag release notes
+        id: release_notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$(git cat-file -t "refs/tags/${RELEASE_TAG}")" != 'tag' ]]; then
+            echo "Release tag ${RELEASE_TAG} must be annotated." >&2
+            exit 1
+          fi
+
+          release_notes="$(git for-each-ref --format='%(contents:body)' "refs/tags/${RELEASE_TAG}")"
+          if ! grep -Eq '^1[.] .+' <<< "${release_notes}"; then
+            echo "Release tag ${RELEASE_TAG} must include English numbered release notes." >&2
+            exit 1
+          fi
+
+          delimiter="FLEURTERM_RELEASE_NOTES_$(node -p "require('node:crypto').randomUUID()")"
+          {
+            echo "body<<${delimiter}"
+            printf '%s\n' "${release_notes}"
+            echo "${delimiter}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Build signed updater artifacts
         uses: tauri-apps/tauri-action@v0
         env:
@@ -61,7 +87,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: FleurTerm v__VERSION__
-          releaseBody: See the assets below to install or update FleurTerm.
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true

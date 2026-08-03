@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
+const FORBIDDEN_GENERIC_RELEASE_BODY = 'See the assets below to install or update FleurTerm.';
+
 const packageMetadata = await readJson('package.json');
 const tauriConfig = await readJson('src-tauri/tauri.conf.json');
 const cargoManifest = await readFile('src-tauri/Cargo.toml', 'utf8');
@@ -42,6 +44,20 @@ if (usesLatestGitHubRelease && createsPrerelease) {
   console.error(
     'Updater channel mismatch: GitHub prereleases are not available through /releases/latest/.',
   );
+  process.exit(1);
+}
+
+if (releaseWorkflow.includes(`releaseBody: ${FORBIDDEN_GENERIC_RELEASE_BODY}`)) {
+  console.error('Release workflow must not use the generic FleurTerm release body.');
+  process.exit(1);
+}
+
+if (
+  !/^\s*releaseBody:\s*\$\{\{\s*steps\.release_notes\.outputs\.body\s*\}\}\s*$/m.test(
+    releaseWorkflow,
+  )
+) {
+  console.error('Release workflow must publish notes from the annotated tag body.');
   process.exit(1);
 }
 
