@@ -310,6 +310,11 @@ function buildConnectionOpenOptions(connection: OpenableConnectionProfile): Open
 
 async function restoreTerminalWorkspace(): Promise<void> {
   const persistedWorkspace = await workspacePersistenceClient.load();
+  if (store.workspace.tabs.length > 0) {
+    activeAppTabId.value = store.workspace.activeTabId;
+    lastActiveTerminalTabId.value = store.workspace.activeTabId;
+    return;
+  }
   if (persistedWorkspace === null) {
     if (shouldOpenStartupTerminal()) {
       await openStartupTerminalIfNeeded();

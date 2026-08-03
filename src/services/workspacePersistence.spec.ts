@@ -172,6 +172,21 @@ describe('workspace persistence', () => {
     ).toBeNull();
   });
 
+  it('rejects an abnormally large persisted terminal workspace', () => {
+    expect(
+      parsePersistedWorkspace({
+        version: 2,
+        activeTabId: 'tab-1',
+        settingsTabIndex: null,
+        tabs: Array.from({ length: 33 }, (_, index) => ({
+          id: `tab-${index + 1}`,
+          title: `Local Terminal ${index + 1}`,
+          launch: { type: 'local' },
+        })),
+      }),
+    ).toBeNull();
+  });
+
   it('loads and validates workspace.json through the Tauri command', async () => {
     const invoke = vi.fn(async () => persistedWorkspace);
     const client = new WorkspacePersistenceClient(invoke, () => true);

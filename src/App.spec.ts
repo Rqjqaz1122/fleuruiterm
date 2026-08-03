@@ -157,6 +157,35 @@ describe('FleurTerm app shell', () => {
     await vi.waitFor(() => expect(store.openTab).toHaveBeenCalledOnce());
   });
 
+  it('does not restore persisted tabs over an existing runtime workspace', async () => {
+    vi.mocked(workspacePersistenceClient.load).mockResolvedValue({
+      version: 2,
+      activeTabId: 'persisted-tab',
+      settingsTabIndex: null,
+      tabs: [
+        {
+          id: 'persisted-tab',
+          title: 'Persisted terminal',
+          launch: { type: 'local' },
+        },
+      ],
+    });
+    const store = useWorkspaceStore();
+    store.workspace = createWorkspace(
+      'runtime-session',
+      ids('runtime-tab', 'runtime-pane'),
+      'Runtime terminal',
+    );
+    store.openTab = vi.fn(async () => undefined);
+
+    mount(App, { global: { stubs: { TerminalPane: true } } });
+    await Promise.resolve();
+
+    expect(workspacePersistenceClient.load).toHaveBeenCalledOnce();
+    expect(store.openTab).not.toHaveBeenCalled();
+    expect(store.workspace.tabs).toHaveLength(1);
+  });
+
   it('does not add a startup terminal when restoration recreated a terminal session', async () => {
     useAppSettingsStore().updateStartupSettings({ openTerminalOnStartup: true });
     vi.mocked(workspacePersistenceClient.load).mockResolvedValue({
