@@ -8,13 +8,17 @@ describe('contextMenu', () => {
   });
 
   it('opens one menu request at explicit viewport coordinates', () => {
+    const invoker = document.createElement('button');
+    document.body.append(invoker);
+    invoker.focus();
     const entries: ContextMenuEntry[] = [
       { kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() },
     ];
 
     contextMenu.openAt({ x: 20, y: 30 }, entries);
 
-    expect(contextMenu.state.value).toEqual({ x: 20, y: 30, entries });
+    expect(contextMenu.state.value).toEqual({ x: 20, y: 30, entries, invoker });
+    invoker.remove();
   });
 
   it('replaces the active request when another menu opens', () => {
@@ -26,24 +30,51 @@ describe('contextMenu', () => {
 
     contextMenu.openAt({ x: 40, y: 50 }, secondEntries);
 
-    expect(contextMenu.state.value).toEqual({ x: 40, y: 50, entries: secondEntries });
+    expect(contextMenu.state.value).toMatchObject({ x: 40, y: 50, entries: secondEntries });
+  });
+
+  it('preserves the original invoker when coordinates replace an open request', () => {
+    const invoker = document.createElement('button');
+    const menuAction = document.createElement('button');
+    document.body.append(invoker, menuAction);
+    invoker.focus();
+    contextMenu.openAt({ x: 20, y: 30 }, [
+      { kind: 'action', id: 'first', label: 'First', run: vi.fn() },
+    ]);
+    menuAction.focus();
+
+    contextMenu.openAt({ x: 40, y: 50 }, [
+      { kind: 'action', id: 'second', label: 'Second', run: vi.fn() },
+    ]);
+
+    expect(contextMenu.state.value?.invoker).toBe(invoker);
+    invoker.remove();
+    menuAction.remove();
   });
 
   it('uses event coordinates and prevents the browser context menu', () => {
     const entries: ContextMenuEntry[] = [
       { kind: 'action', id: 'paste', label: 'Paste', run: vi.fn() },
     ];
-    const event = new MouseEvent('contextmenu', {
-      clientX: 60,
-      clientY: 70,
-      cancelable: true,
+    const invoker = document.createElement('button');
+    document.body.append(invoker);
+    let event: MouseEvent | null = null;
+    invoker.addEventListener('contextmenu', (contextMenuEvent) => {
+      event = contextMenuEvent;
+      contextMenu.openAt(contextMenuEvent, entries);
     });
-    const preventDefault = vi.spyOn(event, 'preventDefault');
 
-    contextMenu.openAt(event, entries);
+    invoker.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        clientX: 60,
+        clientY: 70,
+        cancelable: true,
+      }),
+    );
 
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(contextMenu.state.value).toEqual({ x: 60, y: 70, entries });
+    expect(event?.defaultPrevented).toBe(true);
+    expect(contextMenu.state.value).toEqual({ x: 60, y: 70, entries, invoker });
+    invoker.remove();
   });
 
   it('closes the active menu request', () => {

@@ -52,8 +52,11 @@ select:focus-visible {
   position: fixed;
   z-index: 1000;
   display: flex;
-  min-width: 180px;
+  width: 180px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
   flex-direction: column;
+  overflow: auto;
   padding: 4px;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-small);

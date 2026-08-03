@@ -8,17 +8,24 @@ import {
 } from '@/services/contextMenu';
 
 const VIEWPORT_PADDING = 8;
+const HANDLED_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' ', 'Escape']);
 
 const request = contextMenu.state;
 const menuElement = ref<HTMLElement | null>(null);
+const invokingElement = ref<HTMLElement | null>(null);
 const left = ref(0);
 const top = ref(0);
+const maxWidth = ref(0);
+const maxHeight = ref(0);
 const menuStyle = computed(() => ({
   left: `${left.value}px`,
   top: `${top.value}px`,
+  maxWidth: `${maxWidth.value}px`,
+  maxHeight: `${maxHeight.value}px`,
+  overflow: 'auto',
 }));
 
-watch(request, positionMenu, { flush: 'post' });
+watch(request, positionMenu, { flush: 'post', immediate: true });
 
 onMounted(() => {
   window.addEventListener('pointerdown', closeFromOutsidePointer, true);
@@ -39,8 +46,11 @@ async function positionMenu(nextRequest: ContextMenuRequest | null): Promise<voi
     return;
   }
 
+  captureInvoker(nextRequest);
   left.value = nextRequest.x;
   top.value = nextRequest.y;
+  maxWidth.value = availableViewportSize(window.innerWidth);
+  maxHeight.value = availableViewportSize(window.innerHeight);
   await nextTick();
 
   const element = menuElement.value;
@@ -49,10 +59,35 @@ async function positionMenu(nextRequest: ContextMenuRequest | null): Promise<voi
   }
 
   const bounds = element.getBoundingClientRect();
-  left.value = clampCoordinate(nextRequest.x, bounds.width, window.innerWidth);
-  top.value = clampCoordinate(nextRequest.y, bounds.height, window.innerHeight);
+  left.value = clampCoordinate(
+    nextRequest.x,
+    Math.min(bounds.width, maxWidth.value),
+    window.innerWidth,
+  );
+  top.value = clampCoordinate(
+    nextRequest.y,
+    Math.min(bounds.height, maxHeight.value),
+    window.innerHeight,
+  );
   await nextTick();
-  element.focus();
+  const firstEnabledAction = enabledActionButtons()[0];
+  if (firstEnabledAction === undefined) {
+    element.focus();
+    return;
+  }
+  firstEnabledAction.focus();
+}
+
+function captureInvoker(nextRequest: ContextMenuRequest): void {
+  const nextInvoker = nextRequest.invoker;
+  if (nextInvoker === null || menuElement.value?.contains(nextInvoker)) {
+    return;
+  }
+  invokingElement.value = nextInvoker;
+}
+
+function availableViewportSize(viewportSize: number): number {
+  return Math.max(0, viewportSize - VIEWPORT_PADDING * 2);
 }
 
 function clampCoordinate(
@@ -69,51 +104,85 @@ function closeFromOutsidePointer(event: PointerEvent): void {
   if (element !== null && event.target instanceof Node && element.contains(event.target)) {
     return;
   }
-  contextMenu.close();
+  closeWithoutFocusRestore();
 }
 
 function closeFromWindowEvent(): void {
-  contextMenu.close();
+  closeWithoutFocusRestore();
 }
 
-function runEntry(entry: ContextMenuActionEntry): void {
+function closeWithoutFocusRestore(): void {
+  contextMenu.close();
+  invokingElement.value = null;
+}
+
+async function runEntry(entry: ContextMenuActionEntry): Promise<void> {
   if (entry.disabled) {
     return;
   }
 
+  let actionResult: void | Promise<void>;
   try {
-    void entry.run();
-  } finally {
-    contextMenu.close();
+    actionResult = entry.run();
+  } catch (error) {
+    closeWithoutFocusRestore();
+    reportActionError(entry, error);
+    return;
   }
+
+  closeWithoutFocusRestore();
+  try {
+    await actionResult;
+  } catch (error) {
+    reportActionError(entry, error);
+  }
+}
+
+function reportActionError(entry: ContextMenuActionEntry, error: unknown): void {
+  console.error(`Context menu action failed: ${entry.id}`, error);
 }
 
 function handleKeyDown(event: KeyboardEvent): void {
+  if (!HANDLED_KEYS.has(event.key)) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+
   switch (event.key) {
     case 'ArrowDown':
-      moveFocus(event, 1);
+      moveFocus(1);
       return;
     case 'ArrowUp':
-      moveFocus(event, -1);
+      moveFocus(-1);
       return;
     case 'Home':
-      focusBoundaryAction(event, 0);
+      focusBoundaryAction(0);
       return;
     case 'End':
-      focusBoundaryAction(event, -1);
+      focusBoundaryAction(-1);
       return;
     case 'Enter':
     case ' ':
-      runFocusedEntry(event);
+      runFocusedEntry();
       return;
     case 'Escape':
-      event.preventDefault();
-      contextMenu.close();
+      closeAndRestoreFocus();
   }
 }
 
-function moveFocus(event: KeyboardEvent, offset: number): void {
-  event.preventDefault();
+function closeAndRestoreFocus(): void {
+  const elementToRestore = invokingElement.value;
+  contextMenu.close();
+  invokingElement.value = null;
+  void nextTick(() => {
+    if (elementToRestore?.isConnected) {
+      elementToRestore.focus();
+    }
+  });
+}
+
+function moveFocus(offset: number): void {
   const buttons = enabledActionButtons();
   if (buttons.length === 0) {
     return;
@@ -129,14 +198,13 @@ function moveFocus(event: KeyboardEvent, offset: number): void {
   buttons[nextIndex]?.focus();
 }
 
-function focusBoundaryAction(event: KeyboardEvent, index: number): void {
-  event.preventDefault();
+function focusBoundaryAction(index: number): void {
   const buttons = enabledActionButtons();
   const resolvedIndex = index === -1 ? buttons.length - 1 : index;
   buttons[resolvedIndex]?.focus();
 }
 
-function runFocusedEntry(event: KeyboardEvent): void {
+function runFocusedEntry(): void {
   const focusedElement = document.activeElement;
   if (!(focusedElement instanceof HTMLButtonElement) || focusedElement.disabled) {
     return;
@@ -151,8 +219,7 @@ function runFocusedEntry(event: KeyboardEvent): void {
     return;
   }
 
-  event.preventDefault();
-  runEntry(entry);
+  void runEntry(entry);
 }
 
 function enabledActionButtons(): HTMLButtonElement[] {

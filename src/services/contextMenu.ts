@@ -23,17 +23,20 @@ export interface ContextMenuPosition {
 
 export interface ContextMenuRequest extends ContextMenuPosition {
   entries: ContextMenuEntry[];
+  invoker: HTMLElement | null;
 }
 
 const state = shallowRef<ContextMenuRequest | null>(null);
 
 function openAt(position: ContextMenuPosition | MouseEvent, entries: ContextMenuEntry[]): void {
+  const invoker = resolveInvoker(position);
   if (position instanceof MouseEvent) {
     position.preventDefault();
     state.value = {
       x: position.clientX,
       y: position.clientY,
       entries,
+      invoker,
     };
     return;
   }
@@ -42,7 +45,18 @@ function openAt(position: ContextMenuPosition | MouseEvent, entries: ContextMenu
     x: position.x,
     y: position.y,
     entries,
+    invoker,
   };
+}
+
+function resolveInvoker(position: ContextMenuPosition | MouseEvent): HTMLElement | null {
+  if (position instanceof MouseEvent && position.target instanceof HTMLElement) {
+    return position.target;
+  }
+  if (!(position instanceof MouseEvent) && state.value !== null) {
+    return state.value.invoker;
+  }
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null;
 }
 
 function close(): void {
