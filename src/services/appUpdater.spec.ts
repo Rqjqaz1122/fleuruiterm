@@ -18,13 +18,15 @@ describe('appUpdaterClient', () => {
   });
 
   it('normalizes an available native update', async () => {
-    const downloadAndInstall = vi.fn(async () => undefined);
+    const download = vi.fn(async () => undefined);
+    const install = vi.fn(async () => undefined);
     const runtime = createRuntime({
       check: vi.fn(async () => ({
         version: '0.2.0',
         date: '2026-07-21T12:00:00Z',
         body: 'New terminal features',
-        downloadAndInstall,
+        download,
+        install,
       })),
     });
     const client = createAppUpdaterClient(runtime);
@@ -48,16 +50,17 @@ describe('appUpdaterClient', () => {
     const runtime = createRuntime({
       check: vi.fn(async () => ({
         version: '0.2.0',
-        downloadAndInstall: vi.fn(async (onEvent) => {
+        download: vi.fn(async (onEvent) => {
           nativeEvents.forEach((event) => onEvent?.(event));
         }),
+        install: vi.fn(async () => undefined),
       })),
     });
     const client = createAppUpdaterClient(runtime);
     const update = await client.check();
     const progress = vi.fn();
 
-    await update?.downloadAndInstall(progress);
+    await update?.download(progress);
 
     expect(progress.mock.calls.map(([value]) => value)).toEqual([
       { downloadedBytes: 0, totalBytes: 100 },
@@ -65,6 +68,25 @@ describe('appUpdaterClient', () => {
       { downloadedBytes: 100, totalBytes: 100 },
       { downloadedBytes: 100, totalBytes: 100 },
     ]);
+  });
+
+  it('keeps download and installation as separate updater operations', async () => {
+    const download = vi.fn(async () => undefined);
+    const install = vi.fn(async () => undefined);
+    const runtime = createRuntime({
+      check: vi.fn(async () => ({ version: '0.2.0', download, install })),
+    });
+    const client = createAppUpdaterClient(runtime);
+    const update = await client.check();
+
+    await update?.download(vi.fn());
+
+    expect(download).toHaveBeenCalledOnce();
+    expect(install).not.toHaveBeenCalled();
+
+    await update?.install();
+
+    expect(install).toHaveBeenCalledOnce();
   });
 
   it('delegates application restart to the process plugin', async () => {

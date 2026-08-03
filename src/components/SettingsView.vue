@@ -176,7 +176,7 @@ const collapsedGroups = ref<Record<string, boolean>>({});
 const connectionFilter = ref('');
 const settingsReady = ref(!settingsClient.available);
 const appSettings = useAppSettingsStore();
-const { aiSettings, shortcutSettings, terminalSettings } = appSettings;
+const { aiSettings, shortcutSettings, terminalSettings, updateSettings } = appSettings;
 const connections = ref<WorkbenchConnection[]>(loadConnections());
 const recentConnectionIds = ref<string[]>(loadRecentConnectionIds(connections.value));
 const themeMode = ref<ThemeMode>(loadThemeMode());
@@ -200,6 +200,12 @@ const selectedLocale = computed<AppLocale>({
   get: () => locale.value,
   set: (nextLocale) => setLocale(nextLocale),
 });
+
+function toggleAutomaticUpdateDownloads(): void {
+  appSettings.updateUpdateSettings({
+    automaticDownloadEnabled: !updateSettings.value.automaticDownloadEnabled,
+  });
+}
 
 const labels = computed(() => (selectedLocale.value === 'zh-CN' ? zhLabels : enLabels));
 const shortcutPlatform: ShortcutPlatform =
@@ -1445,6 +1451,8 @@ const enLabels = {
     'Application interface language. More locales can be added to this list.',
   languageStatusLabel: 'Current language',
   generalSectionDescription: 'The interface updates immediately when the language changes.',
+  automaticUpdateTitle: 'Automatically download updates',
+  automaticUpdateDescription: 'Download new versions in the background and ask before restart.',
   startupCardTitle: 'Startup',
   startupOpenTerminalTitle: 'Open terminal on startup',
   startupOpenTerminalDescription: 'Show a local shell when FleurTerm launches.',
@@ -1662,6 +1670,8 @@ const zhLabels: typeof enLabels = {
   languageCardDescription: '应用界面语言。',
   languageStatusLabel: '当前语言',
   generalSectionDescription: '切换后界面会立即更新。',
+  automaticUpdateTitle: '自动下载更新',
+  automaticUpdateDescription: '在后台下载新版本，并在重启前征求你的确认。',
   startupCardTitle: '启动',
   startupOpenTerminalTitle: '启动时打开终端',
   startupOpenTerminalDescription: 'FleurTerm 启动后显示本地 Shell。',
@@ -1924,6 +1934,27 @@ const zhLabels: typeof enLabels = {
                 </div>
 
                 <SoftwareUpdateCard />
+
+                <div class="settings-form-line" data-testid="automatic-update-setting">
+                  <div class="settings-form-copy">
+                    <strong>{{ labels.automaticUpdateTitle }}</strong>
+                    <span>{{ labels.automaticUpdateDescription }}</span>
+                  </div>
+                  <div class="settings-control">
+                    <button
+                      class="connection-toggle"
+                      :class="{ 'is-active': updateSettings.automaticDownloadEnabled }"
+                      data-testid="automatic-update-toggle"
+                      type="button"
+                      role="switch"
+                      :aria-label="labels.automaticUpdateTitle"
+                      :aria-checked="updateSettings.automaticDownloadEnabled"
+                      @click="toggleAutomaticUpdateDownloads"
+                    >
+                      <span />
+                    </button>
+                  </div>
+                </div>
 
                 <div class="settings-form-line">
                   <div class="settings-form-copy">

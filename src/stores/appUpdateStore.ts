@@ -13,11 +13,12 @@ export type AppUpdateStatus =
   | 'upToDate'
   | 'available'
   | 'downloading'
+  | 'readyToRestart'
   | 'installing'
   | 'error'
   | 'unsupported';
 
-export type AppUpdateErrorCode = 'CHECK_FAILED' | 'INSTALL_FAILED';
+export type AppUpdateErrorCode = 'CHECK_FAILED' | 'INSTALL_FAILED' | 'RESTART_FAILED';
 
 export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpdate') {
   return defineStore(storeId, () => {
@@ -29,7 +30,10 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
     const errorCode = ref<AppUpdateErrorCode | null>(null);
     let versionPromise: Promise<void> | null = null;
     let checkPromise: Promise<void> | null = null;
+    let preparePromise: Promise<void> | null = null;
+    let restartPromise: Promise<void> | null = null;
     let installPromise: Promise<void> | null = null;
+    let updateInstalled = false;
     let startupCheckRequested = false;
     let beforeRestart: () => Promise<boolean> = async () => true;
     let restartFailureHandler: () => void = () => undefined;
@@ -69,16 +73,54 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
     }
 
     async function installUpdate(): Promise<void> {
-      if (installPromise !== null || update.value === null) {
+      if (installPromise !== null) {
         return installPromise ?? Promise.resolve();
       }
-      const pendingInstall = performInstall(update.value);
+      const pendingInstall = performManualInstall();
       installPromise = pendingInstall;
       try {
         await pendingInstall;
       } finally {
         if (installPromise === pendingInstall) {
           installPromise = null;
+        }
+      }
+    }
+
+    async function prepareUpdate(): Promise<void> {
+      if (preparePromise !== null) {
+        return preparePromise;
+      }
+      const availableUpdate = update.value;
+      if (availableUpdate === null || status.value !== 'available') {
+        return;
+      }
+      const pendingPreparation = performPreparation(availableUpdate);
+      preparePromise = pendingPreparation;
+      try {
+        await pendingPreparation;
+      } finally {
+        if (preparePromise === pendingPreparation) {
+          preparePromise = null;
+        }
+      }
+    }
+
+    async function restartToApplyUpdate(): Promise<void> {
+      if (restartPromise !== null) {
+        return restartPromise;
+      }
+      const availableUpdate = update.value;
+      if (availableUpdate === null || status.value !== 'readyToRestart') {
+        return;
+      }
+      const pendingRestart = performRestart(availableUpdate);
+      restartPromise = pendingRestart;
+      try {
+        await pendingRestart;
+      } finally {
+        if (restartPromise === pendingRestart) {
+          restartPromise = null;
         }
       }
     }
@@ -101,6 +143,7 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
       status.value = 'checking';
       try {
         update.value = await client.check();
+        updateInstalled = false;
         status.value = update.value === null ? 'upToDate' : 'available';
       } catch {
         update.value = null;
@@ -109,29 +152,52 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
       }
     }
 
-    async function performInstall(availableUpdate: AvailableAppUpdate): Promise<void> {
-      let restartPrepared = false;
+    async function performManualInstall(): Promise<void> {
+      await prepareUpdate();
+      await restartToApplyUpdate();
+    }
+
+    async function performPreparation(availableUpdate: AvailableAppUpdate): Promise<void> {
       errorCode.value = null;
       downloadedBytes.value = 0;
       totalBytes.value = null;
+      updateInstalled = false;
       status.value = 'downloading';
       try {
-        await availableUpdate.downloadAndInstall((progress) => {
+        await availableUpdate.download((progress) => {
           downloadedBytes.value = progress.downloadedBytes;
           totalBytes.value = progress.totalBytes;
         });
-        status.value = 'installing';
+        status.value = 'readyToRestart';
+      } catch {
+        errorCode.value = 'INSTALL_FAILED';
+        status.value = 'error';
+      }
+    }
+
+    async function performRestart(availableUpdate: AvailableAppUpdate): Promise<void> {
+      let restartPrepared = false;
+      let failureCode: AppUpdateErrorCode = 'RESTART_FAILED';
+      errorCode.value = null;
+      status.value = 'installing';
+      try {
         if (!(await beforeRestart())) {
           throw new Error('Application state could not be saved before restart');
         }
         restartPrepared = true;
+        if (!updateInstalled) {
+          failureCode = 'INSTALL_FAILED';
+          await availableUpdate.install();
+          updateInstalled = true;
+        }
+        failureCode = 'RESTART_FAILED';
         await client.restart();
       } catch {
         if (restartPrepared) {
           restartFailureHandler();
         }
-        errorCode.value = 'INSTALL_FAILED';
-        status.value = 'error';
+        errorCode.value = failureCode;
+        status.value = 'readyToRestart';
       }
     }
 
@@ -154,8 +220,10 @@ export function createAppUpdateStore(client: AppUpdaterClient, storeId = 'appUpd
       downloadProgressPercent,
       errorCode,
       installUpdate,
+      prepareUpdate,
       releaseDate,
       releaseNotes,
+      restartToApplyUpdate,
       setBeforeRestart,
       setRestartFailureHandler,
       status,

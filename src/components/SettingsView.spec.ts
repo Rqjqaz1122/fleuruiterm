@@ -9,6 +9,7 @@ import { settingsClient } from '@/services/settingsClient';
 import {
   defaultAiSettings,
   defaultTerminalSettings,
+  defaultUpdateSettings,
   useAppSettingsStore,
 } from '@/stores/appSettingsStore';
 
@@ -26,6 +27,7 @@ describe('SettingsView', () => {
     useAppSettingsStore().replaceRuntimeSettings({
       ai: defaultAiSettings,
       terminal: defaultTerminalSettings,
+      update: defaultUpdateSettings,
     });
     useAppSettingsStore().resetShortcutSettings();
     document.documentElement.removeAttribute('style');
@@ -192,6 +194,39 @@ describe('SettingsView', () => {
     await wrapper.get('[data-section="general"]').trigger('click');
 
     expect(wrapper.findAll('[data-testid="software-update-card"]')).toHaveLength(1);
+  });
+
+  it('shows automatic updates as a separate general setting without state text', async () => {
+    const wrapper = mount(SettingsView);
+    const automaticUpdateSetting = wrapper.get('[data-testid="automatic-update-setting"]');
+    const softwareUpdateCard = wrapper.get('[data-testid="software-update-card"]');
+
+    expect(automaticUpdateSetting.classes()).toContain('settings-form-line');
+    expect(automaticUpdateSetting.element.parentElement).toBe(
+      softwareUpdateCard.element.parentElement,
+    );
+    expect(softwareUpdateCard.find('[data-testid="automatic-update-toggle"]').exists()).toBe(false);
+    expect(automaticUpdateSetting.text()).toContain('Automatically download updates');
+    expect(automaticUpdateSetting.text()).not.toContain('On');
+    expect(automaticUpdateSetting.text()).not.toContain('Off');
+
+    const toggle = automaticUpdateSetting.get('[data-testid="automatic-update-toggle"]');
+    expect(toggle.attributes('role')).toBe('switch');
+    expect(toggle.attributes('aria-checked')).toBe('false');
+    expect(toggle.attributes('aria-pressed')).toBeUndefined();
+    await toggle.trigger('click');
+
+    expect(useAppSettingsStore().updateSettings.value.automaticDownloadEnabled).toBe(true);
+    expect(toggle.attributes('aria-checked')).toBe('true');
+  });
+
+  it('localizes the automatic update setting in Chinese', () => {
+    setLocale('zh-CN');
+    const wrapper = mount(SettingsView);
+    const automaticUpdateSetting = wrapper.get('[data-testid="automatic-update-setting"]');
+
+    expect(automaticUpdateSetting.text()).toContain('自动下载更新');
+    expect(automaticUpdateSetting.text()).toContain('在后台下载新版本，并在重启前征求你的确认。');
   });
 
   it('does not read saved passwords when the settings page opens', async () => {

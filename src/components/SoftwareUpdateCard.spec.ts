@@ -69,6 +69,27 @@ describe('SoftwareUpdateCard', () => {
     expect(store.checkForUpdate).toHaveBeenCalledOnce();
   });
 
+  it('restarts a prepared update only after explicit confirmation', async () => {
+    const { store, wrapper } = await mountCard(createClient());
+    store.$patch({ status: 'readyToRestart' });
+    store.restartToApplyUpdate = vi.fn(async () => undefined);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain('The update is ready to install');
+    await wrapper.get('[data-testid="restart-update"]').trigger('click');
+
+    expect(store.restartToApplyUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the restart action visible when installing a downloaded update fails', async () => {
+    const { store, wrapper } = await mountCard(createClient());
+    store.$patch({ status: 'readyToRestart', errorCode: 'INSTALL_FAILED' });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain('Unable to install the update');
+    expect(wrapper.get('[data-testid="restart-update"]').exists()).toBe(true);
+  });
+
   it('localizes update controls in Chinese', async () => {
     setLocale('zh-CN');
     const { store, wrapper } = await mountCard(createClient({ available: false }));
@@ -78,6 +99,11 @@ describe('SoftwareUpdateCard', () => {
     expect(wrapper.text()).toContain('软件更新');
     expect(wrapper.text()).toContain('当前版本 Development');
     expect(wrapper.text()).toContain('仅桌面应用支持检查更新');
+
+    store.$patch({ status: 'readyToRestart' });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.get('[data-testid="restart-update"]').text()).toBe('重启并更新');
   });
 });
 
@@ -106,7 +132,8 @@ function createUpdate(patch: Partial<AvailableAppUpdate> = {}): AvailableAppUpda
     version: '0.2.0',
     date: null,
     body: null,
-    downloadAndInstall: vi.fn(async () => undefined),
+    download: vi.fn(async () => undefined),
+    install: vi.fn(async () => undefined),
     ...patch,
   };
 }

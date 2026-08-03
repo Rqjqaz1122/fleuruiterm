@@ -10,10 +10,14 @@ const statusText = computed(() => {
   if (updateStore.status === 'available' && updateStore.availableVersion !== null) {
     return labels.value.available.replace('{version}', updateStore.availableVersion);
   }
+  if (updateStore.errorCode === 'INSTALL_FAILED') {
+    return labels.value.installFailed;
+  }
+  if (updateStore.errorCode === 'RESTART_FAILED') {
+    return labels.value.restartFailed;
+  }
   if (updateStore.status === 'error') {
-    return updateStore.errorCode === 'INSTALL_FAILED'
-      ? labels.value.installFailed
-      : labels.value.checkFailed;
+    return labels.value.checkFailed;
   }
   return labels.value.statuses[updateStore.status];
 });
@@ -34,6 +38,10 @@ function checkForUpdate(): void {
 
 function installUpdate(): void {
   void updateStore.installUpdate();
+}
+
+function restartToApplyUpdate(): void {
+  void updateStore.restartToApplyUpdate();
 }
 </script>
 
@@ -86,6 +94,15 @@ function installUpdate(): void {
         {{ labels.install }}
       </button>
       <button
+        v-else-if="updateStore.status === 'readyToRestart'"
+        class="settings-reset-button is-primary"
+        data-testid="restart-update"
+        type="button"
+        @click="restartToApplyUpdate"
+      >
+        {{ labels.restart }}
+      </button>
+      <button
         v-else-if="updateStore.status !== 'unsupported'"
         class="settings-reset-button"
         data-testid="check-update"
@@ -122,14 +139,17 @@ const enLabels = {
   downloading: 'Downloading…',
   installing: 'Installing…',
   install: 'Download and install',
+  restart: 'Restart and update',
   checkFailed: 'Unable to check for updates',
   installFailed: 'Unable to install the update',
+  restartFailed: 'Unable to restart. The prepared update is still ready.',
   statuses: {
     idle: 'Updates have not been checked yet',
     checking: 'Checking for updates',
     upToDate: 'FleurTerm is up to date',
     available: 'An update is available',
     downloading: 'Downloading update',
+    readyToRestart: 'The update is ready to install',
     installing: 'Installing update and preparing to restart',
     error: 'Update failed',
     unsupported: 'Update checks are only available in the desktop app',
@@ -148,14 +168,17 @@ const zhLabels = {
   downloading: '正在下载…',
   installing: '正在安装…',
   install: '下载并安装',
+  restart: '重启并更新',
   checkFailed: '无法检查更新',
   installFailed: '无法安装更新',
+  restartFailed: '无法重启，已准备好的更新仍可继续安装。',
   statuses: {
     idle: '尚未检查更新',
     checking: '正在检查更新',
     upToDate: 'FleurTerm 已是最新版本',
     available: '发现可用更新',
     downloading: '正在下载更新',
+    readyToRestart: '更新已准备完成，可以重启安装',
     installing: '正在安装更新并准备重启',
     error: '更新失败',
     unsupported: '仅桌面应用支持检查更新',
