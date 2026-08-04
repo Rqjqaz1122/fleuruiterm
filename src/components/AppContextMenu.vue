@@ -32,14 +32,16 @@ const menuStyle = computed(() => ({
 watch(request, positionMenu, { flush: 'post', immediate: true });
 
 onMounted(() => {
-  window.addEventListener('pointerdown', closeFromOutsidePointer, true);
+  window.addEventListener('pointerdown', closeFromOutsideInteraction, true);
+  window.addEventListener('click', closeFromOutsideInteraction, true);
   window.addEventListener('scroll', closeFromWindowEvent, true);
   window.addEventListener('resize', closeFromWindowEvent);
   window.addEventListener('blur', closeFromWindowEvent);
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener('pointerdown', closeFromOutsidePointer, true);
+  window.removeEventListener('pointerdown', closeFromOutsideInteraction, true);
+  window.removeEventListener('click', closeFromOutsideInteraction, true);
   window.removeEventListener('scroll', closeFromWindowEvent, true);
   window.removeEventListener('resize', closeFromWindowEvent);
   window.removeEventListener('blur', closeFromWindowEvent);
@@ -67,16 +69,8 @@ async function positionMenu(nextRequest: ContextMenuRequest | null): Promise<voi
   const bounds = element.getBoundingClientRect();
   const menuWidth = Math.min(element.offsetWidth || bounds.width, maxWidth.value);
   const menuHeight = Math.min(element.offsetHeight || bounds.height, maxHeight.value);
-  left.value = clampCoordinate(
-    nextRequest.x,
-    menuWidth,
-    window.innerWidth,
-  );
-  top.value = clampCoordinate(
-    nextRequest.y,
-    menuHeight,
-    window.innerHeight,
-  );
+  left.value = clampCoordinate(nextRequest.x, menuWidth, window.innerWidth);
+  top.value = clampCoordinate(nextRequest.y, menuHeight, window.innerHeight);
   transformOriginX.value = clampTransformOrigin(nextRequest.x - left.value, menuWidth);
   transformOriginY.value = clampTransformOrigin(nextRequest.y - top.value, menuHeight);
   await nextTick();
@@ -113,7 +107,10 @@ function clampTransformOrigin(originCoordinate: number, menuSize: number): numbe
   return Math.min(Math.max(originCoordinate, 0), menuSize);
 }
 
-function closeFromOutsidePointer(event: PointerEvent): void {
+function closeFromOutsideInteraction(event: Event): void {
+  if (request.value === null) {
+    return;
+  }
   const element = menuElement.value;
   if (element !== null && event.target instanceof Node && element.contains(event.target)) {
     return;

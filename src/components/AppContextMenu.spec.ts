@@ -247,15 +247,29 @@ describe('AppContextMenu', () => {
     terminalScreen.remove();
   });
 
-  it('closes on an outside pointerdown but stays open for an inside pointerdown', async () => {
+  it.each(['pointerdown', 'click'])(
+    'closes on an outside %s but stays open for the same inside event',
+    async (eventName) => {
+      mount(AppContextMenu);
+      await openMenu([{ kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() }]);
+
+      getMenu().dispatchEvent(new Event(eventName, { bubbles: true }));
+      expect(contextMenu.state.value).not.toBeNull();
+
+      document.body.dispatchEvent(new Event(eventName, { bubbles: true }));
+      expect(contextMenu.state.value).toBeNull();
+    },
+  );
+
+  it('closes once when one pointer interaction emits pointerdown and click', async () => {
     mount(AppContextMenu);
     await openMenu([{ kind: 'action', id: 'copy', label: 'Copy', run: vi.fn() }]);
-
-    getMenu().dispatchEvent(new Event('pointerdown', { bubbles: true }));
-    expect(contextMenu.state.value).not.toBeNull();
+    const close = vi.spyOn(contextMenu, 'close');
 
     document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
-    expect(contextMenu.state.value).toBeNull();
+    document.body.dispatchEvent(new Event('click', { bubbles: true }));
+
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it.each(['scroll', 'resize', 'blur'])('closes on window %s', async (eventName) => {
