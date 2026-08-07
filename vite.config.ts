@@ -24,6 +24,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    include: ['tests/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+    passWithNoTests: true,
     restoreMocks: true,
   },
 });

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --port 1420",
     "build": "vue-tsc --noEmit && vite build",
-    "test": "vitest run",
+    "test": "node scripts/check-test-locations.mjs && vitest run",
+    "test:location": "node scripts/check-test-locations.mjs",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
