@@ -1203,6 +1203,17 @@ mod tests {
     }
 
     #[test]
+    fn windows_window_background_matches_application_canvas() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.windows.conf.json")).unwrap();
+
+        assert_eq!(
+            config["app"]["windows"][0]["backgroundColor"],
+            json!("#000000")
+        );
+    }
+
+    #[test]
     fn device_identifier_failure_does_not_abort_application_setup() {
         let identifier =
             device_identifier_for_vault(Err(CredentialVaultError::DeviceIdentifierUnavailable));
