@@ -10,7 +10,8 @@
         "minWidth": 720,
         "minHeight": 480,
         "resizable": true,
-        "decorations": false
+        "decorations": false,
+        "backgroundColor": "#000000"
       }
     ]
   }

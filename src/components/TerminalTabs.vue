@@ -269,12 +269,23 @@ async function onTabBarPointerDown(event: PointerEvent): Promise<void> {
   if (event.button !== 0 || isInteractiveWindowChromeTarget(event.target)) {
     return;
   }
+  if (desktopPlatform.value === 'windows' && event.detail === 2) {
+    event.preventDefault();
+    event.stopPropagation();
+    await toggleWindowZoom();
+    return;
+  }
   await getCurrentWindow().startDragging();
 }
 
 async function onTabBarDoubleClick(event: MouseEvent): Promise<void> {
+  if (desktopPlatform.value === 'windows') {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   if (
-    (desktopPlatform.value !== 'windows' && desktopPlatform.value !== 'macos') ||
+    desktopPlatform.value !== 'macos' ||
     event.button !== 0 ||
     isInteractiveWindowChromeTarget(event.target)
   ) {
